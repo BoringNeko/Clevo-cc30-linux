@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default capability for the main window. The UI talks only to the app's own Tauri commands; no shell or filesystem plugins are exposed.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

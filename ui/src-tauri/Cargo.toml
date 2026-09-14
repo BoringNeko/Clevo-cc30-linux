@@ -1,0 +1,28 @@
+[package]
+name = "clevo-cc-ui"
+version = "0.1.0"
+description = "Clevo control-center desktop UI backend (Tauri commands over D-Bus)"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT OR Apache-2.0"
+
+# This crate is intentionally its own workspace: the root Cargo.toml is a
+# dependency-light, hardware-focused workspace and should not pull in Tauri.
+[workspace]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+zbus = { version = "5", default-features = false, features = ["tokio", "blocking-api"] }
+
+[dev-dependencies]
+# Reuse the real daemon for an end-to-end test on a private session bus.
+clevod = { path = "../../crates/clevod" }
+clevo-transport = { path = "../../crates/clevo-transport" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+futures-util = "0.3"

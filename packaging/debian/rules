@@ -1,0 +1,53 @@
+#!/usr/bin/make -f
+# SPDX-License-Identifier: MIT OR Apache-2.0
+export DH_VERBOSE = 1
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	cargo build --release --locked -p clevod -p clevo-cc-cli
+
+override_dh_auto_test:
+	cargo test --workspace
+
+# dh_auto_install runs once per binary package; only the main package needs the
+# built daemon/CLI, so install everything into the main package's directory and
+# let dh_install move the package-specific bits afterwards.
+override_dh_auto_install:
+	install -Dm755 target/release/clevod   debian/clevo-cc-linux/usr/bin/clevod
+	install -Dm755 target/release/clevo-cc debian/clevo-cc-linux/usr/bin/clevo-cc
+	install -Dm644 packaging/dbus/org.clevo.CC.conf     debian/clevo-cc-linux/usr/share/dbus-1/system.d/org.clevo.CC.conf
+	install -Dm644 packaging/polkit/org.clevo.CC.policy debian/clevo-cc-linux/usr/share/polkit-1/actions/org.clevo.CC.policy
+	install -Dm644 packaging/systemd/clevod.service     debian/clevo-cc-linux/lib/systemd/system/clevod.service
+	install -Dm644 packaging/udev/99-clevo-cc.rules     debian/clevo-cc-linux/lib/udev/rules.d/99-clevo-cc.rules
+	install -Dm644 packaging/man/clevod.8   debian/clevo-cc-linux/usr/share/man/man8/clevod.8
+	install -Dm644 packaging/man/clevo-cc.1 debian/clevo-cc-linux/usr/share/man/man1/clevo-cc.1
+	# Optional UI: installed when a prebuilt binary is present.
+	if [ -x ui/src-tauri/target/release/clevo-cc-ui ]; then \
+		install -Dm755 ui/src-tauri/target/release/clevo-cc-ui debian/clevo-cc-linux-ui/usr/bin/clevo-cc-ui; \
+		install -Dm644 packaging/desktop/org.clevo.cc.ui.desktop debian/clevo-cc-linux-ui/usr/share/applications/org.clevo.cc.ui.desktop; \
+		for s in 32x32 128x128 128x128@2x; do \
+			case $$s in 32x32) px=32;; 128x128) px=128;; 128x128@2x) px=256;; esac; \
+			if [ -f ui/src-tauri/icons/$$s.png ]; then \
+				install -Dm644 ui/src-tauri/icons/$$s.png \
+					debian/clevo-cc-linux-ui/usr/share/icons/hicolor/$${px}x$${px}/apps/org.clevo.cc.ui.png; \
+			fi; \
+		done; \
+	fi
+
+# The DKMS package ships the driver sources; the build happens on the target
+# machine against the installed kernel headers.
+override_dh_install:
+	# Driver sources + dkms.conf into /usr/src/clevo-cc-<version>.
+	install -d debian/clevo-cc-linux-dkms/usr/src/clevo-cc-0.1.0
+	cp -a kernel/clevo-cc/. debian/clevo-cc-linux-dkms/usr/src/clevo-cc-0.1.0/
+	rm -f debian/clevo-cc-linux-dkms/usr/src/clevo-cc-0.1.0/*.ko \
+	      debian/clevo-cc-linux-dkms/usr/src/clevo-cc-0.1.0/*.o \
+	      debian/clevo-cc-linux-dkms/usr/src/clevo-cc-0.1.0/*.mod* \
+	      debian/clevo-cc-linux-dkms/usr/src/clevo-cc-0.1.0/Module.symvers \
+	      debian/clevo-cc-linux-dkms/usr/src/clevo-cc-0.1.0/modules.order
+	sed -i 's/@VERSION@/0.1.0/g' debian/clevo-cc-linux-dkms/usr/src/clevo-cc-0.1.0/dkms.conf
+
+override_dh_strip:
+	dh_strip --no-automatic-dbgsym

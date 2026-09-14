@@ -1,0 +1,34 @@
+# Arch package hooks. DKMS builds happen here, not in package(), because they
+# need the running kernel's build tree.
+
+post_install() {
+    getent group clevo-cc >/dev/null || groupadd -r clevo-cc
+    udevadm control --reload-rules 2>/dev/null || true
+    udevadm trigger --subsystem-match=platform 2>/dev/null || true
+    systemctl daemon-reload 2>/dev/null || true
+    cat <<MSG
+clevo-cc-linux installed.
+
+The kernel driver is built by DKMS for every installed kernel. To activate:
+  sudo modprobe clevo-cc          # or reboot
+  sudo systemctl enable --now clevod
+
+Optionally add your user to the clevo-cc group for direct sysfs access:
+  sudo usermod -aG clevo-cc \$USER
+MSG
+}
+
+post_upgrade() {
+    post_install
+}
+
+pre_remove() {
+    systemctl disable --now clevod.service 2>/dev/null || true
+}
+
+post_remove() {
+    modprobe -r clevo-cc 2>/dev/null || true
+    udevadm control --reload-rules 2>/dev/null || true
+    systemctl daemon-reload 2>/dev/null || true
+    echo "clevo-cc-linux removed. /etc/clevo-cc and the clevo-cc group were kept."
+}

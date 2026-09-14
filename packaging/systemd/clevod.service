@@ -1,0 +1,41 @@
+[Unit]
+Description=Clevo control-center daemon (fan and performance mode)
+Documentation=man:clevod(8)
+After=multi-user.target systemd-modules-load.service
+# Prefer the kernel driver. If it is built and loaded, the daemon uses its
+# sysfs/hwmon backend (the write path); otherwise it falls back to the
+# read-only acpi_call backend. Neither module is mandatory.
+Wants=modprobe@clevo-cc.service
+After=modprobe@acpi_call.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/clevod --driver --config /etc/clevo-cc/clevod.toml
+Restart=on-failure
+RestartSec=2
+
+# Hardening. The daemon reads/writes the kernel driver sysfs nodes (or
+# /proc/acpi/call) and its config, and needs the system D-Bus.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=no
+ReadWritePaths=/etc/clevo-cc
+ProtectKernelTunables=yes
+ProtectKernelModules=no
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+# Runs as root: the kernel driver's sysfs nodes are root-owned by default and
+# root is required to apply EC writes. Install the udev rule and run as the
+# `clevo-cc` group instead if you prefer.
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target

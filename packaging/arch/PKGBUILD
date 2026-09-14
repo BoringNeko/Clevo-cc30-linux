@@ -1,0 +1,86 @@
+# Maintainer: clevo-cc-linux
+# Arch/CachyOS package for the Clevo control center: clevod, the CLI, the
+# kernel driver (DKMS) and the Tauri UI.
+#
+# Build locally with the sources checked out next to this file:
+#   cd packaging/arch && makepkg -si
+# (The PKGBUILD uses a local source directory; adapt `source` for a release
+#  tarball or a git URL when publishing.)
+
+pkgname=clevo-cc-linux
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Clevo (蓝天) control center: fan and performance mode control (DCHU/ACPI)"
+arch=('x86_64')
+url="https://github.com/BoringNeko/Clevo-cc30-linux"
+license=('MIT' 'Apache' 'GPL2')
+depends=('dbus' 'polkit' 'glibc' 'gcc-libs')
+makedepends=('cargo' 'rust' 'dkms' 'nodejs' 'npm' 'openssl' 'clang' 'llvm')
+optdepends=(
+  'acpi_call-dkms: read-only fallback backend when the clevo-cc driver is absent'
+  'webkit2gtk-4.1: desktop UI'
+  'gtk3: desktop UI'
+  'pnpm: build the desktop UI (or use: npm i -g pnpm)'
+)
+install="${pkgname}.install"
+source=("${pkgname}-${pkgver}.tar.gz")
+# Replace with the real checksum before publishing.
+sha256sums=('SKIP')
+
+prepare() {
+  cd "${srcdir}/clevo-cc-linux-${pkgver}"
+}
+
+build() {
+  cd "${srcdir}/clevo-cc-linux-${pkgver}"
+  export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-stable}"
+  cargo build --release --locked -p clevod -p clevo-cc-cli
+  # The UI is optional; build it only when pnpm and the webkit stack are present.
+  if command -v pnpm >/dev/null && pkg-config --exists webkit2gtk-4.1 gtk+-3.0; then
+    ( cd ui && pnpm install --frozen-lockfile && pnpm tauri build --no-bundle )
+  fi
+}
+
+package() {
+  cd "${srcdir}/clevo-cc-linux-${pkgver}"
+  install -Dm755 target/release/clevod   "${pkgdir}/usr/bin/clevod"
+  install -Dm755 target/release/clevo-cc "${pkgdir}/usr/bin/clevo-cc"
+
+  # Daemon integration files.
+  install -Dm644 packaging/dbus/org.clevo.CC.conf     "${pkgdir}/usr/share/dbus-1/system.d/org.clevo.CC.conf"
+  install -Dm644 packaging/polkit/org.clevo.CC.policy "${pkgdir}/usr/share/polkit-1/actions/org.clevo.CC.policy"
+  install -Dm644 packaging/systemd/clevod.service     "${pkgdir}/usr/lib/systemd/system/clevod.service"
+  install -Dm644 packaging/udev/99-clevo-cc.rules     "${pkgdir}/usr/lib/udev/rules.d/99-clevo-cc.rules"
+
+  # Man pages.
+  install -Dm644 packaging/man/clevod.8   "${pkgdir}/usr/share/man/man8/clevod.8"
+  install -Dm644 packaging/man/clevo-cc.1 "${pkgdir}/usr/share/man/man1/clevo-cc.1"
+
+  # Kernel driver sources for DKMS.
+  install -d "${pkgdir}/usr/src/clevo-cc-${pkgver}"
+  cp -a kernel/clevo-cc/. "${pkgdir}/usr/src/clevo-cc-${pkgver}/"
+  rm -f "${pkgdir}/usr/src/clevo-cc-${pkgver}/"*.ko \
+        "${pkgdir}/usr/src/clevo-cc-${pkgver}/"*.o \
+        "${pkgdir}/usr/src/clevo-cc-${pkgver}/"*.mod* \
+        "${pkgdir}/usr/src/clevo-cc-${pkgver}/Module.symvers" \
+        "${pkgdir}/usr/src/clevo-cc-${pkgver}/modules.order"
+  sed -i "s/@VERSION@/${pkgver}/g" "${pkgdir}/usr/src/clevo-cc-${pkgver}/dkms.conf"
+
+  # UI.
+  if [[ -x ui/src-tauri/target/release/clevo-cc-ui ]]; then
+    install -Dm755 ui/src-tauri/target/release/clevo-cc-ui "${pkgdir}/usr/bin/clevo-cc-ui"
+    install -Dm644 packaging/desktop/org.clevo.cc.ui.desktop \
+        "${pkgdir}/usr/share/applications/org.clevo.cc.ui.desktop"
+    for size in 32x32 128x128 128x128@2x; do
+      case "$size" in 32x32) px=32 ;; 128x128) px=128 ;; 128x128@2x) px=256 ;; esac
+      [[ -f "ui/src-tauri/icons/${size}.png" ]] && install -Dm644 \
+        "ui/src-tauri/icons/${size}.png" \
+        "${pkgdir}/usr/share/icons/hicolor/${px}x${px}/apps/org.clevo.cc.ui.png"
+    done
+  fi
+
+  # Licenses.
+  install -d "${pkgdir}/usr/share/licenses/${pkgname}"
+  cp LICENSES/MIT.txt LICENSES/Apache-2.0.txt LICENSES/GPL-2.0.txt \
+      "${pkgdir}/usr/share/licenses/${pkgname}/"
+}

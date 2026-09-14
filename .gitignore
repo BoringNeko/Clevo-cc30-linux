@@ -1,0 +1,27 @@
+# Rust
+/target/
+**/*.rs.bk
+# Applications: keep lockfiles pinned for reproducible builds.
+# (library-style crates normally ignore Cargo.lock; this project ships binaries)
+
+# Editor / OS
+*.swp
+.DS_Store
+
+# Local fixtures with machine-identifying data
+/fixtures/local/
+
+# S5 ACPI dump artifacts (contain machine-identifying data)
+/acpi-verify/
+# Tauri UI
+/ui/node_modules/
+/ui/dist/
+/ui/src-tauri/target/
+/ui/src-tauri/gen/
+
+# The UI is an application: keep its lockfile for reproducible builds.
+!/ui/src-tauri/Cargo.lock
+
+# Distribution build output and the appimagetool blob fetched into packaging/.
+/dist/
+/packaging/appimage/appimagetool*

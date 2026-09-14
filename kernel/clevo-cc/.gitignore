@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Out-of-tree kernel build artifacts.
+*.o
+*.o.*
+*.ko
+*.ko.*
+*.mod
+*.mod.*
+*.symvers
+*.order
+.tmp_versions/
+modules.order
+Module.symvers
+.*.cmd

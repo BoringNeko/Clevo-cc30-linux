@@ -1,0 +1,13 @@
+[package]
+name = "clevo-proto"
+description = "Pure, dependency-free protocol layer for Clevo DCHU / ACPI DSM hardware access."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

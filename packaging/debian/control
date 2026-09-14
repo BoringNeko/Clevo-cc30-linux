@@ -1,0 +1,37 @@
+Source: clevo-cc-linux
+Section: utils
+Priority: optional
+Maintainer: BoringNeko <noreply@github.com>
+Build-Depends:
+ debhelper-compat (= 13),
+ cargo,
+ rustc,
+Standards-Version: 4.6.2
+Rules-Requires-Root: no
+Homepage: https://github.com/BoringNeko/Clevo-cc30-linux
+Vcs-Git: https://github.com/BoringNeko/Clevo-cc30-linux.git
+Vcs-Browser: https://github.com/BoringNeko/Clevo-cc30-linux
+
+Package: clevo-cc-linux
+Architecture: amd64
+Depends: ${shlibs:Depends}, ${misc:Depends}, dbus, polkitd | policykit-1, clevo-cc-linux-dkms
+Recommends: acpi-call-dkms
+Description: Clevo control center (fan and performance mode)
+ Privileged daemon and CLI for reading fan speed and controlling the fan and
+ performance modes of Clevo DCHU ACPI laptops, using the reverse-engineered
+ _DSM protocol. Reads are open to local users; writes are authorized through
+ PolicyKit. The kernel driver is provided by clevo-cc-linux-dkms.
+
+Package: clevo-cc-linux-dkms
+Architecture: amd64
+Depends: ${misc:Depends}, dkms
+Description: clevo-cc ACPI platform driver (DKMS)
+ Out-of-tree kernel driver binding ACPI\CLV0001 that exposes Clevo fan
+ monitoring and fan-mode control through hwmon and sysfs. Built for each
+ installed kernel through DKMS.
+
+Package: clevo-cc-linux-ui
+Architecture: amd64
+Depends: ${shlibs:Depends}, ${misc:Depends}, clevo-cc-linux
+Description: Graphical control center for Clevo
+ Tauri (GTK/WebKitGTK) desktop application for the clevo-cc-linux daemon.

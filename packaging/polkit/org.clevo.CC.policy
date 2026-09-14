@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!--
+  PolicyKit actions for org.clevo.CC.
+
+  Reads are not gated by PolicyKit (any local user may monitor). These two
+  actions guard the write methods. `auth_admin_keep` prompts for an
+  administrator password and remembers the result for a short time, which is
+  the usual desktop expectation for a hardware control action.
+-->
+<policyconfig>
+  <vendor>Clevo Control Center</vendor>
+  <vendor_url>https://github.com/BoringNeko/Clevo-cc30-linux</vendor_url>
+
+  <action id="org.clevo.CC.set-fan-mode">
+    <description>Set the fan mode</description>
+    <message>Authentication is required to change the fan mode</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+  </action>
+
+  <action id="org.clevo.CC.set-perf-mode">
+    <description>Set the performance mode</description>
+    <message>Authentication is required to change the performance mode</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+  </action>
+</policyconfig>

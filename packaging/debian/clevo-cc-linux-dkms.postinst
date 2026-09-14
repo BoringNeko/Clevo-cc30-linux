@@ -1,0 +1,18 @@
+#!/bin/sh
+# Build and install the clevo-cc module for the running kernel (if its headers
+# are present). DKMS handles future kernel upgrades via its own hooks.
+set -e
+
+VERSION=0.1.0
+MODULE=clevo-cc
+
+if command -v dkms >/dev/null 2>&1; then
+    dkms add -m "$MODULE" -v "$VERSION" 2>/dev/null || true
+    if [ -d "/lib/modules/$(uname -r)/build" ]; then
+        dkms build -m "$MODULE" -v "$VERSION" || true
+        dkms install -m "$MODULE" -v "$VERSION" || true
+        modprobe "$MODULE" 2>/dev/null || true
+    fi
+fi
+
+#DEBHELPER#

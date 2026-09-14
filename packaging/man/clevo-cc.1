@@ -1,0 +1,45 @@
+.TH CLEVO-CC 1 "2026-09-13" "clevo-cc-linux 0.1.0" "User Commands"
+.SH NAME
+clevo-cc \- command-line client for the Clevo fan and performance controls
+.SH SYNOPSIS
+.B clevo-cc
+[\fB\-\-transport\fR \fIkall|acpi-call|dbus\fR]
+[\fB\-\-fixture\fR \fIFIle\fR]
+\fISubcommand\fR [\fIOptions\fR]
+.SH DESCRIPTION
+.B clevo-cc
+reads fan status, the fan curve and the current modes. It is dry-run by default:
+every write needs
+.B \-\-apply
+and, when talking to
+.BR clevod ,
+a PolicyKit authorization.
+.SH TRANSPORTS
+.TP
+.B mock
+(default with
+.BR \-\-fixture )
+Replay a fixture; never touches hardware.
+.TP
+.B acpi-call
+Read-only, via
+.IR /proc/acpi/call .
+Rejects every write before any I/O.
+.TP
+.B dbus
+Talk to
+.BR clevod
+over
+.BR org.clevo.CC ;
+reads need no privilege, writes go through PolicyKit.
+.SH EXAMPLES
+.nf
+clevo\-cc \-\-fixture fixtures/example.fixture fan status
+sudo clevo\-cc \-\-transport acpi\-call fan watch \-\-interval\-ms 1000
+clevo\-cc \-\-transport dbus fan status
+clevo\-cc \-\-transport dbus fan set\-mode max \-\-apply
+.fi
+.SH SEE ALSO
+.BR clevod (8)
+.SH LICENSE
+MIT OR Apache-2.0.

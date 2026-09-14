@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Clevo Control Center
+GenericName=Fan and Performance Control
+Comment=Monitor fans and switch fan/performance modes
+Exec=clevo-cc-ui
+Icon=org.clevo.cc.ui
+Terminal=false
+Categories=System;HardwareSettings;Settings;
+Keywords=fan;thermal;performance;clevo;
+StartupNotify=true

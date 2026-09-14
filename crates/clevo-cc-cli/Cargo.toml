@@ -1,0 +1,28 @@
+[package]
+name = "clevo-cc-cli"
+description = "Scriptable CLI for the Clevo control center (read-only by default)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "clevo-cc"
+path = "src/main.rs"
+
+[dependencies]
+clevo-proto.workspace = true
+clevo-transport.workspace = true
+clap = { version = "4", features = ["derive"] }
+zbus.workspace = true
+
+[dev-dependencies]
+clevo-proto.workspace = true
+clevo-transport.workspace = true
+clevod.workspace = true
+tokio.workspace = true
+zbus.workspace = true
+
+[lints]
+workspace = true

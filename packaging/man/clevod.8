@@ -1,0 +1,72 @@
+.TH CLEVOD 8 "2026-09-13" "clevo-cc-linux 0.1.0" "System Administration"
+.SH NAME
+clevod \- privileged Clevo control-center daemon (fan and performance mode)
+.SH SYNOPSIS
+.B clevod
+[\fB\-\-driver\fR]
+[\fB\-\-mock\fR \fIFIxture\fR]
+[\fB\-\-config\fR \fIPath\fR]
+[\fB\-\-interval\-ms\fR \fIMs\fR]
+[\fB\-\-no\-poll\fR]
+[\fB\-\-session\-bus\fR]
+.SH DESCRIPTION
+.B clevod
+is the only long-lived process that talks to the Clevo DCHU fan controller. It
+polls the embedded controller, caches the last reading with an explicit
+freshness state
+.RI ( fresh / stale / unknown ),
+persists user choices in a versioned TOML file, and serves
+.B org.clevo.CC
+on the system D\-Bus. The CLI and the graphical UI are clients and never touch
+hardware directly.
+.PP
+Reads are open to any local user. The write methods
+.BR SetFanMode (),
+.BR SetPerfMode ()
+are authorized through PolicyKit (actions
+.BR org.clevo.CC.set\-fan\-mode
+and
+.BR org.clevo.CC.set\-perf\-mode );
+when no authority is available they fall back to root only.
+.SH OPTIONS
+.TP
+.B \-\-driver
+Use the
+.B clevo-cc
+kernel driver sysfs/hwmon backend (read and write). This is the enabled write
+path. Without it the daemon uses the read-only
+.B acpi_call
+backend.
+.TP
+.BI \-\-mock " Fixture"
+Replay a recorded fixture instead of touching hardware; never writes.
+.TP
+.BI \-\-config " Path"
+Configuration file (default
+.IR /etc/clevo\-cc/clevod.toml ).
+.TP
+.BI \-\-interval\-ms " Ms"
+Poll interval in milliseconds (default 2000).
+.TP
+.B \-\-no\-poll
+Do not start the background poll loop.
+.TP
+.B \-\-session\-bus
+Bind to the per-user session bus instead of the system bus (testing).
+.SH D\-BUS INTERFACE
+Service
+.BR org.clevo.CC ,
+object
+.BR /org/clevo/CC ,
+interface
+.BR org.clevo.CC .
+.SH FILES
+.TP
+.I /etc/clevo-cc/clevod.toml
+Versioned daemon configuration; saved modes are re-applied on startup.
+.SH SEE ALSO
+.BR clevo-cc (1),
+.BR systemctl (1),
+.BR busctl (1)
+.SH LICENSE
+MIT OR Apache-2.0. The kernel module is GPL-2.0-only.
