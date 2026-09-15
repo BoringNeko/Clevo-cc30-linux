@@ -5,18 +5,22 @@
 A Linux rewrite of the Clevo (蓝天) Control Center. Based on the DCHU / ACPI
 `_DSM` protocol reverse-engineered from the vendor driver, it monitors fan speed
 and controls the fan and performance modes.
+This project is a re-reverse-engineered implementation of
+[clevo-v250rnd-linux](https://github.com/BoringNeko/clevo-v250rnd-linux) with a
+UI added.
 
-> Phase 1 is complete and verified on real hardware (COLORFUL P15 23 / CachyOS).
-> The protocol is verified only on Clevo-style laptops; check your DSDT against
-> [`docs/hardware-notes.md`](docs/hardware-notes.md) for other models.
+> Verified on COLORFUL P15 23 / CachyOS / Fedora 44.
+> Check your DSDT against [`docs/hardware-notes.md`](docs/hardware-notes.md) for
+> other models.
+> Other Clevo barebones are not guaranteed to work.
 
 ## Features
 
 - **Monitoring**: fan speed (CPU / GPU1), raw temperature and duty, and the fan
-  curve. Works through either the kernel driver or the read-only `acpi_call`
-  backend.
+  curve.
 - **Control**: fan mode (`auto` / `quiet` / `max` / `maxq`) and performance mode
-  (0..3), through the kernel driver and PolicyKit, fully reversible.
+  (`quiet` / `pwrsaving` / `performance` / `entertainment`), through the kernel
+  driver and PolicyKit, fully reversible.
 - **Daemon**: `clevod` is the only long-lived process that touches the hardware.
   It serves `org.clevo.CC` on the system D-Bus, caches readings and persists
   choices.
@@ -53,9 +57,10 @@ CLI               ─┼─▶ org.clevo.CC (D-Bus, PolicyKit) ─▶ clevod ─
 ## Install
 
 ```bash
-sudo packaging/install.sh            # driver (DKMS) + daemon + D-Bus/polkit/systemd/udev/man
-sudo packaging/install.sh --enable   # and start clevod now
-sudo packaging/uninstall.sh          # full rollback
+sudo packaging/install.sh                 # driver (DKMS) + daemon + D-Bus/polkit/systemd/udev/man
+sudo packaging/install.sh --enable        # and start clevod now
+sudo packaging/install.sh --enable --ui   # start clevod and install the UI too
+sudo packaging/uninstall.sh               # full rollback
 ```
 
 Preview first with `packaging/install.sh --dry-run`. Distribution packages (deb,
@@ -71,6 +76,10 @@ unprivileged sysfs access, troubleshooting).
 | [`docs/hardware-notes.md`](docs/hardware-notes.md) | Reverse-engineered protocol facts and verification |
 | [`docs/install.md`](docs/install.md) | Install / upgrade / uninstall |
 | [`docs/support-matrix.md`](docs/support-matrix.md) | Support matrix and distribution notes |
+
+## Notes
+
+Built with Opencode + Deepseek-V4.1-Flash.
 
 ## License
 
