@@ -1,7 +1,7 @@
 name: Release
 
 # Build deb / rpm / AppImage packages and attach them to a GitHub Release when
-# a version tag is pushed (e.g. v0.1.0). Can also be run manually.
+# a version tag is pushed (e.g. v0.1.1). Can also be run manually.
 on:
   push:
     tags:
@@ -100,5 +100,21 @@ jobs:
             dist/*.deb
             dist/*.rpm
             dist/*.AppImage
-          generate_release_notes: true
+          body: |
+            > ⚠️ **构建包未经测试，不保证可用。** 仅作方便尝试，请自行评估风险。
+            > AppImage **仅包含 UI 界面**（不含守护进程与内核驱动）。
+
+            ### fix
+            - 修复 NVIDIA 驱动下无法启动 / 无法硬件加速（WebKitGTK GBM 崩溃）
+            - 修复自定义强调色未应用到按钮、曲线、仪表等
+            - 修复窗口分辨率不记忆，重启即还原
+
+            ### add
+            - 自绘标题栏（最小化 / 全屏 / 关闭）
+            - 自定义取色弹窗（替代原生取色器）
+            - 新增「显示」设置（窗口比例、分辨率、缩放）
+            - 系统托盘（快速切换性能模式、打开控制中心、退出）
+
+            ### del
+            - 移除部分杂项文本
           fail_on_unmatched_files: true

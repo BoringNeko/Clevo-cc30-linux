@@ -122,5 +122,5 @@ dkms install -m clevo-cc -v %{version} >/dev/null 2>&1 || :
 /usr/src/clevo-cc-%{version}
 
 %changelog
-* Sun Sep 14 2025 BoringNeko <noreply@github.com> - 0.1.0-1
+* Sun Sep 14 2025 BoringNeko <noreply@github.com> - 0.1.1-1
 - Initial package.
