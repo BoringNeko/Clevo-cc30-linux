@@ -55,8 +55,15 @@ case "$backend" in
     *) echo "unknown backend '$backend'; using auto" >&2 ;;
 esac
 
+# Force the DMA-BUF transport onto shared memory. On the NVIDIA proprietary
+# driver WebKitGTK fails to allocate a GBM buffer and aborts with `Gdk Error 71`
+# before the window appears, on every compositor. This keeps the GL compositor
+# (and thus blur + hardware acceleration) alive; the backend sets the same
+# variable. Software rendering is the heavier fallback that disables it all.
 if [ "$software" = "true" ]; then
     export WEBKIT_DISABLE_DMABUF_RENDERER=1
+else
+    export WEBKIT_DMABUF_RENDERER_FORCE_SHM="${WEBKIT_DMABUF_RENDERER_FORCE_SHM:-1}"
 fi
 
 cd "$UI_DIR"

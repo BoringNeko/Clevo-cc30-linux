@@ -1,0 +1,106 @@
+import { describe, expect, it, vi } from "vitest";
+import { render, screen, fireEvent } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { DisplaySection } from "./DisplaySection";
+import { FALLBACK_PALETTE } from "../lib/color";
+import { DEFAULT_APPEARANCE, type Appearance } from "../theme";
+
+function setup(
+  appearance: Appearance = DEFAULT_APPEARANCE,
+  onAppearanceChange: (patch: Partial<Appearance>) => void = () => {},
+  onResize: (w: number, h: number) => void = () => {},
+) {
+  render(
+    <DisplaySection
+      palette={FALLBACK_PALETTE}
+      appearance={appearance}
+      onAppearanceChange={onAppearanceChange}
+      onResize={onResize}
+    />,
+  );
+}
+
+describe("DisplaySection", () => {
+  it("defaults to 16:9 with a 16:9 resolution", () => {
+    setup();
+    expect((screen.getByRole("combobox", { name: "分辨率" }) as HTMLElement).textContent).toContain(
+      "1280 × 720",
+    );
+    expect(screen.getByDisplayValue("100")).toBeTruthy();
+  });
+
+  it("offers both aspect ratios", () => {
+    setup();
+    expect(screen.getByRole("button", { name: "16:9" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "16:10" })).toBeTruthy();
+  });
+
+  it("snaps to the ratio's default resolution when the ratio changes", async () => {
+    const user = userEvent.setup();
+    const changes: Partial<Appearance>[] = [];
+    const resize = vi.fn();
+    setup(DEFAULT_APPEARANCE, (p) => changes.push(p), resize);
+    await user.click(screen.getByRole("button", { name: "16:10" }));
+    // 16:10 default for a 720-height request falls back to its largest preset.
+    expect(changes).toContainEqual({ aspect: "16:10", displayWidth: 1280, displayHeight: 800 });
+    expect(resize).toHaveBeenCalledWith(1280, 800);
+  });
+
+  it("shows only the resolutions matching the current ratio", async () => {
+    const user = userEvent.setup();
+    setup({ ...DEFAULT_APPEARANCE, aspect: "16:10", displayWidth: 1280, displayHeight: 800 });
+    await user.click(screen.getByRole("combobox", { name: "分辨率" }));
+    const options = screen.getAllByRole("option").map((o) => o.textContent);
+    expect(options.some((t) => t?.includes("1920 × 1200"))).toBe(true);
+    // A 16:9-only size is not offered.
+    expect(options.some((t) => t?.includes("1920 × 1080"))).toBe(false);
+  });
+
+  it("reports the chosen resolution and resizes", async () => {
+    const user = userEvent.setup();
+    const changes: Partial<Appearance>[] = [];
+    const resize = vi.fn();
+    setup(DEFAULT_APPEARANCE, (p) => changes.push(p), resize);
+    await user.click(screen.getByRole("combobox", { name: "分辨率" }));
+    await user.click(screen.getByRole("option", { name: /3840 × 2160/ }));
+    expect(changes).toContainEqual({ displayWidth: 3840, displayHeight: 2160 });
+    expect(resize).toHaveBeenCalledWith(3840, 2160);
+  });
+
+  it("commits a typed scale percentage on blur", () => {
+    const changes: Partial<Appearance>[] = [];
+    setup({ ...DEFAULT_APPEARANCE, scale: 100 }, (p) => changes.push(p));
+    const input = screen.getByLabelText("缩放百分比");
+    fireEvent.change(input, { target: { value: "150" } });
+    fireEvent.blur(input);
+    expect(changes).toContainEqual({ scale: 150 });
+  });
+
+  it("clamps a typed scale to the allowed range", () => {
+    const changes: Partial<Appearance>[] = [];
+    setup({ ...DEFAULT_APPEARANCE, scale: 100 }, (p) => changes.push(p));
+    const input = screen.getByLabelText("缩放百分比");
+    fireEvent.change(input, { target: { value: "900" } });
+    fireEvent.blur(input);
+    expect(changes).toContainEqual({ scale: 200 });
+  });
+
+  it("resets display settings to defaults", async () => {
+    const user = userEvent.setup();
+    const changes: Partial<Appearance>[] = [];
+    const resize = vi.fn();
+    setup(
+      { ...DEFAULT_APPEARANCE, aspect: "16:10", displayWidth: 3840, displayHeight: 2400, scale: 200 },
+      (p) => changes.push(p),
+      resize,
+    );
+    await user.click(screen.getByRole("button", { name: "恢复显示默认设置" }));
+    expect(changes).toContainEqual({
+      aspect: "16:9",
+      displayWidth: 1280,
+      displayHeight: 720,
+      scale: 100,
+    });
+    expect(resize).toHaveBeenCalledWith(1280, 720);
+  });
+});

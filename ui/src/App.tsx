@@ -2,29 +2,25 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import CssBaseline from "@mui/material/CssBaseline";
-import IconButton from "@mui/material/IconButton";
-import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import { ThemeProvider } from "@mui/material/styles";
-import PauseIcon from "@mui/icons-material/Pause";
-import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import {
-  fanModeName,
   getFanCurve,
   getFanSnapshot,
-  perfModeName,
   pollFan,
   type FanCurve,
   type FanSnapshot,
 } from "./api/daemon";
 import { Sidebar } from "./components/Sidebar";
 import { SettingsDialog } from "./components/SettingsDialog";
+import { WindowControls } from "./components/WindowControls";
 import { FansCard } from "./components/FansCard";
 import { PerformanceCard } from "./components/PerformanceCard";
 import { CurveCard } from "./components/CurveCard";
 import { TelemetryCard } from "./components/TelemetryCard";
 import { useWallpaper } from "./hooks/useWallpaper";
 import { useLogo } from "./hooks/useLogo";
+import { useWindowSize } from "./hooks/useWindowSize";
 import {
   loadCompatibilityPrefs,
   readCompatibilityPrefs,
@@ -33,6 +29,7 @@ import {
   writeCompatibilityPrefs,
   type CompatibilityPrefs,
 } from "./hooks/useAppSettings";
+import { cssTriplet, withAccent } from "./lib/color";
 import { buildTheme, glassSx } from "./theme";
 
 const POLL_INTERVAL_MS = 2000;
@@ -62,10 +59,37 @@ export default function App() {
       cancelled = true;
     };
   }, []);
-  const theme = useMemo(
-    () => buildTheme(palette, blurEnabled, appearance),
-    [palette, blurEnabled, appearance],
+  // The wallpaper palette with the user's accent override applied, so every
+  // consumer (gauge, curves, charts, sidebar, segmented buttons) follows it —
+  // not just the MUI theme.
+  const accentPalette = useMemo(
+    () => withAccent(palette, appearance.accent),
+    [palette, appearance.accent],
   );
+  const theme = useMemo(
+    () => buildTheme(accentPalette, blurEnabled, appearance),
+    [accentPalette, blurEnabled, appearance],
+  );
+
+  // Keep the accent CSS variables in step with the override (the wallpaper hook
+  // sets them from the raw palette; this restores the user's choice afterwards).
+  useEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty("--accent", cssTriplet(accentPalette.primary));
+    root.style.setProperty("--accent-2", cssTriplet(accentPalette.secondary));
+  }, [accentPalette]);
+
+  // Apply the UI zoom factor to the whole interface. `zoom` (supported by
+  // WebKitGTK) scales fixed px sizes and MUI spacing too, unlike a root
+  // font-size change which would only affect rem-based text. `scale` is a
+  // percentage (100 = 1x).
+  useEffect(() => {
+    document.documentElement.style.zoom = appearance.scale === 100 ? "" : String(appearance.scale / 100);
+  }, [appearance.scale]);
+
+  // Keep the window size in step with the persisted display settings (applied
+  // on startup and whenever the resolution changes).
+  const resizeWindow = useWindowSize(appearance);
 
   const updateCompat = useCallback((next: CompatibilityPrefs) => {
     setCompat(next);
@@ -76,7 +100,6 @@ export default function App() {
   const [snapshot, setSnapshot] = useState<FanSnapshot | null>(null);
   const [curve, setCurve] = useState<FanCurve | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [live, setLive] = useState(true);
   const [active, setActive] = useState<string>("overview");
   const [cpuHistory, setCpuHistory] = useState<number[]>([]);
   const [gpuHistory, setGpuHistory] = useState<number[]>([]);
@@ -119,9 +142,8 @@ export default function App() {
     };
   }, [applySnapshot]);
 
-  // Periodic refresh while live.
+  // Periodic refresh.
   useEffect(() => {
-    if (!live) return;
     timer.current = window.setInterval(refresh, POLL_INTERVAL_MS);
     return () => {
       if (timer.current !== null) {
@@ -129,7 +151,7 @@ export default function App() {
         timer.current = null;
       }
     };
-  }, [live, refresh]);
+  }, [refresh]);
 
   // Sync the sidebar highlight with the section in view.
   useEffect(() => {
@@ -189,7 +211,7 @@ export default function App() {
 
         <Box sx={{ position: "relative", zIndex: 10, display: "flex", height: "100%", width: "100%", gap: 2, p: 2 }}>
           <Sidebar
-            palette={palette}
+            palette={accentPalette}
             active={active}
             blur={blurEnabled}
             appearance={appearance}
@@ -205,6 +227,7 @@ export default function App() {
             <Box
               component="header"
               id="overview"
+              data-tauri-drag-region
               sx={{
                 ...glassSx(blurEnabled, appearance),
                 display: "flex",
@@ -214,35 +237,13 @@ export default function App() {
                 py: 1.5,
               }}
             >
-              <Box>
-                <Typography sx={{ fontSize: "1rem", fontWeight: 600, color: "text.primary" }}>
-                  系统概览
-                </Typography>
-                <Typography sx={{ fontSize: "0.6875rem", color: "text.disabled" }}>
-                  {snapshot
-                    ? `风扇模式 ${fanModeName(snapshot.fan_mode)} · 性能模式 ${perfModeName(snapshot.perf_mode)}`
-                    : "正在连接 clevod…"}
-                </Typography>
-              </Box>
-              <Tooltip title={live ? "暂停轮询" : "继续轮询"}>
-                <IconButton
-                  color="inherit"
-                  onClick={() => setLive((v) => !v)}
-                  data-testid="toggle-live"
-                  aria-label={live ? "暂停" : "继续"}
-                  sx={{
-                    width: 32,
-                    height: 32,
-                    borderRadius: 1,
-                    border: "1px solid divider",
-                    backgroundColor: "divider",
-                    color: "text.secondary",
-                    "&:hover": { backgroundColor: "divider", color: "text.primary" },
-                  }}
-                >
-                  {live ? <PauseIcon sx={{ fontSize: 16 }} /> : <PlayArrowIcon sx={{ fontSize: 16 }} />}
-                </IconButton>
-              </Tooltip>
+              <Typography
+                data-tauri-drag-region
+                sx={{ fontSize: "1rem", fontWeight: 600, color: "text.primary" }}
+              >
+                系统概览
+              </Typography>
+              <WindowControls />
             </Box>
 
             {error && (
@@ -254,11 +255,11 @@ export default function App() {
             {snapshot ? (
               <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", lg: "1fr 1fr" }, gap: 2 }}>
                 <Box id="fans" sx={{ scrollMarginTop: 16 }}>
-                  <FansCard palette={palette} snapshot={snapshot} />
+                  <FansCard palette={accentPalette} snapshot={snapshot} />
                 </Box>
                 <Box id="performance" sx={{ scrollMarginTop: 16 }}>
                   <PerformanceCard
-                    palette={palette}
+                    palette={accentPalette}
                     snapshot={snapshot}
                     onRefresh={refresh}
                     onError={setError}
@@ -266,7 +267,7 @@ export default function App() {
                 </Box>
                 <Box id="curve" sx={{ scrollMarginTop: 16 }}>
                   {curve ? (
-                    <CurveCard palette={palette} curve={curve} />
+                    <CurveCard palette={accentPalette} curve={curve} />
                   ) : (
                     <Typography sx={{ color: "text.disabled", fontSize: "0.75rem" }}>
                       风扇曲线不可用
@@ -274,7 +275,7 @@ export default function App() {
                   )}
                 </Box>
                 <TelemetryCard
-                  palette={palette}
+                  palette={accentPalette}
                   cpuHistory={cpuHistory}
                   gpuHistory={gpuHistory}
                 />
@@ -290,7 +291,7 @@ export default function App() {
         <SettingsDialog
           open={settingsOpen}
           onClose={() => setSettingsOpen(false)}
-          palette={palette}
+          palette={accentPalette}
           onWallpaperChange={setWallpaperFromFile}
           onResetWallpaper={resetWallpaper}
           wallpaperIsCustom={isCustom}
@@ -304,6 +305,7 @@ export default function App() {
           onLogoReset={resetLogo}
           compatibility={compat}
           onCompatibilityChange={updateCompat}
+          onResize={resizeWindow}
         />
       </Box>
     </ThemeProvider>

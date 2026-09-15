@@ -12,11 +12,13 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Clevo Control Center",
-        "width": 1100,
+        "width": 1280,
         "height": 720,
-        "minWidth": 820,
-        "minHeight": 600
+        "minWidth": 568,
+        "minHeight": 320,
+        "decorations": false
       }
     ],
     "security": {

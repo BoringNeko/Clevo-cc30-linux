@@ -1,10 +1,13 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import {
+  readAppearance,
   readBlurSetting,
+  writeAppearance,
   writeBlurSetting,
   readCompatibilityPrefs,
   writeCompatibilityPrefs,
 } from "./useAppSettings";
+import { DEFAULT_APPEARANCE } from "../theme";
 
 describe("app settings", () => {
   beforeEach(() => {
@@ -45,5 +48,41 @@ describe("app settings", () => {
       backend: "x11",
       softwareRendering: true,
     });
+  });
+
+  it("defaults display settings", () => {
+    const a = readAppearance();
+    expect(a.aspect).toBe("16:9");
+    expect(a.displayWidth).toBe(1280);
+    expect(a.displayHeight).toBe(720);
+    expect(a.scale).toBe(100);
+  });
+
+  it("round-trips display settings", () => {
+    writeAppearance({
+      ...DEFAULT_APPEARANCE,
+      aspect: "16:10",
+      displayWidth: 1920,
+      displayHeight: 1200,
+      scale: 150,
+    });
+    const a = readAppearance();
+    expect(a.aspect).toBe("16:10");
+    expect(a.displayWidth).toBe(1920);
+    expect(a.displayHeight).toBe(1200);
+    expect(a.scale).toBe(150);
+  });
+
+  it("clamps the scale and snaps an unknown resolution to the ratio default", () => {
+    window.localStorage.setItem(
+      "clevo.appearance",
+      JSON.stringify({ aspect: "16:10", displayWidth: 9999, displayHeight: 9999, scale: 900 }),
+    );
+    const a = readAppearance();
+    expect(a.aspect).toBe("16:10");
+    // Falls back to the 16:10 default (1280×800 in DEFAULT_APPEARANCE terms).
+    expect(a.displayWidth).toBe(1280);
+    expect(a.displayHeight).toBe(800);
+    expect(a.scale).toBe(200);
   });
 });

@@ -64,9 +64,18 @@ make -C /usr/lib/modules/$(uname -r)/build M=$PWD LLVM=1
 
 | 发行版 | 包 |
 |---|---|
-| Arch / CachyOS | `webkit2gtk-4.1 gtk3 libsoup3 base-devel`（托盘另加 `libayatana-appindicator`） |
-| Debian / Ubuntu | `libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev build-essential` |
-| Fedora | `webkit2gtk4.1-devel gtk3-devel libsoup3-devel` |
+| Arch / CachyOS | `webkit2gtk-4.1 gtk3 libsoup3 base-devel libayatana-appindicator` |
+| Debian / Ubuntu | `libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libayatana-appindicator3-dev build-essential` |
+| Fedora | `webkit2gtk4.1-devel gtk3-devel libsoup3-devel libayatana-appindicator-gtk3-devel` |
+
+> 托盘图标在 Linux 上依赖 `libappindicator3` / `libayatana-appindicator3`；
+> 缺省桌面环境（KDE/GNOME）都带 StatusNotifier 宿主，安装该库后托盘即可显示。
+>
+> Linux 的托盘是 AppIndicator，**只支持原生菜单、不向程序发送点击事件**（与
+> Windows/macOS 不同），因此托盘菜单直接包含全部功能：
+> - **性能模式** 子菜单（静音 / 节能 / 性能 / 娱乐），当前模式显示在子菜单标题上，
+>   切换经 daemon 的 PolicyKit 授权，无需打开窗口；
+> - **打开控制中心**、**退出**。
 
 ## 4. PolicyKit 认证代理（由桌面决定）
 
@@ -94,10 +103,19 @@ make -C /usr/lib/modules/$(uname -r)/build M=$PWD LLVM=1
 2. **udev 规则编号**：若给设备加 ACL，规则号须 < 73（`73-seat-late` 之前）。
 3. **`libayatana-appindicator` 的 pkg-config 名**：Arch 上是
    `ayatana-appindicator3-0.1`，不是 `libayatana-...`。
-4. **Wayland + WebKitGTK**：Hyprland 等合成器下可能触发 `Gdk Error 71`，
-   用 `WEBKIT_DISABLE_DMABUF_RENDERER=1`（UI 的设置里也有对应开关）。
-5. **systemd 是默认假设**：`clevod` 的打包文件是 systemd unit；
-  非 systemd 发行版需自行写服务脚本（代码本身不依赖 systemd）。
+4. **NVIDIA + WebKitGTK 的 `Gdk Error 71`**：NVIDIA 专有驱动（实测 610.57.04）
+   下 WebKitGTK 2.52 分配 GBM 缓冲失败，窗口映射前即崩溃，**与合成器无关**
+   （KDE/GNOME/wlroots、Wayland/X11 均重现）。UI 与 `scripts/run-ui.sh` 默认设置
+   `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1`：只把 DMA-BUF 传输改为共享内存，保留
+   GL 合成器，因此硬件加速与毛玻璃模糊都仍然可用。**不要**用
+   `WEBKIT_DISABLE_DMABUF_RENDERER=1` 作为首选——它会彻底关闭加速合成器，
+   导致模糊失效、CPU 占用升高；它仅作为"软件渲染"兜底开关保留。
+5. **托盘是 AppIndicator（仅菜单）**：Linux 的托盘不支持自绘弹窗，也**不向程序
+   发送点击事件**（只有 Windows/macOS 会），因此托盘功能全部放在原生菜单里
+   （性能模式子菜单 + 打开控制中心 + 退出）。需要 `libappindicator3` /
+   `libayatana-appindicator3` 与桌面的 StatusNotifier 宿主（KDE/GNOME 自带）。
+6. **systemd 是默认假设**：`clevod` 的打包文件是 systemd unit；
+   非 systemd 发行版需自行写服务脚本（代码本身不依赖 systemd）。
 
 ## 6. 分发与安装（S9，已完成）
 

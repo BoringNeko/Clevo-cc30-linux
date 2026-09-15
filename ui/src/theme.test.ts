@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildTheme, DEFAULT_APPEARANCE, freshnessTone, statusColors, type Appearance } from "./theme";
-import { FALLBACK_PALETTE } from "./lib/color";
+import { FALLBACK_PALETTE, withAccent } from "./lib/color";
 
 describe("buildTheme", () => {
   it("derives the accent colours from the palette", () => {
@@ -47,8 +47,11 @@ describe("appearance", () => {
     expect(theme.palette.text.primary).toBe("#111417");
   });
 
-  it("a custom accent overrides the wallpaper palette", () => {
-    const theme = buildTheme(FALLBACK_PALETTE, true, app({ accent: "#ff0000" }));
+  it("a custom accent reaches the theme via the overridden palette", () => {
+    // App applies the override with `withAccent` before building the theme, so
+    // one colour covers the theme and every palette-consuming component.
+    const palette = withAccent(FALLBACK_PALETTE, "#ff0000");
+    const theme = buildTheme(palette, true, app({ accent: "#ff0000" }));
     expect(theme.palette.primary.main).toBe("rgb(255, 0, 0)");
   });
 

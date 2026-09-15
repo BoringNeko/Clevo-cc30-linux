@@ -97,7 +97,7 @@ export function PerformanceCard({
 
   return (
     <GlassCard sx={{ gap: 2.5 }}>
-      <CardHeader icon={<SpeedIcon sx={{ fontSize: 16 }} />} title="模式" hint={snapshot.writable ? "可写" : "只读"} />
+      <CardHeader icon={<SpeedIcon sx={{ fontSize: 16 }} />} title="模式" />
 
       <Box>
         <Typography
@@ -141,19 +141,6 @@ export function PerformanceCard({
         </Box>
       </Box>
 
-      <Box
-        sx={{
-          mt: "auto",
-          borderTop: "1px solid", borderTopColor: "divider",
-          pt: 1.5,
-          fontSize: "0.6875rem",
-          color: "text.disabled",
-        }}
-      >
-        {snapshot.writable
-          ? "写入由 PolicyKit 授权。"
-          : "后端只读，写入已禁用。"}
-      </Box>
     </GlassCard>
   );
 }

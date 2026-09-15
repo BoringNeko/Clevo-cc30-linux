@@ -1,7 +1,16 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default capability for the main window. The UI talks only to the app's own Tauri commands; no shell or filesystem plugins are exposed.",
+  "description": "Default capability for the main window. The UI talks only to the app's own Tauri commands; no shell or filesystem plugins are exposed. Window permissions are limited to the custom title bar controls (minimize, maximize, close, drag, fullscreen, resize).",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-unmaximize",
+    "core:window:allow-close",
+    "core:window:allow-set-fullscreen",
+    "core:window:allow-set-size",
+    "core:window:allow-start-dragging"
+  ]
 }

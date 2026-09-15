@@ -41,11 +41,7 @@ export function TelemetryCard({ palette, cpuHistory, gpuHistory }: TelemetryCard
 
   return (
     <GlassCard sx={{ gap: 2 }}>
-      <CardHeader
-        icon={<ActivityIcon sx={{ fontSize: 16 }} />}
-        title="转速历史"
-        hint={`${cpuHistory.length} 个采样`}
-      />
+      <CardHeader icon={<ActivityIcon sx={{ fontSize: 16 }} />} title="转速历史" />
 
       <Box sx={{ flex: 1, display: "grid", gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" }, gap: 2 }}>
         {metrics.map((m) => (

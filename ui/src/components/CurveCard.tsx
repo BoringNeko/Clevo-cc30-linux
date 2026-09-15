@@ -42,11 +42,7 @@ export function CurveCard({ palette, curve }: CurveCardProps) {
 
   return (
     <GlassCard sx={{ gap: 2 }}>
-      <CardHeader
-        icon={<ShowChartIcon sx={{ fontSize: 16 }} />}
-        title="风扇曲线"
-        hint={`${curve.fan_count} 个风扇`}
-      />
+      <CardHeader icon={<ShowChartIcon sx={{ fontSize: 16 }} />} title="风扇曲线" />
 
       <Box
         sx={{

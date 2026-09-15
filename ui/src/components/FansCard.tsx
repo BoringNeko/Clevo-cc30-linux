@@ -4,7 +4,6 @@ import AirIcon from "@mui/icons-material/Air";
 import ThermostatIcon from "@mui/icons-material/Thermostat";
 import { CardHeader, GlassCard } from "./GlassCard";
 import { CircularGauge } from "./CircularGauge";
-import { FreshnessBadge } from "./FreshnessBadge";
 import type { FanSnapshot } from "../api/daemon";
 import { rgbString, type ExtractedPalette } from "../lib/color";
 
@@ -20,8 +19,7 @@ interface FansCardProps {
  * CPU/GPU fan speeds as circular gauges.
  *
  * Gauge value is rpm scaled to the machine's observed maximum; the raw rpm is
- * shown in the centre label. The freshness badge makes it explicit whether the
- * numbers are live.
+ * shown in the centre label.
  */
 export function FansCard({ palette, snapshot }: FansCardProps) {
   const accent = rgbString(palette.primary);
@@ -30,10 +28,7 @@ export function FansCard({ palette, snapshot }: FansCardProps) {
 
   return (
     <GlassCard sx={{ gap: 2.5 }}>
-      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <CardHeader icon={<AirIcon sx={{ fontSize: 16 }} />} title="风扇" hint="实时" />
-        <FreshnessBadge freshness={snapshot.freshness} />
-      </Box>
+      <CardHeader icon={<AirIcon sx={{ fontSize: 16 }} />} title="风扇" />
 
       <Box sx={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "space-around", gap: 2 }}>
         {snapshot.cpu.available ? (
@@ -77,7 +72,6 @@ export function FansCard({ palette, snapshot }: FansCardProps) {
           <ThermostatIcon sx={{ fontSize: 13 }} /> CPU {snapshot.cpu.temp_raw}° · GPU{" "}
           {snapshot.gpu1.temp_raw}° (原始值，未验证)
         </Box>
-        <span>{snapshot.fan_count} 个通道</span>
       </Box>
     </GlassCard>
   );

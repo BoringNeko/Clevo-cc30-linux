@@ -516,3 +516,50 @@ The D-Bus policy must **allow** unprivileged callers to send the write methods
 so they can reach the daemon's PolicyKit gate. Denying writes in the bus policy
 would prevent any authentication prompt from ever appearing. Authorization is
 enforced by PolicyKit inside the daemon, not by the bus.
+
+## 15. WebKitGTK on the NVIDIA proprietary driver — `Gdk Error 71` (verified)
+
+Host: **COLORFUL P15 23**, RTX 4060 Laptop (Ada) on the **NVIDIA proprietary
+driver 610.57.04**, WebKitGTK **2.52.5**, KDE Plasma on Wayland.
+
+### 15.1 Symptom
+
+The Tauri UI never reaches the first frame. GTK aborts during toolkit startup:
+
+```
+Gdk-Message: Error 71 (Protocol error) dispatching to Wayland display.
+```
+
+It reproduces on **every** compositor and session type (KDE, GNOME, wlroots;
+Wayland and X11), so the wlroots-specific notes in
+[`support-matrix.md`](support-matrix.md) §5.4 are not the whole story. The
+failure is in WebKit's EGL/GBM buffer allocation, not in the compositor: with
+the proprietary driver WebKit cannot obtain a valid GBM buffer format and takes
+down the process before mapping the window.
+
+### 15.2 Two environment switches, very different blast radius
+
+| Variable | Effect |
+|---|---|
+| `WEBKIT_DISABLE_DMABUF_RENDERER=1` | Tear down the whole DMA-BUF renderer, **including the accelerated compositor**. The app starts, but `backdrop-filter` stops working (cards render too transparent) and painting falls back to CPU. |
+| `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1` | Keep the GL compositor; only the buffer **transport** is switched to shared memory. The GBM allocation is bypassed, so the startup crash disappears **while hardware acceleration and blur stay enabled**. |
+
+`WEBKIT_DMABUF_RENDERER_DISABLE_GBM=1` and `..._BUFFER_FORMAT` exist too but did
+**not** fix the crash here (`DISABLE_GBM` reproduced `Error 71` unchanged;
+`FORCE_SHM` was the only switch that both started and kept acceleration).
+
+### 15.3 Decision
+
+The UI backend (`ui/src-tauri/src/prefs.rs::apply_launch_env`) and
+`scripts/run-ui.sh` **always** set `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1` unless it
+is already present in the environment. This is a workaround for the driver, not
+a policy choice: it is harmless on drivers that do not need it, and it keeps the
+frosted-glass dashboard accelerated.
+
+The Settings → Compatibility "software rendering" switch is retained only as a
+heavier fallback for other broken drivers; it selects the
+`WEBKIT_DISABLE_DMABUF_RENDERER=1` sledgehammer and is no longer the default.
+
+Verification: a minimal WebKitGTK 4.1 page (Gtk + WebKitWebView) crashes with
+`Error 71` under the defaults, stays up with `FORCE_SHM=1`, and still returns a
+WebGL context (so the GPU path is alive) under `FORCE_SHM=1`.

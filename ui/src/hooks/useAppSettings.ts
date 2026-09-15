@@ -1,13 +1,23 @@
 import { useCallback, useEffect, useState } from "react";
-import { DEFAULT_APPEARANCE, type Appearance } from "../theme";
+import {
+  DEFAULT_APPEARANCE,
+  RESOLUTION_PRESETS,
+  SCALE_MAX,
+  SCALE_MIN,
+  defaultSize,
+  type Appearance,
+  type AspectRatio,
+} from "../theme";
 
 /**
  * Whether to use the frosted-glass blur.
  *
- * `backdrop-filter` is supported by the WebView only on its compositing path.
- * On wlroots compositors (Hyprland/Sway) the usual workaround is to start the
- * app with the DMA-BUF renderer disabled, which makes `backdrop-filter` a no-op
- * — the cards would then be too transparent to read.
+ * `backdrop-filter` only works while WebKit's accelerated compositor is alive.
+ * The backend forces the DMA-BUF transport onto shared memory
+ * (`WEBKIT_DMABUF_RENDERER_FORCE_SHM=1`) so the compositor survives the NVIDIA
+ * GBM bug; that keeps acceleration and blur working. If the user instead turns
+ * on software rendering, WebKit disables the compositor entirely and blur
+ * becomes a no-op — the cards would then be too transparent to read.
  *
  * Rather than guess, this returns:
  *  - `false` when the CSS API is absent, or
@@ -147,17 +157,34 @@ export function readAppearance(): Appearance {
     const parsed = JSON.parse(raw) as Partial<Appearance>;
     const blurPx = typeof parsed.blurPx === "number" ? parsed.blurPx : DEFAULT_APPEARANCE.blurPx;
     const opacity = typeof parsed.opacity === "number" ? parsed.opacity : null;
+    const scale = typeof parsed.scale === "number" ? parsed.scale : DEFAULT_APPEARANCE.scale;
+    const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+    const aspect: AspectRatio = parsed.aspect === "16:10" ? "16:10" : "16:9";
+    // Snap the stored size to a preset of the stored ratio; anything else falls
+    // back to that ratio's default. Keeps the dropdown in sync with the value.
+    const presets = RESOLUTION_PRESETS[aspect];
+    const preset = presets.find(
+      (p) => p.width === parsed.displayWidth && p.height === parsed.displayHeight,
+    );
+    const fallback = defaultSize(aspect);
+    const [displayWidth, displayHeight] = preset
+      ? [preset.width, preset.height]
+      : [fallback.width, fallback.height];
     return {
       mode: parsed.mode === "light" ? "light" : "dark",
       accent: typeof parsed.accent === "string" ? parsed.accent : null,
       surface: typeof parsed.surface === "string" ? parsed.surface : null,
       textColor: typeof parsed.textColor === "string" ? parsed.textColor : null,
-      opacity: opacity === null ? null : Math.min(1, Math.max(0, opacity)),
-      blurPx: Math.min(40, Math.max(0, blurPx)),
+      opacity: opacity === null ? null : clamp(opacity, 0, 1),
+      blurPx: clamp(blurPx, 0, 40),
       brandTitle: typeof parsed.brandTitle === "string" ? parsed.brandTitle : DEFAULT_APPEARANCE.brandTitle,
       brandSubtitle:
         typeof parsed.brandSubtitle === "string" ? parsed.brandSubtitle : DEFAULT_APPEARANCE.brandSubtitle,
       logoPath: typeof parsed.logoPath === "string" ? parsed.logoPath : DEFAULT_APPEARANCE.logoPath,
+      aspect,
+      displayWidth,
+      displayHeight,
+      scale: clamp(scale, SCALE_MIN, SCALE_MAX),
     };
   } catch {
     return DEFAULT_APPEARANCE;

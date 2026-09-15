@@ -9,7 +9,8 @@ import ImageIcon from "@mui/icons-material/Image";
 import RestartAltIcon from "@mui/icons-material/RestartAlt";
 import DarkModeIcon from "@mui/icons-material/DarkMode";
 import LightModeIcon from "@mui/icons-material/LightMode";
-import type { ExtractedPalette } from "../lib/color";
+import { ColorPicker } from "./ColorPicker";
+import { rgbTupleToHex, type ExtractedPalette } from "../lib/color";
 import type { Appearance } from "../theme";
 
 interface PersonalizationSectionProps {
@@ -25,11 +26,7 @@ interface PersonalizationSectionProps {
   onLogoReset: () => void;
 }
 
-/** `[r,g,b]` to `#rrggbb`. */
-function rgbToHex([r, g, b]: [number, number, number]): string {
-  const h = (n: number) => n.toString(16).padStart(2, "0");
-  return `#${h(r)}${h(g)}${h(b)}`;
-}
+const rgbToHex = rgbTupleToHex;
 
 function Row({
   title,
@@ -66,38 +63,32 @@ function Row({
   );
 }
 
-/** A colour input with a reset button; `value === null` means "default". */
+/**
+ * A colour swatch that opens the custom picker; `value === null` means
+ * "default". The reset button restores the mode/wallpaper-derived colour.
+ */
 function ColorSetting({
   value,
   fallback,
+  swatches,
+  label,
   onChange,
 }: {
   value: string | null;
   fallback: string;
+  swatches: ExtractedPalette["swatches"];
+  label: string;
   onChange: (value: string | null) => void;
 }) {
-  const inputRef = useRef<HTMLInputElement>(null);
   const shown = value ?? fallback;
   return (
     <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-      <Box
-        onClick={() => inputRef.current?.click()}
-        sx={{
-          width: 40,
-          height: 28,
-          borderRadius: 1,
-          border: "1px solid rgba(127,127,127,0.4)",
-          backgroundColor: shown,
-          cursor: "pointer",
-        }}
-        title="选择颜色"
-      />
-      <input
-        ref={inputRef}
-        type="color"
+      <ColorPicker
         value={shown}
-        hidden
-        onChange={(e) => onChange(e.target.value)}
+        swatches={swatches}
+        label={label}
+        onChange={(hex) => onChange(hex)}
+        onReset={value === null ? undefined : () => onChange(null)}
       />
       <Button
         onClick={() => onChange(null)}
@@ -199,6 +190,8 @@ export function PersonalizationSection({
         <ColorSetting
           value={appearance.accent}
           fallback={rgbToHex(palette.primary)}
+          swatches={palette.swatches}
+          label="强调色"
           onChange={(v) => onAppearanceChange({ accent: v })}
         />
       </Row>
@@ -210,6 +203,8 @@ export function PersonalizationSection({
         <ColorSetting
           value={appearance.surface}
           fallback={appearance.mode === "dark" ? "#000000" : "#ffffff"}
+          swatches={palette.swatches}
+          label="卡片颜色"
           onChange={(v) => onAppearanceChange({ surface: v })}
         />
       </Row>
@@ -248,6 +243,8 @@ export function PersonalizationSection({
         <ColorSetting
           value={appearance.textColor}
           fallback={appearance.mode === "dark" ? "#ffffff" : "#111417"}
+          swatches={palette.swatches}
+          label="文字颜色"
           onChange={(v) => onAppearanceChange({ textColor: v })}
         />
       </Row>

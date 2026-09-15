@@ -82,12 +82,15 @@ for pc in webkit2gtk-4.1 javascriptcoregtk-4.1 gtk+-3.0 libsoup-3.0 glib-2.0; do
 done
 
 echo
-echo "== Optional: system tray =="
+echo "== System tray =="
+# The tray icon (right-click popup) needs libappindicator/ayatana-appindicator.
 tray="$(pkg-config --modversion ayatana-appindicator3-0.1 2>/dev/null)"
 if [ -n "$tray" ]; then
     printf '  \033[32mok\033[0m    %-32s %s\n' "ayatana-appindicator3-0.1" "$tray"
+    ok=$((ok + 1))
 else
-    printf '  \033[33mskip\033[0m  %-32s %s\n' "ayatana-appindicator3-0.1" "tray disabled"
+    printf '  \033[31mMISS\033[0m  %-32s\n' "ayatana-appindicator3-0.1"
+    missing=$((missing + 1))
 fi
 
 echo
@@ -109,17 +112,17 @@ else
         arch|cachyos|manjaro|endeavouros)
             echo "  Install (Arch family):"
             echo "    sudo pacman -S --needed webkit2gtk-4.1 gtk3 libsoup3 base-devel"
-            echo "    # tray support (optional): sudo pacman -S libayatana-appindicator"
+            echo "    # tray support: sudo pacman -S libayatana-appindicator"
             ;;
         debian|ubuntu|linuxmint|pop)
             echo "  Install (Debian family):"
             echo "    sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev build-essential"
-            echo "    # tray support (optional): sudo apt install libayatana-appindicator3-dev"
+            echo "    # tray support: sudo apt install libayatana-appindicator3-dev"
             ;;
         fedora|rhel|centos)
             echo "  Install (Fedora family):"
             echo "    sudo dnf install webkit2gtk4.1-devel gtk3-devel libsoup3-devel"
-            echo "    # tray support (optional): sudo dnf install libayatana-appindicator-gtk3-devel"
+            echo "    # tray support: sudo dnf install libayatana-appindicator-gtk3-devel"
             ;;
         *)
             echo "  See https://tauri.app/start/prerequisites/ for your distribution."

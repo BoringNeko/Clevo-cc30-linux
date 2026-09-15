@@ -151,6 +151,9 @@ cd .. && sudo packaging/install.sh --ui
 
 UI 只通过 D-Bus 读取/控制，不直接接触硬件。
 
+> 托盘图标需要 `libappindicator3` / `libayatana-appindicator3`；各发行版包名见
+> [`support-matrix.md`](support-matrix.md) §3.3。
+
 ---
 
 ## 5. 发行版包

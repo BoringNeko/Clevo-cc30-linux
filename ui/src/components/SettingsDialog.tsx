@@ -8,7 +8,9 @@ import Typography from "@mui/material/Typography";
 import CloseIcon from "@mui/icons-material/Close";
 import PaletteIcon from "@mui/icons-material/Palette";
 import TuneIcon from "@mui/icons-material/Tune";
+import MonitorIcon from "@mui/icons-material/Monitor";
 import { CompatibilitySection } from "./CompatibilitySection";
+import { DisplaySection } from "./DisplaySection";
 import { PersonalizationSection } from "./PersonalizationSection";
 import { useTheme } from "@mui/material/styles";
 import { rgbString, type ExtractedPalette } from "../lib/color";
@@ -18,6 +20,7 @@ import type { Appearance } from "../theme";
 
 const SECTIONS = [
   { id: "personalization", label: "个性化", Icon: PaletteIcon },
+  { id: "display", label: "显示", Icon: MonitorIcon },
   { id: "compatibility", label: "兼容性", Icon: TuneIcon },
 ] as const;
 
@@ -42,6 +45,8 @@ interface SettingsDialogProps {
   /** Backend / software-rendering prefs (applied on next launch). */
   compatibility: CompatibilityPrefs;
   onCompatibilityChange: (value: CompatibilityPrefs) => void;
+  /** Resize the app window (no-op outside Tauri). */
+  onResize: (width: number, height: number) => void;
 }
 
 /**
@@ -69,6 +74,7 @@ export function SettingsDialog({
   onLogoReset,
   compatibility,
   onCompatibilityChange,
+  onResize,
 }: SettingsDialogProps) {
   const [active, setActive] = useState<SectionId>("personalization");
   const theme = useTheme();
@@ -188,6 +194,13 @@ export function SettingsDialog({
                 logoIsCustom={logoIsCustom}
                 onLogoChange={onLogoChange}
                 onLogoReset={onLogoReset}
+              />
+            ) : active === "display" ? (
+              <DisplaySection
+                palette={palette}
+                appearance={appearance}
+                onAppearanceChange={onAppearanceChange}
+                onResize={onResize}
               />
             ) : (
               <CompatibilitySection

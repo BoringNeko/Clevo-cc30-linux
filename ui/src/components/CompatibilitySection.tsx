@@ -15,6 +15,7 @@ import {
   type BlurSetting,
   type CompatibilityPrefs,
 } from "../hooks/useAppSettings";
+import { SettingsRow } from "./SettingsRow";
 import { rgbString, type ExtractedPalette } from "../lib/color";
 import type { Appearance } from "../theme";
 
@@ -28,50 +29,22 @@ interface CompatibilitySectionProps {
   onCompatibilityChange: (value: CompatibilityPrefs) => void;
 }
 
-function Row({
-  title,
-  description,
-  children,
-}: {
-  title: string;
-  description?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <Box
-      sx={{
-        display: "flex",
-        alignItems: "flex-start",
-        justifyContent: "space-between",
-        gap: 3,
-        py: 1.75,
-        borderBottom: "1px solid", borderBottomColor: "divider",
-      }}
-    >
-      <Box sx={{ minWidth: 0 }}>
-        <Typography sx={{ fontSize: "0.8125rem", fontWeight: 600, color: "text.primary" }}>
-          {title}
-        </Typography>
-        {description ? (
-          <Typography sx={{ fontSize: "0.75rem", color: "text.disabled", mt: 0.25 }}>
-            {description}
-          </Typography>
-        ) : null}
-      </Box>
-      <Box sx={{ flexShrink: 0 }}>{children}</Box>
-    </Box>
-  );
-}
+const Row = SettingsRow;
 
 /**
  * Compatibility options for the WebView.
  *
  * Backend and software rendering are process-wide, launch-time environment
- * variables (`GDK_BACKEND`, `WEBKIT_DISABLE_DMABUF_RENDERER`,
- * `WEBKIT_DISABLE_COMPOSITING_MODE`); they cannot be changed in a running
- * WebView. The UI therefore persists the choice and states plainly that it
- * applies on the next launch. Blur, by contrast, is a CSS choice and applies
- * immediately.
+ * variables (`GDK_BACKEND`, `WEBKIT_DISABLE_DMABUF_RENDERER`); they cannot be
+ * changed in a running WebView. The UI therefore persists the choice and states
+ * plainly that it applies on the next launch. Blur, by contrast, is a CSS choice
+ * and applies immediately.
+ *
+ * Regardless of these settings the backend always starts WebKit with
+ * `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1`, which works around the NVIDIA GBM
+ * failure (`Gdk Error 71`) while keeping hardware acceleration and blur. The
+ * software-rendering switch here is the heavier last resort that disables the
+ * accelerated compositor outright.
  */
 export function CompatibilitySection({
   palette,
@@ -130,7 +103,7 @@ export function CompatibilitySection({
 
       <Row
         title="软件渲染"
-        description="禁用 DMA-BUF GPU 渲染路径（WEBKIT_DISABLE_DMABUF_RENDERER=1）。可修复 wlroots 系合成器上的崩溃，代价是失去毛玻璃模糊且 CPU 占用更高。"
+        description="彻底禁用 DMA-BUF 与 GPU 合成（WEBKIT_DISABLE_DMABUF_RENDERER=1）。仅在默认启动仍崩溃时使用：代价是失去毛玻璃模糊且 CPU 占用更高。NVIDIA GBM 崩溃已由默认的共享内存传输自动修复，通常无需开启。"
       >
         <FormControlLabel
           control={
@@ -190,10 +163,11 @@ export function CompatibilitySection({
       {restartHint}
 
       <Box sx={{ mt: 2, fontSize: "0.6875rem", color: "text.disabled", lineHeight: 1.7 }}>
-        <div>Auto → 不设置任何变量（由 WebKit 决定）。</div>
+        <div>Auto → 不设置后端变量（由 WebKit 决定）。</div>
         <div>Wayland → <code>GDK_BACKEND=wayland</code></div>
         <div>X11 → <code>GDK_BACKEND=x11</code></div>
-        <div>软件渲染 → <code>WEBKIT_DISABLE_DMABUF_RENDERER=1</code></div>
+        <div>始终启用 → <code>WEBKIT_DMABUF_RENDERER_FORCE_SHM=1</code>（默认，规避 NVIDIA GBM 崩溃）</div>
+        <div>软件渲染 → <code>WEBKIT_DISABLE_DMABUF_RENDERER=1</code>（兜底）</div>
       </Box>
 
       <Button

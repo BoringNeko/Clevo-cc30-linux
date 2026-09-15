@@ -8,6 +8,7 @@ pub mod assets;
 pub mod commands;
 pub mod dbus;
 pub mod prefs;
+pub mod tray;
 
 /// Run the Tauri application.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -28,7 +29,15 @@ pub fn run() {
             commands::load_logo,
             commands::clear_logo,
             commands::read_image_path,
+            commands::show_main_window,
+            commands::quit_app,
         ])
+        .setup(|app| {
+            // The tray icon lives for the whole process; its menu carries the
+            // performance switcher, "open control center" and "quit".
+            tray::build_tray(app.handle())?;
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running the Tauri application");
 }

@@ -33,13 +33,22 @@ describe("PersonalizationSection", () => {
     expect(changes).toContainEqual({ mode: "light" });
   });
 
-  it("reports a custom accent from the colour input", () => {
+  it("opens the custom picker for the accent colour", () => {
+    setup(DEFAULT_APPEARANCE);
+    // One trigger per colour setting (accent, surface, text), each labelled.
+    expect(screen.getByRole("button", { name: "强调色" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "卡片颜色" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "文字颜色" })).toBeTruthy();
+    // No native colour input remains.
+    expect(document.querySelectorAll('input[type="color"]').length).toBe(0);
+  });
+
+  it("reports a custom accent typed in the picker", () => {
     const changes: Partial<Appearance>[] = [];
     setup(DEFAULT_APPEARANCE, (p: Partial<Appearance>) => changes.push(p),
     );
-    const inputs = document.querySelectorAll('input[type="color"]');
-    expect(inputs.length).toBeGreaterThan(0);
-    fireEvent.change(inputs[0], { target: { value: "#123456" } });
+    fireEvent.click(screen.getByRole("button", { name: "强调色" }));
+    fireEvent.change(screen.getByLabelText("十六进制颜色"), { target: { value: "#123456" } });
     expect(changes).toContainEqual({ accent: "#123456" });
   });
 

@@ -30,7 +30,51 @@ export interface Appearance {
    * "/") read via the backend. Empty uses the built-in icon.
    */
   logoPath: string;
+  /** Window aspect ratio preset. */
+  /** Window aspect ratio; selects which resolution list is shown. */
+  aspect: AspectRatio;
+  /** Window width in px; always the width of a preset for the current aspect. */
+  displayWidth: number;
+  /** Window height in px; always the height of a preset for the current aspect. */
+  displayHeight: number;
+  /** UI zoom factor (0.5..2), applied to the whole interface. */
+  scale: number;
 }
+
+export type AspectRatio = "16:9" | "16:10";
+
+export const ASPECT_RATIOS: readonly AspectRatio[] = ["16:9", "16:10"];
+
+/**
+ * Preset window resolutions per aspect ratio, smallest to largest. Stored as
+ * exact integers so odd sizes like 854×480 stay exact.
+ */
+export const RESOLUTION_PRESETS: Record<
+  AspectRatio,
+  ReadonlyArray<{ width: number; height: number }>
+> = {
+  "16:9": [
+    { width: 568, height: 320 },
+    { width: 854, height: 480 },
+    { width: 1024, height: 576 },
+    { width: 1280, height: 720 },
+    { width: 1600, height: 900 },
+    { width: 1920, height: 1080 },
+    { width: 2560, height: 1440 },
+    { width: 3840, height: 2160 },
+  ],
+  "16:10": [
+    { width: 1280, height: 800 },
+    { width: 1440, height: 900 },
+    { width: 1680, height: 1050 },
+    { width: 1920, height: 1200 },
+    { width: 2560, height: 1600 },
+    { width: 3840, height: 2400 },
+  ],
+};
+
+export const SCALE_MIN = 50;
+export const SCALE_MAX = 200;
 
 export const DEFAULT_APPEARANCE: Appearance = {
   mode: "dark",
@@ -42,7 +86,36 @@ export const DEFAULT_APPEARANCE: Appearance = {
   brandTitle: "CLEVO",
   brandSubtitle: "CONTROL",
   logoPath: "logo.jpg",
+  aspect: "16:9",
+  displayWidth: 1280,
+  displayHeight: 720,
+  scale: 100,
 };
+
+/** The preferred preset for a ratio: the closest to 1280 wide. */
+export function defaultSize(aspect: AspectRatio): { width: number; height: number } {
+  const presets = RESOLUTION_PRESETS[aspect];
+  const preset = presets.reduce((best, p) =>
+    Math.abs(p.width - 1280) < Math.abs(best.width - 1280) ? p : best,
+  );
+  return { width: preset.width, height: preset.height };
+}
+
+/**
+ * The chosen window size, snapped to a preset of the current ratio: an exact
+ * match if present, else the closest height, else the ratio's default.
+ */
+export function windowSize(appearance: Appearance): { width: number; height: number } {
+  const presets = RESOLUTION_PRESETS[appearance.aspect];
+  const preset =
+    presets.find((p) => p.width === appearance.displayWidth && p.height === appearance.displayHeight) ??
+    presets.find((p) => p.height === appearance.displayHeight) ??
+    (() => {
+      const def = defaultSize(appearance.aspect);
+      return presets.find((p) => p.width === def.width && p.height === def.height)!;
+    })();
+  return { width: preset.width, height: preset.height };
+}
 
 /** Hex `#rrggbb` to an `r, g, b` string, or null when malformed. */
 function hexToRgb(hex: string): string | null {
@@ -113,9 +186,10 @@ export function buildTheme(
   blur = true,
   appearance: Appearance = DEFAULT_APPEARANCE,
 ): Theme {
+  // The caller passes a palette that already has the accent override applied
+  // (see `withAccent`), so the theme and the components agree on one colour.
   const { primary, secondary } = palette;
-  const customAccent = appearance.accent ? hexToRgb(appearance.accent) : null;
-  const primaryMain = customAccent ? `rgb(${customAccent})` : `rgb(${primary[0]}, ${primary[1]}, ${primary[2]})`;
+  const primaryMain = `rgb(${primary[0]}, ${primary[1]}, ${primary[2]})`;
   const secondaryMain = `rgb(${secondary[0]}, ${secondary[1]}, ${secondary[2]})`;
 
   const surface = surfaceColor(appearance, blur);
@@ -186,6 +260,22 @@ export function buildTheme(
         },
       },
       MuiSelect: { styleOverrides: { root: { borderRadius: 6 } } },
+      MuiPopover: {
+        defaultProps: { disableScrollLock: true },
+        styleOverrides: {
+          paper: {
+            backgroundColor: surface,
+            ...blurStyle,
+            backgroundImage: "none",
+            border: `1px solid ${text.border}`,
+            borderRadius: 8,
+            boxShadow:
+              appearance.mode === "dark"
+                ? "0 10px 30px rgba(0,0,0,0.35)"
+                : "0 10px 30px rgba(0,0,0,0.12)",
+          },
+        },
+      },
     },
   });
 }

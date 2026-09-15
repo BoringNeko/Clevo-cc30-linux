@@ -21,11 +21,15 @@ and controls the fan and performance modes.
   It serves `org.clevo.CC` on the system D-Bus, caches readings and persists
   choices.
 - **Desktop UI**: a Tauri 2 app that talks only over D-Bus; glass dashboard,
-  light/dark themes, custom accent colour/logo/wallpaper, compatibility options.
+  custom title bar, light/dark themes, custom accent colour/logo/wallpaper, a
+  built-in colour picker, display settings (aspect ratio / resolution / zoom, all
+  remembered across restarts) and compatibility options.
+- **System tray**: a native menu that switches the performance mode, opens the
+  control center and quits.
 - **Safe by default**: writes are off by default; the `acpi_call` transport is
   read-only; unverified firmware constants are clearly marked.
 - **Offline-testable**: no hardware required, everything is tested against
-  hand-written fixtures (129 Rust + 45 frontend tests).
+  hand-written fixtures (142 Rust + 80 frontend tests).
 
 ## Architecture
 

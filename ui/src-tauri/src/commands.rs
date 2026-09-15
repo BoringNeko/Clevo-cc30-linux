@@ -110,3 +110,17 @@ pub fn clear_logo() -> bool {
 pub fn read_image_path(path: String) -> Option<String> {
     crate::assets::read_path_as_data_url(&path)
 }
+
+// --- Window / app lifecycle -------------------------------------------------
+
+/// Show and focus the main control-center window.
+#[tauri::command]
+pub fn show_main_window(app: tauri::AppHandle) -> Result<(), String> {
+    crate::tray::show_main_window(&app)
+}
+
+/// Quit the whole application (tray and main window).
+#[tauri::command]
+pub fn quit_app(app: tauri::AppHandle) {
+    app.exit(0);
+}

@@ -24,6 +24,7 @@ function renderDialog() {
       onLogoReset={() => {}}
       compatibility={{ backend: "auto", softwareRendering: false }}
       onCompatibilityChange={() => {}}
+      onResize={() => {}}
     />,
   );
 }
@@ -32,8 +33,17 @@ describe("SettingsDialog", () => {
   it("shows the section navigation and personalization content", () => {
     renderDialog();
     expect(screen.getAllByText("个性化").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("显示").length).toBeGreaterThan(0);
     expect(screen.getAllByText("兼容性").length).toBeGreaterThan(0);
     expect(screen.getByText("自定义壁纸")).toBeTruthy();
+  });
+
+  it("shows the display section with resolution and scale", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    await user.click(screen.getByRole("button", { name: "显示" }));
+    expect(screen.getAllByText("分辨率").length).toBeGreaterThan(0);
+    expect(screen.getByText("缩放")).toBeTruthy();
   });
 
   it("switches to the compatibility section with explanations", async () => {
