@@ -4,15 +4,16 @@
 
 在 Linux 上重写蓝天（Clevo）控制中心。基于从原厂驱动逆向出的
 **DCHU / ACPI `_DSM` 协议**，实现风扇转速监控与风扇/性能模式控制。
+该项目为 [clevo-v250rnd-linux](https://github.com/BoringNeko/clevo-v250rnd-linux) 的重新逆向实现并添加 UI 界面
 
-> 一期已完成并在真机验证（COLORFUL P15 23 / CachyOS）。协议只在 Clevo 模具上
-> 验证过；其他机型请先按 [`docs/hardware-notes.md`](docs/hardware-notes.md) 核对 DSDT。
+> 已在 COLORFUL P15 23 / CachyOS / Fedora 44 验证通过。
+> 其他机型请先按 [`docs/hardware-notes.md`](docs/hardware-notes.md) 核对 DSDT。
+> 并且不保证其余蓝天公模可用。
 
 ## 特性
 
 - **只读监控**：风扇转速（CPU / GPU1）、原始温度与占空比、风扇曲线。
-  可走自研内核驱动，或只读的 `acpi_call` 后端。
-- **写入控制**：风扇模式（`auto` / `quiet` / `max` / `maxq`）与性能模式（0..3），
+- **写入控制**：风扇模式（`auto` / `quiet` / `max` / `maxq`）与性能模式（`quiet` / `pwrsaving` / `performance` / `entertainment`），
   经内核驱动 + PolicyKit 授权，可逆。
 - **守护进程**：`clevod` 是唯一接触硬件的长期进程，在系统 D-Bus 上提供
   `org.clevo.CC`，缓存读数并持久化用户选择。
@@ -45,9 +46,10 @@ CLI               ─┼─▶ org.clevo.CC (D-Bus, PolicyKit) ─▶ clevod ─
 ## 安装
 
 ```bash
-sudo packaging/install.sh            # 装驱动(DKMS)+守护进程+D-Bus/polkit/systemd/udev/man
-sudo packaging/install.sh --enable   # 并立即启动 clevod
-sudo packaging/uninstall.sh          # 完整回滚
+sudo packaging/install.sh                 # 装驱动(DKMS)+守护进程+D-Bus/polkit/systemd/udev/man
+sudo packaging/install.sh --enable        # 并立即启动 clevod
+sudo packaging/install.sh --enable --ui   # 立即启动 clevod 并安装 UI 界面
+sudo packaging/uninstall.sh               # 完整回滚
 ```
 
 先用 `packaging/install.sh --dry-run` 预览。发行版包（deb / rpm / AppImage）
@@ -63,6 +65,10 @@ sudo packaging/uninstall.sh          # 完整回滚
 | [`docs/hardware-notes.md`](docs/hardware-notes.md) | 逆向出的协议事实与真机验证 |
 | [`docs/install.md`](docs/install.md) | 安装 / 升级 / 卸载 |
 | [`docs/support-matrix.md`](docs/support-matrix.md) | 支持矩阵与发行版适配 |
+
+## 补充
+
+项目使用 Opencode + Deepseek-V4.1-Flash 完成
 
 ## 许可证
 
