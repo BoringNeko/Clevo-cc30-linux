@@ -3,7 +3,7 @@
 # are present). DKMS handles future kernel upgrades via its own hooks.
 set -e
 
-VERSION=0.1.1
+VERSION=0.1.2
 MODULE=clevo-cc
 
 if command -v dkms >/dev/null 2>&1; then

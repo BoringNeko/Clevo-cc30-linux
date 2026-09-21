@@ -21,6 +21,7 @@ import { TelemetryCard } from "./components/TelemetryCard";
 import { useWallpaper } from "./hooks/useWallpaper";
 import { useLogo } from "./hooks/useLogo";
 import { useWindowSize } from "./hooks/useWindowSize";
+import { useDesignScale } from "./hooks/useDesignScale";
 import {
   loadCompatibilityPrefs,
   readCompatibilityPrefs,
@@ -90,6 +91,14 @@ export default function App() {
   // Keep the window size in step with the persisted display settings (applied
   // on startup and whenever the resolution changes).
   const resizeWindow = useWindowSize(appearance);
+
+  // Scale the design surface onto the actual viewport. The surface height
+  // follows the chosen aspect ratio, so 16:10 fills the window instead of
+  // showing black bands above and below a 16:9 layout.
+  const {
+    scale: designScaleFactor,
+    design: { width: designWidth, height: designHeight },
+  } = useDesignScale(appearance.aspect);
 
   const updateCompat = useCallback((next: CompatibilityPrefs) => {
     setCompat(next);
@@ -186,44 +195,87 @@ export default function App() {
           width: "100vw",
           overflow: "hidden",
           bgcolor: appearance.mode === "dark" ? "#000" : "#e9ebee",
+          // The interface is laid out at a fixed 1600x900 design size and then
+          // scaled to the viewport, so no window size can make it scroll.
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
         }}
       >
+        {/* Outer box reserves the *scaled* footprint in the flex layout, so the
+            design surface is never squeezed by the viewport being smaller than
+            the design size. */}
         <Box
           sx={{
-            position: "absolute",
-            inset: 0,
-            backgroundImage: `url(${wallpaper})`,
-            backgroundSize: "cover",
-            backgroundPosition: "center",
-            transition: "opacity 700ms ease",
+            position: "relative",
+            width: `${designWidth * designScaleFactor}px`,
+            height: `${designHeight * designScaleFactor}px`,
+            flex: "0 0 auto",
+            overflow: "hidden",
           }}
-        />
-        <Box
-          sx={{
-            position: "absolute",
-            inset: 0,
-            background:
-              appearance.mode === "dark"
-                ? "linear-gradient(135deg, rgba(0,0,0,0.40), rgba(0,0,0,0.20), rgba(0,0,0,0.50))"
-                : "linear-gradient(135deg, rgba(255,255,255,0.30), rgba(255,255,255,0.10), rgba(255,255,255,0.40))",
+        >
+          <Box
+            data-testid="design-surface"
+            sx={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              // The layout is exactly the design size for the active ratio
+              // (1600x900 for 16:9, 1600x1000 for 16:10); only the paint is
+              // scaled.
+              width: `${designWidth}px`,
+              height: `${designHeight}px`,
+              transform: `scale(${designScaleFactor})`,
+              transformOrigin: "top left",
+              overflow: "hidden",
           }}
-        />
-
-        <Box sx={{ position: "relative", zIndex: 10, display: "flex", height: "100%", width: "100%", gap: 2, p: 2 }}>
-          <Sidebar
-            palette={accentPalette}
-            active={active}
-            blur={blurEnabled}
-            appearance={appearance}
-            logo={logo}
-            onNavigate={navigate}
-            onOpenSettings={() => setSettingsOpen(true)}
+        >
+          <Box
+            sx={{
+              position: "absolute",
+              inset: 0,
+              backgroundImage: `url(${wallpaper})`,
+              backgroundSize: "cover",
+              backgroundPosition: "center",
+              transition: "opacity 700ms ease",
+            }}
+          />
+          <Box
+            sx={{
+              position: "absolute",
+              inset: 0,
+              background:
+                appearance.mode === "dark"
+                  ? "linear-gradient(135deg, rgba(0,0,0,0.40), rgba(0,0,0,0.20), rgba(0,0,0,0.50))"
+                  : "linear-gradient(135deg, rgba(255,255,255,0.30), rgba(255,255,255,0.10), rgba(255,255,255,0.40))",
+            }}
           />
 
-          <Box
-            component="main"
-            sx={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2, overflowY: "auto", pr: 0.5 }}
-          >
+          <Box sx={{ position: "relative", zIndex: 10, display: "flex", height: "100%", width: "100%", gap: 2, p: 2 }}>
+            <Sidebar
+              palette={accentPalette}
+              active={active}
+              blur={blurEnabled}
+              appearance={appearance}
+              logo={logo}
+              onNavigate={navigate}
+              onOpenSettings={() => setSettingsOpen(true)}
+            />
+
+            <Box
+              component="main"
+              sx={{
+                flex: 1,
+                minWidth: 0,
+                display: "flex",
+                flexDirection: "column",
+                gap: 2,
+                // No scrolling: the design surface is a fixed 1600x900 and the
+                // content fits inside it. `overflow: auto` would show a
+                // scrollbar for a 1-2 px rounding overflow.
+                overflow: "hidden",
+              }}
+            >
             <Box
               component="header"
               id="overview"
@@ -233,8 +285,9 @@ export default function App() {
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "space-between",
-                px: 2.5,
-                py: 1.5,
+                // Symmetric with the surface padding below and the sidebar, so
+                // the visible top gap matches the left/right/bottom gaps.
+                p: 2,
               }}
             >
               <Typography
@@ -253,11 +306,30 @@ export default function App() {
             )}
 
             {snapshot ? (
-              <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", lg: "1fr 1fr" }, gap: 2 }}>
-                <Box id="fans" sx={{ scrollMarginTop: 16 }}>
+              // Two fixed columns: the design surface is always 1600x900, so
+              // viewport-based breakpoints (lg = 1200px) would wrongly collapse
+              // this grid on a scaled-down window.
+              //
+              // The grid fills the space the header leaves. Its natural height is
+              // ~3 px taller than that, so it is allowed to overflow by that
+              // amount and clipped rather than forcing a scrollbar.
+              <Box
+                sx={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  // Two equal rows filling the available height. `minmax(0, 1fr)`
+                  // lets a row shrink below its content's intrinsic height
+                  // instead of overflowing, which would eat the bottom margin.
+                  gridTemplateRows: "minmax(0, 1fr) minmax(0, 1fr)",
+                  gap: 2,
+                  flex: 1,
+                  minHeight: 0,
+                }}
+              >
+                <Box id="fans" sx={{ scrollMarginTop: 16, minHeight: 0 }}>
                   <FansCard palette={accentPalette} snapshot={snapshot} />
                 </Box>
-                <Box id="performance" sx={{ scrollMarginTop: 16 }}>
+                <Box id="performance" sx={{ scrollMarginTop: 16, minHeight: 0 }}>
                   <PerformanceCard
                     palette={accentPalette}
                     snapshot={snapshot}
@@ -265,7 +337,7 @@ export default function App() {
                     onError={setError}
                   />
                 </Box>
-                <Box id="curve" sx={{ scrollMarginTop: 16 }}>
+                <Box id="curve" sx={{ scrollMarginTop: 16, minHeight: 0 }}>
                   {curve ? (
                     <CurveCard palette={accentPalette} curve={curve} />
                   ) : (
@@ -285,6 +357,8 @@ export default function App() {
                 加载中…
               </Typography>
             )}
+            </Box>
+          </Box>
           </Box>
         </Box>
 

@@ -563,3 +563,103 @@ heavier fallback for other broken drivers; it selects the
 Verification: a minimal WebKitGTK 4.1 page (Gtk + WebKitWebView) crashes with
 `Error 71` under the defaults, stays up with `FORCE_SHM=1`, and still returns a
 WebGL context (so the GPU path is alive) under `FORCE_SHM=1`.
+
+### 15.4 The NVIDIA exit crash (web process `eglTerminate`)
+
+Same host, driver bumped to **615.71.09**, WebKitGTK **2.52.6**. The UI starts and
+renders fine, but closing it dumps a core:
+
+```
+PID: 23825 (WebKitWebProces)   TID: 23932 (SkiaGPUWorker)
+Signal: 11 (SEGV) si_code: SEGV_MAPERR
+#0 libnvidia-eglcore.so.615.71.09 + 0x707419
+#1-#6 libwebkit2gtk-4.1.so.0
+#7 __call_tls_dtors (libc.so.6)
+```
+
+and the main thread:
+
+```
+#2 libnvidia-glsi.so.615.71.09 + 0x40155
+#3 _nv004glsi
+...
+#18 exit (libc.so.6)
+```
+
+**This is not the §15.1 bug under a new stack trace**, and `FORCE_SHM` does not
+cover it: it reproduces with and without `WEBKIT_DMABUF_RENDERER_FORCE_SHM`.
+
+#### Root cause (measured)
+
+The web process crashes *while exiting*, in the EGL teardown that the TLS
+destructors run. It is not a leak in the app and not about orphaning: the process
+is already inside `do_exit` when the crash happens.
+
+Watching the web process right after the window closes:
+
+```
+t=0.0s 704035:I ppid=850 thr=28 wchan=do_exit
+t=0.5s 704035:I ppid=850 thr=28 wchan=do_exit
+...
+t=5.0s 704035:gone
+```
+
+It sits in state `I` (idle) on `do_exit` for ~5 s with 28 threads winding down.
+Letting it finish makes the crash *more* likely, not less — waiting for the
+children to exit on their own produced 2 coredumps where cutting them off
+produced 0. So there is nothing the parent can do on the way out: any run of the
+normal teardown hits it.
+
+#### Fix
+
+Keep Skia off the GPU for the web process (`WEBKIT_SKIA_ENABLE_CPU_RENDERING=1`,
+set by `ui/src-tauri/src/prefs.rs::apply_launch_env`). The GPU state that
+`eglTerminate` trips over is then never set up.
+
+Measured on the real app, window closed, children allowed to finish exiting:
+
+| Env | Coredumps |
+|---|---|
+| default | **8/8** |
+| `WEBKIT_SKIA_ENABLE_CPU_RENDERING=1` | **0/8** |
+
+The accelerated compositor stays up, so the frosted `backdrop-filter` cards are
+unaffected. Screenshot diff of the running UI (1600x900) against the default:
+
+| Comparison | RMSE |
+|---|---|
+| default vs `SKIA_ENABLE_CPU_RENDERING` | **2.0 %** (visually identical) |
+| default vs `WEBKIT_DISABLE_DMABUF_RENDERER` | 4.6 % (blur visibly gone) |
+
+Candidates that also stop the crash but cost more: `WEBKIT_DISABLE_COMPOSITING_MODE=1`
+(0/4 coredumps) and `WEBKIT_DISABLE_DMABUF_RENDERER=1` (0/4) — both disable the
+accelerated compositor, so the glass effect is lost.
+`WEBKIT_HARDWARE_ACCELERATION_POLICY=NEVER` and `FORCE_SHM` do **not** help
+(2/2 crashes each).
+
+Counted by how many NVIDIA fds the web process holds: 5 with the GPU teardown
+present (crashes) versus 2 for the CPU paths (clean).
+
+#### Guard
+
+`scripts/check-webview-teardown.sh` reproduces this without hardware: it starts
+the app, records its WebKit children, closes the window, lets them exit, and fails
+if any child outlives the app or any coredump appears. Run it after any change to
+the UI's launch environment or to its WebKit/Tauri dependencies.
+
+#### What does *not* work
+
+- **`WEBKIT_EXEC_PATH` helper wrappers** (with `WEBKIT_QUIT_FAST=1`). The
+  variable does not exist on WebKitGTK 2.52.6 — the library only reads
+  `WEBKIT_DISABLE_DMABUF_RENDERER`, `WEBKIT_DMABUF_RENDERER_*`,
+  `WEBKIT_INJECTED_BUNDLE_PATH`, `WEBKIT_PROCESS_MODEL_*`, `WEBKIT_GST_*` and
+  friends — and its helper directory `/usr/lib/webkit2gtk-4.1` is hardcoded.
+  Children were launched straight from there and ignored the wrappers.
+  `LD_PRELOAD` is not an alternative: `ld.so` does not pass it to re-exec'd
+  helpers.
+- **Closing the WebView from a `WindowEvent` hook** (`CloseRequested` or
+  `Destroyed`). Both fire too late or are irrelevant; the child still runs its
+  teardown and crashes.
+- **Waiting for the children before exiting.** They crash on their own schedule,
+  and waiting made it worse (2 crashes vs 0 when cut short).
+

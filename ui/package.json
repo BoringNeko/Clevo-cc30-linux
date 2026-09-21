@@ -1,7 +1,7 @@
 {
   "name": "clevo-cc-ui",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Clevo control-center desktop UI (Tauri 2 + React + TypeScript)",
   "license": "MIT OR Apache-2.0",
   "type": "module",

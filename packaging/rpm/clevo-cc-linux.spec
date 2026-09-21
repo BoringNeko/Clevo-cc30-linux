@@ -122,5 +122,11 @@ dkms install -m clevo-cc -v %{version} >/dev/null 2>&1 || :
 /usr/src/clevo-cc-%{version}
 
 %changelog
+* Tue Sep 22 2026 BoringNeko <noreply@github.com> - 0.1.2-1
+- Fix NVIDIA exit crash (core dump on every close) by moving Skia to CPU
+- Close the window to the tray instead of quitting
+- Refresh the tray performance-mode menu after a switch
+- Fill a 16:10 window without black bands; raise the scale ceiling so 4K fills too
+
 * Sun Sep 14 2025 BoringNeko <noreply@github.com> - 0.1.1-1
 - Initial package.

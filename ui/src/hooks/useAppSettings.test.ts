@@ -53,8 +53,9 @@ describe("app settings", () => {
   it("defaults display settings", () => {
     const a = readAppearance();
     expect(a.aspect).toBe("16:9");
-    expect(a.displayWidth).toBe(1280);
-    expect(a.displayHeight).toBe(720);
+    // The UI is designed at 1600x900, so that is the default window size.
+    expect(a.displayWidth).toBe(1600);
+    expect(a.displayHeight).toBe(900);
     expect(a.scale).toBe(100);
   });
 
@@ -80,9 +81,9 @@ describe("app settings", () => {
     );
     const a = readAppearance();
     expect(a.aspect).toBe("16:10");
-    // Falls back to the 16:10 default (1280×800 in DEFAULT_APPEARANCE terms).
-    expect(a.displayWidth).toBe(1280);
-    expect(a.displayHeight).toBe(800);
+    // Falls back to the 16:10 preset closest to the 1600x900 design size.
+    expect(a.displayWidth).toBe(1680);
+    expect(a.displayHeight).toBe(1050);
     expect(a.scale).toBe(200);
   });
 });

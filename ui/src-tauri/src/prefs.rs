@@ -74,6 +74,20 @@ pub fn save_launch_prefs(prefs: &LaunchPrefs) -> Result<(), String> {
 /// `WEBKIT_DISABLE_DMABUF_RENDERER=1` sledgehammer, which tears down the whole
 /// accelerated compositor. The user-facing "software rendering" switch keeps
 /// the sledgehammer as a last resort for other broken drivers.
+///
+/// Finally, Skia painting is moved to the CPU (`WEBKIT_SKIA_ENABLE_CPU_RENDERING=1`).
+/// On the NVIDIA proprietary driver the web process crashes on exit while tearing
+/// its GPU state down: `eglTerminate` inside the TLS destructors runs into
+/// `libnvidia-eglcore`/`libnvidia-glsi` and takes a `SIGSEGV`, dumping a 50-90 MB
+/// core and raising DrKonqi on every close (verified on driver 615.71.09 with
+/// WebKitGTK 2.52.6; see `docs/hardware-notes.md`). Keeping Skia off the GPU
+/// avoids that teardown entirely: 8/8 runs were coredump-free, against 8/8
+/// crashes without it. The accelerated compositor stays up — a screenshot diff
+/// against the default is 2.0 % RMSE, versus 4.6 % for the sledgehammer — so the
+/// frosted `backdrop-filter` cards are unaffected.
+///
+/// This is applied even when `software_rendering` is set, since that path's
+/// `WEBKIT_DISABLE_DMABUF_RENDERER` does not stop the GPU teardown.
 pub fn apply_launch_env() {
     let prefs = load_launch_prefs();
 
@@ -85,6 +99,11 @@ pub fn apply_launch_env() {
             std::env::set_var("GDK_BACKEND", "x11");
         }
         _ => {}
+    }
+
+    // Applies to every path: this is what keeps the NVIDIA exit crash away.
+    if std::env::var_os("WEBKIT_SKIA_ENABLE_CPU_RENDERING").is_none() {
+        std::env::set_var("WEBKIT_SKIA_ENABLE_CPU_RENDERING", "1");
     }
 
     if prefs.software_rendering {
@@ -122,10 +141,11 @@ mod tests {
     }
 
     /// The env vars this module writes, isolated and restored per test.
-    const MANAGED: [&str; 3] = [
+    const MANAGED: [&str; 4] = [
         "GDK_BACKEND",
         "WEBKIT_DISABLE_DMABUF_RENDERER",
         "WEBKIT_DMABUF_RENDERER_FORCE_SHM",
+        "WEBKIT_SKIA_ENABLE_CPU_RENDERING",
     ];
 
     /// The process environment is global, so the tests that mutate it must not
@@ -204,6 +224,30 @@ mod tests {
         assert!(std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none());
     }
 
+    /// The NVIDIA exit-crash workaround must be on for every path, including
+    /// software rendering (whose sledgehammer does not stop the GPU teardown).
+    #[test]
+    fn skia_cpu_rendering_is_always_forced() {
+        let _guard = isolate(r#"{"backend":"auto","software_rendering":false}"#);
+        apply_launch_env();
+        assert_eq!(
+            std::env::var("WEBKIT_SKIA_ENABLE_CPU_RENDERING").as_deref(),
+            Ok("1")
+        );
+    }
+
+    /// …including when the user picked software rendering: the sledgehammer
+    /// does not stop the GPU teardown, so this variable still has to be set.
+    #[test]
+    fn skia_cpu_rendering_is_forced_for_software_rendering_too() {
+        let _guard = isolate(r#"{"backend":"auto","software_rendering":true}"#);
+        apply_launch_env();
+        assert_eq!(
+            std::env::var("WEBKIT_SKIA_ENABLE_CPU_RENDERING").as_deref(),
+            Ok("1")
+        );
+    }
+
     #[test]
     fn software_rendering_disables_the_accelerated_compositor() {
         let _guard = isolate(r#"{"backend":"auto","software_rendering":true}"#);
@@ -216,6 +260,11 @@ mod tests {
         );
         // The sledgehammer already covers it; do not also force SHM.
         assert!(std::env::var_os("WEBKIT_DMABUF_RENDERER_FORCE_SHM").is_none());
+        // But the exit-crash workaround still applies.
+        assert_eq!(
+            std::env::var("WEBKIT_SKIA_ENABLE_CPU_RENDERING").as_deref(),
+            Ok("1")
+        );
     }
 
     #[test]

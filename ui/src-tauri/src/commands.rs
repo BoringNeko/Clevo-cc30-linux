@@ -119,6 +119,12 @@ pub fn show_main_window(app: tauri::AppHandle) -> Result<(), String> {
     crate::tray::show_main_window(&app)
 }
 
+/// Hide the main window to the tray, keeping the process alive.
+#[tauri::command]
+pub fn hide_main_window(app: tauri::AppHandle) -> Result<(), String> {
+    crate::tray::hide_main_window(&app)
+}
+
 /// Quit the whole application (tray and main window).
 #[tauri::command]
 pub fn quit_app(app: tauri::AppHandle) {

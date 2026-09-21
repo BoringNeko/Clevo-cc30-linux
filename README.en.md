@@ -28,12 +28,13 @@ UI added.
   custom title bar, light/dark themes, custom accent colour/logo/wallpaper, a
   built-in colour picker, display settings (aspect ratio / resolution / zoom, all
   remembered across restarts) and compatibility options.
-- **System tray**: a native menu that switches the performance mode, opens the
-  control center and quits.
+- **System tray**: a native menu that switches the performance mode (`▶` marks
+  the active one), opens the control center and quits; closing the window hides
+  it to the tray and keeps the process running.
 - **Safe by default**: writes are off by default; the `acpi_call` transport is
   read-only; unverified firmware constants are clearly marked.
 - **Offline-testable**: no hardware required, everything is tested against
-  hand-written fixtures (142 Rust + 80 frontend tests).
+  hand-written fixtures (129 Rust + 113 frontend tests).
 
 ## Architecture
 

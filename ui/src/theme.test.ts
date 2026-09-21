@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { buildTheme, DEFAULT_APPEARANCE, freshnessTone, statusColors, type Appearance } from "./theme";
+import {
+  buildTheme,
+  DEFAULT_APPEARANCE,
+  defaultSize,
+  designScale,
+  designSize,
+  DESIGN_HEIGHT,
+  DESIGN_WIDTH,
+  freshnessTone,
+  RESOLUTION_PRESETS,
+  statusColors,
+  type Appearance,
+} from "./theme";
 import { FALLBACK_PALETTE, withAccent } from "./lib/color";
 
 describe("buildTheme", () => {
@@ -76,5 +88,114 @@ describe("appearance", () => {
     const theme = buildTheme(FALLBACK_PALETTE, true, app({ blurPx: 8 }));
     const card = theme.components?.MuiCard?.styleOverrides?.root as { backdropFilter: string };
     expect(card.backdropFilter).toContain("blur(8px)");
+  });
+});
+
+describe("design basis", () => {
+  it("the design size is 1600x900", () => {
+    expect(DESIGN_WIDTH).toBe(1600);
+    expect(DESIGN_HEIGHT).toBe(900);
+  });
+
+  it("defaults to the design size", () => {
+    expect(DEFAULT_APPEARANCE.displayWidth).toBe(DESIGN_WIDTH);
+    expect(DEFAULT_APPEARANCE.displayHeight).toBe(DESIGN_HEIGHT);
+  });
+
+  it("the 16:9 presets include the design size", () => {
+    const found = RESOLUTION_PRESETS["16:9"].some(
+      (p) => p.width === DESIGN_WIDTH && p.height === DESIGN_HEIGHT,
+    );
+    expect(found).toBe(true);
+  });
+
+  it("defaultSize prefers the design size", () => {
+    expect(defaultSize("16:9")).toEqual({ width: 1600, height: 900 });
+  });
+
+  it("scales to 1 at exactly the design size", () => {
+    expect(designScale(DESIGN_WIDTH, DESIGN_HEIGHT)).toBe(1);
+  });
+
+  // The whole design must stay visible, so the smaller of the two ratios wins.
+  it("fits the design inside a wider viewport", () => {
+    // 3200x900: height is the constraint.
+    expect(designScale(3200, 900)).toBeCloseTo(1);
+  });
+
+  it("fits the design inside a taller viewport", () => {
+    // 1600x1800: width is the constraint.
+    expect(designScale(1600, 1800)).toBeCloseTo(1);
+  });
+
+  it("shrinks for a smaller viewport", () => {
+    // The measured case: a 1600x900 window under Xft.dpi=129 gives 1185x666.
+    const s = designScale(1185, 666);
+    expect(s).toBeLessThan(1);
+    // min(1185/1600, 666/900) = min(0.7406, 0.74)
+    expect(s).toBeCloseTo(0.74, 2);
+    // The scaled design still fits inside the viewport.
+    expect(DESIGN_WIDTH * s).toBeLessThanOrEqual(1185 + 0.5);
+    expect(DESIGN_HEIGHT * s).toBeLessThanOrEqual(666 + 0.5);
+  });
+
+  it("clamps degenerate viewports", () => {
+    expect(designScale(0, 0)).toBe(1);
+    expect(designScale(-10, 100)).toBe(1);
+    expect(designScale(10, 10)).toBeGreaterThan(0);
+  });
+});
+
+describe("design surface per aspect ratio", () => {
+  it("is 1600x900 for 16:9", () => {
+    expect(designSize("16:9")).toEqual({ width: 1600, height: 900 });
+  });
+
+  it("is 1600x1000 for 16:10", () => {
+    expect(designSize("16:10")).toEqual({ width: 1600, height: 1000 });
+  });
+
+  // A 16:10 window is taller than 16:9, so a 16:9 surface would scale to the
+  // width and leave black bands above and below. The surface has to follow the
+  // ratio for the window to be filled edge to edge.
+  it.each(RESOLUTION_PRESETS["16:10"].map((p) => [p.width, p.height] as const))(
+    "fills a %ix%i 16:10 window with no black border",
+    (width, height) => {
+      const design = designSize("16:10");
+      const s = designScale(width, height, design.width, design.height);
+
+      // The scaled surface covers the viewport on both axes.
+      expect(design.width * s).toBeCloseTo(width, 5);
+      expect(design.height * s).toBeCloseTo(height, 5);
+    },
+  );
+
+  it.each(RESOLUTION_PRESETS["16:9"].map((p) => [p.width, p.height] as const))(
+    "fills a %ix%i 16:9 window with no black border",
+    (width, height) => {
+      const design = designSize("16:9");
+      const s = designScale(width, height, design.width, design.height);
+
+      // Exact for true 16:9 sizes; a couple of the small presets (568x320,
+      // 854x480) are only approximately 16:9, so allow a sub-pixel remainder
+      // rather than a visible band.
+      expect(design.width * s).toBeGreaterThanOrEqual(width - 1);
+      expect(design.height * s).toBeGreaterThanOrEqual(height - 1);
+      expect(design.width * s).toBeLessThanOrEqual(width + 0.5);
+      expect(design.height * s).toBeLessThanOrEqual(height + 0.5);
+    },
+  );
+
+  // The regression this guards: with the fixed 16:9 surface a 16:10 window left
+  // bars of `height - 900 * scale`.
+  it("would letterbox a 16:10 window if the surface stayed 16:9", () => {
+    const s = designScale(1920, 1200, DESIGN_WIDTH, DESIGN_HEIGHT);
+    const bars = 1200 - DESIGN_HEIGHT * s;
+    expect(bars).toBeGreaterThan(0);
+
+    // Following the ratio removes them.
+    const fixed = designSize("16:10");
+    const s2 = designScale(1920, 1200, fixed.width, fixed.height);
+    expect(1200 - fixed.height * s2).toBeCloseTo(0, 5);
   });
 });

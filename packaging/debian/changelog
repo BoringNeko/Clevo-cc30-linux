@@ -1,3 +1,13 @@
+clevo-cc-linux (0.1.2-1) unstable; urgency=medium
+
+  * Fix NVIDIA exit crash (core dump on every close) by moving Skia to CPU.
+  * Close the window to the tray instead of quitting.
+  * Refresh the tray performance-mode menu after a switch.
+  * Fill a 16:10 window without black bands; honour the ratio in the design
+    surface and raise the scale ceiling so 4K presets fill the screen too.
+
+ -- clevo-cc-linux  Tue, 22 Sep 2026 00:00:00 +0000
+
 clevo-cc-linux (0.1.1-1) unstable; urgency=medium
 
   * Initial packaging.

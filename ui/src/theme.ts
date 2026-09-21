@@ -43,7 +43,34 @@ export interface Appearance {
 
 export type AspectRatio = "16:9" | "16:10";
 
+/**
+ * The layout is designed against this logical viewport. Every fixed size in the
+ * UI (card padding, gauge diameter, sidebar width) assumes it, and the whole
+ * interface is then scaled uniformly to the actual viewport, so the design fits
+ * any window without ever scrolling.
+ *
+ * The width is fixed; the height follows the chosen aspect ratio, so a 16:10
+ * window fills its full height instead of showing black bands above and below a
+ * 16:9 surface.
+ */
+export const DESIGN_WIDTH = 1600;
+export const DESIGN_HEIGHT = 900;
+
+/** The design surface size for an aspect ratio: always 1600 wide. */
+export function designSize(aspect: AspectRatio): { width: number; height: number } {
+  return {
+    width: DESIGN_WIDTH,
+    height: aspect === "16:10" ? 1000 : DESIGN_HEIGHT,
+  };
+}
+
 export const ASPECT_RATIOS: readonly AspectRatio[] = ["16:9", "16:10"];
+
+/**
+ * Upper bound on the design scale. The 4K presets need 2.4 (3840/1600), so this
+ * has to sit above that or those windows would letterbox.
+ */
+export const MAX_DESIGN_SCALE = 4;
 
 /**
  * Preset window resolutions per aspect ratio, smallest to largest. Stored as
@@ -87,16 +114,23 @@ export const DEFAULT_APPEARANCE: Appearance = {
   brandSubtitle: "CONTROL",
   logoPath: "logo.jpg",
   aspect: "16:9",
-  displayWidth: 1280,
-  displayHeight: 720,
+  displayWidth: DESIGN_WIDTH,
+  displayHeight: DESIGN_HEIGHT,
   scale: 100,
 };
 
-/** The preferred preset for a ratio: the closest to 1280 wide. */
+/**
+ * The preferred preset for a ratio: the one matching the design size, else the
+ * closest to it.
+ */
 export function defaultSize(aspect: AspectRatio): { width: number; height: number } {
   const presets = RESOLUTION_PRESETS[aspect];
+  const exact = presets.find(
+    (p) => p.width === DESIGN_WIDTH && p.height === DESIGN_HEIGHT,
+  );
+  if (exact) return { width: exact.width, height: exact.height };
   const preset = presets.reduce((best, p) =>
-    Math.abs(p.width - 1280) < Math.abs(best.width - 1280) ? p : best,
+    Math.abs(p.width - DESIGN_WIDTH) < Math.abs(best.width - DESIGN_WIDTH) ? p : best,
   );
   return { width: preset.width, height: preset.height };
 }
@@ -115,6 +149,30 @@ export function windowSize(appearance: Appearance): { width: number; height: num
       return presets.find((p) => p.width === def.width && p.height === def.height)!;
     })();
   return { width: preset.width, height: preset.height };
+}
+
+/**
+ * The factor that maps the design space onto the given viewport.
+ *
+ * `min` (not `max`) so the whole design is always visible: with an unexpected
+ * aspect ratio the interface is letterboxed rather than cropped. Because the
+ * design surface itself follows the chosen ratio (`designSize`), a 16:10 window
+ * normally fits exactly and shows no letterboxing at all.
+ *
+ * The ceiling is 4 so the 4K presets (3840 wide, needing 2.4) still fill the
+ * window; a lower cap would leave black borders on a large display. The floor
+ * keeps a tiny window usable.
+ */
+export function designScale(
+  viewportWidth: number,
+  viewportHeight: number,
+  designWidth: number = DESIGN_WIDTH,
+  designHeight: number = DESIGN_HEIGHT,
+): number {
+  if (viewportWidth <= 0 || viewportHeight <= 0) return 1;
+  if (designWidth <= 0 || designHeight <= 0) return 1;
+  const scale = Math.min(viewportWidth / designWidth, viewportHeight / designHeight);
+  return Math.min(MAX_DESIGN_SCALE, Math.max(0.25, scale));
 }
 
 /** Hex `#rrggbb` to an `r, g, b` string, or null when malformed. */

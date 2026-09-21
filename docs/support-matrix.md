@@ -73,9 +73,21 @@ make -C /usr/lib/modules/$(uname -r)/build M=$PWD LLVM=1
 >
 > Linux 的托盘是 AppIndicator，**只支持原生菜单、不向程序发送点击事件**（与
 > Windows/macOS 不同），因此托盘菜单直接包含全部功能：
-> - **性能模式** 子菜单（静音 / 节能 / 性能 / 娱乐），当前模式显示在子菜单标题上，
->   切换经 daemon 的 PolicyKit 授权，无需打开窗口；
+> - **性能模式** 子菜单（静音 / 节能 / 性能 / 娱乐），当前模式用条目前的 **`▶`**
+>   标出、其余用 **`・`**（两者字形宽度相同，因此对齐；用空格填充不行——渲染器
+>   会裁掉行首空格，且空格与可见字形不等宽），切换经 daemon 的 PolicyKit
+>   授权，无需打开窗口；
 > - **打开控制中心**、**退出**。
+>
+> 模式标记放在**条目**上而不是子菜单标题上：AppIndicator 的菜单经
+> `com.canonical.dbusmenu` 由宿主（plasma 的 `gmenudbusmenuproxy`）渲染，
+> `Submenu::set_text` 只改 GTK 标签，宿主不会可靠刷新，标题会停在旧值。切换后
+> 重建整个菜单并 `TrayIcon::set_menu` 重新挂载，宿主才会重读结构。
+>
+> **关闭窗口 = 隐藏到托盘**：点标题栏的关闭按钮（或窗口管理器自己的关闭）不会
+> 退出程序，只是把窗口隐藏，托盘的功能继续可用（`lib.rs` 拦截
+> `CloseRequested` 并 `prevent_exit`）。要真正退出，用托盘的 **退出**，或
+> 设置 → **应用程序** → **退出**。
 
 ## 4. PolicyKit 认证代理（由桌面决定）
 
@@ -110,11 +122,23 @@ make -C /usr/lib/modules/$(uname -r)/build M=$PWD LLVM=1
    GL 合成器，因此硬件加速与毛玻璃模糊都仍然可用。**不要**用
    `WEBKIT_DISABLE_DMABUF_RENDERER=1` 作为首选——它会彻底关闭加速合成器，
    导致模糊失效、CPU 占用升高；它仅作为"软件渲染"兜底开关保留。
-5. **托盘是 AppIndicator（仅菜单）**：Linux 的托盘不支持自绘弹窗，也**不向程序
+5. **NVIDIA + WebKitGTK 的退出崩溃（coredump）**：同一驱动栈（实测 615.71.09 +
+   WebKitGTK 2.52.6）在**退出时**也会崩：web 进程在 `do_exit` 里跑 EGL 析构
+   （TLS destructor 里的 `eglTerminate`）时踩到 `libnvidia-eglcore` /
+   `libnvidia-glsi`，`SIGSEGV`，每次关窗留下 50–90 MB 的 coredump 并弹 DrKonqi。
+   它与 `Gdk Error 71` 是两回事，**加 `FORCE_SHM` 也一样崩**；父进程侧无法规避
+   （等子进程退完反而更容易崩）。
+   **修复**：UI 启动时设 `WEBKIT_SKIA_ENABLE_CPU_RENDERING=1`（`prefs.rs`），
+   让 web 进程不做 GPU 光栅，那条析构路径就不会被建立。实测 8/8 无 coredump
+   （修复前 8/8 崩）；加速合成器保留，毛玻璃不受影响（与默认设置的截图差异
+   2.0% RMSE，而 `WEBKIT_DISABLE_DMABUF_RENDERER` 是 4.6%，模糊肉眼可见丢失）。
+   用 `scripts/check-webview-teardown.sh` 守护：启动 app、关窗、等子进程退出，
+   有存活子进程或 coredump 即失败。分析见 `hardware-notes.md` §15.4。
+6. **托盘是 AppIndicator（仅菜单）**：Linux 的托盘不支持自绘弹窗，也**不向程序
    发送点击事件**（只有 Windows/macOS 会），因此托盘功能全部放在原生菜单里
    （性能模式子菜单 + 打开控制中心 + 退出）。需要 `libappindicator3` /
    `libayatana-appindicator3` 与桌面的 StatusNotifier 宿主（KDE/GNOME 自带）。
-6. **systemd 是默认假设**：`clevod` 的打包文件是 systemd unit；
+7. **systemd 是默认假设**：`clevod` 的打包文件是 systemd unit；
    非 systemd 发行版需自行写服务脚本（代码本身不依赖 systemd）。
 
 ## 6. 分发与安装（S9，已完成）

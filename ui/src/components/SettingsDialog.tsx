@@ -9,7 +9,9 @@ import CloseIcon from "@mui/icons-material/Close";
 import PaletteIcon from "@mui/icons-material/Palette";
 import TuneIcon from "@mui/icons-material/Tune";
 import MonitorIcon from "@mui/icons-material/Monitor";
+import PowerSettingsNewIcon from "@mui/icons-material/PowerSettingsNew";
 import { CompatibilitySection } from "./CompatibilitySection";
+import { ApplicationSection } from "./ApplicationSection";
 import { DisplaySection } from "./DisplaySection";
 import { PersonalizationSection } from "./PersonalizationSection";
 import { useTheme } from "@mui/material/styles";
@@ -22,6 +24,7 @@ const SECTIONS = [
   { id: "personalization", label: "个性化", Icon: PaletteIcon },
   { id: "display", label: "显示", Icon: MonitorIcon },
   { id: "compatibility", label: "兼容性", Icon: TuneIcon },
+  { id: "application", label: "应用程序", Icon: PowerSettingsNewIcon },
 ] as const;
 
 type SectionId = (typeof SECTIONS)[number]["id"];
@@ -202,7 +205,7 @@ export function SettingsDialog({
                 onAppearanceChange={onAppearanceChange}
                 onResize={onResize}
               />
-            ) : (
+            ) : active === "compatibility" ? (
               <CompatibilitySection
                 palette={palette}
                 blurSetting={blurSetting}
@@ -212,6 +215,8 @@ export function SettingsDialog({
                 compatibility={compatibility}
                 onCompatibilityChange={onCompatibilityChange}
               />
+            ) : (
+              <ApplicationSection onQuit={onClose} />
             )}
           </Box>
         </Box>

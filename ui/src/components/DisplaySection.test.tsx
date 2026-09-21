@@ -24,7 +24,7 @@ describe("DisplaySection", () => {
   it("defaults to 16:9 with a 16:9 resolution", () => {
     setup();
     expect((screen.getByRole("combobox", { name: "分辨率" }) as HTMLElement).textContent).toContain(
-      "1280 × 720",
+      "1600 × 900",
     );
     expect(screen.getByDisplayValue("100")).toBeTruthy();
   });
@@ -41,14 +41,15 @@ describe("DisplaySection", () => {
     const resize = vi.fn();
     setup(DEFAULT_APPEARANCE, (p) => changes.push(p), resize);
     await user.click(screen.getByRole("button", { name: "16:10" }));
-    // 16:10 default for a 720-height request falls back to its largest preset.
-    expect(changes).toContainEqual({ aspect: "16:10", displayWidth: 1280, displayHeight: 800 });
-    expect(resize).toHaveBeenCalledWith(1280, 800);
+    // 16:10 has no 1600x900, so it falls back to the preset closest to the
+    // design width (1680x1050).
+    expect(changes).toContainEqual({ aspect: "16:10", displayWidth: 1680, displayHeight: 1050 });
+    expect(resize).toHaveBeenCalledWith(1680, 1050);
   });
 
   it("shows only the resolutions matching the current ratio", async () => {
     const user = userEvent.setup();
-    setup({ ...DEFAULT_APPEARANCE, aspect: "16:10", displayWidth: 1280, displayHeight: 800 });
+    setup({ ...DEFAULT_APPEARANCE, aspect: "16:10", displayWidth: 1680, displayHeight: 1050 });
     await user.click(screen.getByRole("combobox", { name: "分辨率" }));
     const options = screen.getAllByRole("option").map((o) => o.textContent);
     expect(options.some((t) => t?.includes("1920 × 1200"))).toBe(true);
@@ -97,10 +98,10 @@ describe("DisplaySection", () => {
     await user.click(screen.getByRole("button", { name: "恢复显示默认设置" }));
     expect(changes).toContainEqual({
       aspect: "16:9",
-      displayWidth: 1280,
-      displayHeight: 720,
+      displayWidth: 1600,
+      displayHeight: 900,
       scale: 100,
     });
-    expect(resize).toHaveBeenCalledWith(1280, 720);
+    expect(resize).toHaveBeenCalledWith(1600, 900);
   });
 });

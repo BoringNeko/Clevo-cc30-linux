@@ -1,6 +1,6 @@
 [package]
 name = "clevo-cc-ui"
-version = "0.1.1"
+version = "0.1.2"
 description = "Clevo control-center desktop UI backend (Tauri commands over D-Bus)"
 edition = "2021"
 rust-version = "1.75"

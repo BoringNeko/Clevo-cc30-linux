@@ -43,7 +43,9 @@ export function TelemetryCard({ palette, cpuHistory, gpuHistory }: TelemetryCard
     <GlassCard sx={{ gap: 2 }}>
       <CardHeader icon={<ActivityIcon sx={{ fontSize: 16 }} />} title="转速历史" />
 
-      <Box sx={{ flex: 1, display: "grid", gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" }, gap: 2 }}>
+      {/* Fixed two columns: the design surface is a constant 1600x900, so a
+          viewport breakpoint would collapse this on a scaled-down window. */}
+      <Box sx={{ flex: 1, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 2 }}>
         {metrics.map((m) => (
           <Box key={m.label} sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
             <Box sx={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>

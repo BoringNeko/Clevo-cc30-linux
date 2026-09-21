@@ -6,6 +6,7 @@ import CloseIcon from "@mui/icons-material/Close";
 import FullscreenExitIcon from "@mui/icons-material/FullscreenExit";
 import FullscreenIcon from "@mui/icons-material/Fullscreen";
 import MinimizeIcon from "@mui/icons-material/Minimize";
+import { hideMainWindow } from "../api/daemon";
 
 /** The subset of a Tauri window the controls use. */
 export interface WindowHandle {
@@ -105,7 +106,16 @@ export function WindowControls() {
       >
         {fullscreen ? <FullscreenExitIcon sx={{ fontSize: 16 }} /> : <FullscreenIcon sx={{ fontSize: 16 }} />}
       </ControlButton>
-      <ControlButton label="关闭" danger onClick={() => withWindow((w) => w.close())}>
+      <ControlButton
+        label="关闭到托盘"
+        danger
+        onClick={() => {
+          // Closing the window keeps the app alive in the tray (the Rust side
+          // also intercepts the window's own close request), so go through the
+          // hide command rather than `Window.close()`.
+          void hideMainWindow().catch(() => withWindow((w) => w.close()));
+        }}
+      >
         <CloseIcon sx={{ fontSize: 16 }} />
       </ControlButton>
     </Box>

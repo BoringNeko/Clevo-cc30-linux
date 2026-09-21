@@ -124,3 +124,21 @@ export async function setFanMode(mode: string): Promise<number> {
 export async function setPerfMode(mode: string): Promise<number> {
   return invoke<number>("set_perf_mode", { mode });
 }
+
+// --- App lifecycle ----------------------------------------------------------
+
+/**
+ * Hide the window, leaving the app running in the tray.
+ *
+ * This is what the title bar's close button does: the control center keeps the
+ * tray's fan and performance controls available, so closing the window is not
+ * the same as quitting.
+ */
+export async function hideMainWindow(): Promise<void> {
+  return invoke<void>("hide_main_window");
+}
+
+/** Quit the app entirely (window and tray icon). */
+export async function quitApp(): Promise<void> {
+  return invoke<void>("quit_app");
+}

@@ -11,8 +11,12 @@
 # Local fixtures with machine-identifying data
 /fixtures/local/
 
-# S5 ACPI dump artifacts (contain machine-identifying data)
+# Local ACPI verification dump artifacts (contain machine-identifying data)
 /acpi-verify/
+
+# Local UI notes, deliberately not published.
+/docs/ui.md
+
 # Tauri UI
 /ui/node_modules/
 /ui/dist/
@@ -25,3 +29,23 @@
 # Distribution build output and the appimagetool blob fetched into packaging/.
 /dist/
 /packaging/appimage/appimagetool*
+
+# Test / tooling output
+/ui/coverage/
+/ui/.vitest/
+*.tsbuildinfo
+.eslintcache
+
+# Python helper scripts (acpidump/iasl parsing, fixture generation)
+__pycache__/
+*.py[cod]
+.venv/
+
+# Editor / OS configuration
+.idea/
+.vscode/
+
+# Logs and local build noise
+*.log
+npm-debug.log*
+pnpm-debug.log*
