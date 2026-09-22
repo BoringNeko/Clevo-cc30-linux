@@ -570,9 +570,16 @@ static ssize_t fan_curve_show(struct device *dev, struct device_attribute *attr,
 }
 
 /*
- * Parse one fan's point list ("T,D T,D T,D T,D") into `out`, returning the
- * number of points read. Accepts the four-point form the read side emits; only
- * points 2 and 3 are used by the write payload.
+ * Parse one fan's point list.
+ *
+ * The EC's write path (command 14) only carries points 2 and 3; T1/D1 and T4/D4
+ * are not part of the payload (the EC keeps its own first and last point). The
+ * read side still emits all four for symmetry with `fan_curve_show`, so the
+ * parser accepts four points but only *uses* the middle two. Points sent as
+ * zero are ignored, which is why a caller can write
+ * `cpu: 0,0 45,76 70,204 0,0` without inventing an endpoint.
+ *
+ * Returns the number of points read, or -EINVAL on a malformed list.
  */
 static int clevo_cc_parse_points(const char *text, u8 temps[4], u8 duties[4])
 {
@@ -600,6 +607,42 @@ static int clevo_cc_parse_points(const char *text, u8 temps[4], u8 duties[4])
 	return count;
 }
 
+/*
+ * Encode one fan's two writable points (T2/D2, T3/D3) into `payload`.
+ *
+ * `slope_base` is the payload offset of that fan's first slope word. Only the
+ * slopes the EC actually consumes are computed: R2 (T2->T3) is the segment the
+ * write fully specifies. R1 and R3 would depend on T1/T4, which are not sent
+ * and are owned by the EC, so they are left zero for the firmware to fill in.
+ */
+static int clevo_cc_encode_fan(u8 *payload, int base, int slope_base,
+			       const u8 temps[4], const u8 duties[4])
+{
+	if (temps[2] <= temps[1])
+		return -EINVAL;
+
+	payload[base] = temps[1];
+	payload[base + 1] = duties[1];
+	payload[base + 2] = temps[2];
+	payload[base + 3] = duties[2];
+
+	/*
+	 * R2 = round((raw(D3) - raw(D2)) / (T3 - T2) * 16), big-endian, at the
+	 * fan's second slope slot. The duty bytes are already raw 0..255.
+	 */
+	{
+		int dt = (int)temps[2] - (int)temps[1];
+		int dd = (int)duties[2] - (int)duties[1];
+		long slope = DIV_ROUND_CLOSEST((long)dd * 16, dt);
+		int off = slope_base + 2;
+
+		slope = clamp_t(long, slope, 0, 0xFFFF);
+		payload[off] = (u8)(slope >> 8);
+		payload[off + 1] = (u8)(slope & 0xFF);
+	}
+	return 0;
+}
+
 static ssize_t fan_curve_store(struct device *dev, struct device_attribute *attr,
 			       const char *buf, size_t count)
 {
@@ -615,7 +658,7 @@ static ssize_t fan_curve_store(struct device *dev, struct device_attribute *attr
 	for (line = strsep(&copy, "\n"); line; line = strsep(&copy, "\n")) {
 		u8 temps[4] = { 0 }, duties[4] = { 0 };
 		const char *sep;
-		int base, slope_base, n, i;
+		int base, slope_base, n;
 
 		/* Strip leading whitespace. */
 		while (*line == ' ' || *line == '\t')
@@ -652,43 +695,14 @@ static ssize_t fan_curve_store(struct device *dev, struct device_attribute *attr
 		}
 
 		/* A wholly zero fan means "leave this channel alone". */
-		if (!temps[0] && !temps[1] && !temps[2] && !temps[3] &&
-		    !duties[0] && !duties[1] && !duties[2] && !duties[3])
+		if (!temps[1] && !temps[2] && !duties[1] && !duties[2])
 			continue;
-		if (temps[2] <= temps[1]) {
-			err = -EINVAL;
+
+		err = clevo_cc_encode_fan(payload, base, slope_base, temps,
+					  duties);
+		if (err)
 			break;
-		}
-
-		payload[base] = temps[1];
-		payload[base + 1] = duties[1];
-		payload[base + 2] = temps[2];
-		payload[base + 3] = duties[2];
-
-		/*
-		 * Slopes in raw-duty units scaled by 16, big-endian:
-		 *   round((raw(D(n+1)) - raw(Dn)) / (T(n+1) - Tn) * 16)
-		 * with raw(p) = p * 255 / 100. Computed with the *sent* duty
-		 * bytes so the firmware and the driver agree on the value.
-		 */
-		for (i = 0; i < 3; i++) {
-			int dt = (int)temps[i + 1] - (int)temps[i];
-			int dd = (int)duties[i + 1] - (int)duties[i];
-			long slope;
-			int off = slope_base + i * 2;
-
-			if (dt <= 0) {
-				err = -EINVAL;
-				goto out;
-			}
-			slope = DIV_ROUND_CLOSEST((long)dd * 16, dt);
-			slope = clamp_t(long, slope, 0, 0xFFFF);
-			payload[off] = (u8)(slope >> 8);
-			payload[off + 1] = (u8)(slope & 0xFF);
-		}
 	}
-	/* Fall through to `out` with the parse error, if any. */
-out:
 	kfree(copy);
 	if (err)
 		return err;
