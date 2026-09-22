@@ -241,35 +241,20 @@ impl DaemonClient {
     }
 }
 
-/// Convert an EC duty value (raw 0..255) into a percentage for the UI.
-///
-/// The daemon and the EC work in raw 8-bit duty; the interface talks in percent
-/// because that is what a person reads. Skipping this conversion put values
-/// like 179 into a field named `duty_pct`, which the chart then drew off the
-/// top of the plot (anything above 100 maps past the axis).
-pub fn raw_duty_to_pct(raw: u8) -> u8 {
-    ((raw as u32 * 100 + 127) / 255).min(100) as u8
-}
-
-/// Convert a UI percentage back into the EC's raw duty value.
-pub fn pct_to_raw_duty(pct: u8) -> u8 {
-    ((pct as u32 * 255 + 50) / 100).min(255) as u8
-}
-
 /// Parse the daemon's `GetCurve` JSON string into a [`FanCurve`].
 ///
 /// Split out from the bus call so it can be unit tested without a daemon.
-/// Duty values are converted from the EC's raw 0..255 to percent here, so
-/// everything above this layer (UI included) can treat `duty_pct` as a real
-/// percentage.
+///
+/// Duty arrives as a **percentage** and is passed through unchanged: the
+/// daemon's D-Bus interface speaks percent, and `clevo-proto` is where that is
+/// converted to and from the EC's raw 0..255. Converting here as well applied
+/// it twice - a 100% point went out as 255 and the daemon rejected it with
+/// "duty 255% out of range".
 pub fn parse_curve_json(json: &str) -> Result<FanCurve, UiError> {
     let parsed: CurveJson = serde_json::from_str(json)?;
     let conv = |v: Vec<[u8; 2]>| {
         v.into_iter()
-            .map(|[temp, duty]| CurvePoint {
-                temp,
-                duty_pct: raw_duty_to_pct(duty),
-            })
+            .map(|[temp, duty_pct]| CurvePoint { temp, duty_pct })
             .collect()
     };
     Ok(FanCurve {
@@ -287,37 +272,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn duty_conversion_round_trips_and_saturates() {
-        // The exact live values: the EC reports raw duty, the UI shows percent.
-        assert_eq!(raw_duty_to_pct(0), 0);
-        assert_eq!(raw_duty_to_pct(255), 100);
-        assert_eq!(raw_duty_to_pct(102), 40); // 40% written, read back as raw
-        assert_eq!(raw_duty_to_pct(179), 70);
-        assert_eq!(raw_duty_to_pct(115), 45);
-        assert_eq!(pct_to_raw_duty(0), 0);
-        assert_eq!(pct_to_raw_duty(100), 255);
-        assert_eq!(pct_to_raw_duty(40), 102);
-        assert_eq!(pct_to_raw_duty(70), 179);
-        // Values above 100 cannot arise from the UI, but must not overflow.
-        assert_eq!(pct_to_raw_duty(255), 255);
-    }
-
-    #[test]
     fn parses_curve_json_from_the_daemon() {
-        // The shape clevod emits, with duty as the EC's raw 0..255.
+        // The exact shape clevod emits over D-Bus (verified live). Duty is a
+        // percentage here - the raw 0..255 form only exists at the EC.
         let json = r#"{"fan_count":2,"init_mode":0,"kb_type":6,
-            "cpu":[[40,63],[60,102],[80,179],[100,255]],
-            "gpu1":[[40,63],[60,115],[80,191],[99,255]],
-            "gpu2":[[0,0],[0,255],[0,128],[0,0]]}"#;
+            "cpu":[[40,25],[55,40],[75,70],[100,100]],
+            "gpu1":[[40,25],[60,45],[80,75],[99,100]],
+            "gpu2":[[0,0],[50,39],[70,67],[0,0]]}"#;
         let curve = parse_curve_json(json).expect("valid curve json");
         assert_eq!(curve.fan_count, 2);
         assert_eq!(curve.kb_type, 6);
         assert_eq!(curve.cpu.len(), 4);
         assert_eq!(curve.cpu[0].temp, 40);
-        // Raw duty is converted to a percentage on the way in.
+        // Percent passes through untouched; 0..100 is the whole range.
         assert_eq!(curve.cpu[0].duty_pct, 25);
-        assert_eq!(curve.cpu[1].duty_pct, 40);
-        assert_eq!(curve.cpu[2].duty_pct, 70);
         assert_eq!(curve.cpu[3].duty_pct, 100);
         assert_eq!(curve.gpu1[3].temp, 99);
     }

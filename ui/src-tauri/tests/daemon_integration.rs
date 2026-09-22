@@ -122,3 +122,43 @@ fn write_denial_is_reported_as_an_error() {
         err.message
     );
 }
+
+/// Reading a curve and sending it straight back must work.
+///
+/// The daemon's own docs describe this as the intended flow ("a curve
+/// round-tripped from GetCurve can be edited in place and sent back"), and it
+/// is the narrowest test of the duty unit: if either side converts between
+/// percent and the EC's raw 0..255 a second time, a 100% point goes out as 255
+/// and `SetCurve` rejects it with "duty 255% out of range". That is a live
+/// failure, not a hypothetical one.
+#[test]
+fn curve_round_trips_through_the_daemon() {
+    if no_session_bus() {
+        return;
+    }
+    start_daemon("org.clevo.CC.curve");
+
+    let client = DaemonClient::session_with_name("org.clevo.CC.curve").expect("client");
+    let curve = client.curve().expect("read curve");
+
+    // What the card would show and then send back, unchanged.
+    let json = clevo_cc_ui::commands::curve_to_json(&curve);
+    client
+        .set_curve(&json)
+        .unwrap_or_else(|e| panic!("round-trip rejected: {} (sent {json})", e.message));
+
+    // Every duty stays within percent, the interface's whole range.
+    for (name, points) in [
+        ("cpu", &curve.cpu),
+        ("gpu1", &curve.gpu1),
+        ("gpu2", &curve.gpu2),
+    ] {
+        for (i, p) in points.iter().enumerate() {
+            assert!(
+                p.duty_pct <= 100,
+                "{name}[{i}] duty {} is not a percentage",
+                p.duty_pct
+            );
+        }
+    }
+}
