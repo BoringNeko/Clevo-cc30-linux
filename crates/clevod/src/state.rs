@@ -115,24 +115,9 @@ impl FanState {
             available: present(index),
         };
         Self {
-            cpu: read(
-                status.cpu_period,
-                status.cpu_duty,
-                status.cpu_temp_c,
-                1,
-            ),
-            gpu1: read(
-                status.gpu1_period,
-                status.gpu1_duty,
-                status.gpu1_temp_c,
-                2,
-            ),
-            gpu2: read(
-                status.gpu2_period,
-                status.gpu2_duty,
-                status.gpu2_temp_c,
-                3,
-            ),
+            cpu: read(status.cpu_period, status.cpu_duty, status.cpu_temp_c, 1),
+            gpu1: read(status.gpu1_period, status.gpu1_duty, status.gpu1_temp_c, 2),
+            gpu2: read(status.gpu2_period, status.gpu2_duty, status.gpu2_temp_c, 3),
             freshness: Freshness::Fresh,
         }
     }

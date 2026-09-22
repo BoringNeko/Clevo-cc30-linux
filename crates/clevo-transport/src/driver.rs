@@ -213,9 +213,7 @@ pub fn decode_curve_for_driver(payload: &[u8; PAYLOAD_BYTES]) -> Result<String, 
                 "{fan}: curve write has non-increasing temperatures T2={t2} T3={t3}"
             )));
         }
-        out.push_str(&format!(
-            "{fan}: 0,0 {t2},{d2} {t3},{d3} 0,0\n"
-        ));
+        out.push_str(&format!("{fan}: 0,0 {t2},{d2} {t3},{d3} 0,0\n"));
     }
     Ok(out)
 }
@@ -416,18 +414,8 @@ mod tests {
         let t = fake.transport();
         let point = |temp, duty_pct| FanPoint { temp, duty_pct };
         let curve = FanCurve {
-            cpu: [
-                point(40, 20),
-                point(55, 40),
-                point(75, 70),
-                point(95, 100),
-            ],
-            gpu1: [
-                point(45, 25),
-                point(60, 45),
-                point(80, 75),
-                point(99, 100),
-            ],
+            cpu: [point(40, 20), point(55, 40), point(75, 70), point(95, 100)],
+            gpu1: [point(45, 25), point(60, 45), point(80, 75), point(99, 100)],
             gpu2: [point(0, 0); 4],
         };
         let payload = encode_curve(&curve).unwrap();

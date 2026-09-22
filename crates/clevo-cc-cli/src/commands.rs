@@ -5,8 +5,7 @@ use std::io::{self, Write};
 
 use clevo_proto::capability::{parse_capabilities, Page7Version};
 use clevo_proto::command::{
-    CMD_FAN_CURVE_READ, CMD_FAN_CURVE_WRITE, CMD_FAN_STATUS, CMD_MAIN, SUB_FAN_MODE,
-    SUB_POWER_MODE,
+    CMD_FAN_CURVE_READ, CMD_FAN_CURVE_WRITE, CMD_FAN_STATUS, CMD_MAIN, SUB_FAN_MODE, SUB_POWER_MODE,
 };
 use clevo_proto::constants::PAYLOAD_LEN;
 use clevo_proto::fan_curve::{encode_curve, parse_curve, FanCurve, FanPoint};
@@ -122,7 +121,14 @@ pub fn run_fan(
             gpu1,
             gpu2,
             apply,
-        } => run_set_curve(transport, cpu, gpu1.as_deref(), gpu2.as_deref(), *apply, out),
+        } => run_set_curve(
+            transport,
+            cpu,
+            gpu1.as_deref(),
+            gpu2.as_deref(),
+            *apply,
+            out,
+        ),
         FanCommand::Watch {
             interval_ms,
             count,
@@ -150,9 +156,9 @@ pub fn parse_curve_arg(text: &str) -> Result<[FanPoint; 4], CliError> {
         )));
     }
     for (i, entry) in entries.iter().enumerate() {
-        let (temp, duty) = entry.split_once(',').ok_or_else(|| {
-            CliError::Invalid(format!("point {i} {entry:?} is not `temp,duty`"))
-        })?;
+        let (temp, duty) = entry
+            .split_once(',')
+            .ok_or_else(|| CliError::Invalid(format!("point {i} {entry:?} is not `temp,duty`")))?;
         let temp: u8 = temp
             .trim()
             .parse()
@@ -200,10 +206,12 @@ pub fn curve_from_args(
     };
     let gpu2 = match gpu2 {
         Some(text) => parse_curve_arg(text)?,
-        None => [FanPoint {
-            temp: 0,
-            duty_pct: 0,
-        }; 4],
+        None => {
+            [FanPoint {
+                temp: 0,
+                duty_pct: 0,
+            }; 4]
+        }
     };
     Ok(FanCurve { cpu, gpu1, gpu2 })
 }
@@ -238,7 +246,10 @@ fn run_set_curve(
     let payload = encode_curve(&curve)?;
 
     if !apply {
-        writeln!(out, "dry run: would write fan curve (command 14) and set custom mode")?;
+        writeln!(
+            out,
+            "dry run: would write fan curve (command 14) and set custom mode"
+        )?;
         for (name, points) in [
             ("cpu", &curve.cpu),
             ("gpu1", &curve.gpu1),

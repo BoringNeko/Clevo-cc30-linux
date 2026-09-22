@@ -125,9 +125,8 @@ pub fn encode_curve(curve: &FanCurve) -> Result<[u8; 256], ProtoError> {
     // Slopes R1 (point1->2), R2 (2->3), R3 (3->4), big-endian u16.
     // An all-zero fan is skipped: it has no meaningful slope and the EC keeps
     // its own curve for that channel.
-    let absent = |points: &[FanPoint; CURVE_POINTS]| {
-        points.iter().all(|p| p.temp == 0 && p.duty_pct == 0)
-    };
+    let absent =
+        |points: &[FanPoint; CURVE_POINTS]| points.iter().all(|p| p.temp == 0 && p.duty_pct == 0);
     if !absent(&curve.cpu) {
         write_slope(&mut payload, 14, curve.cpu[0], curve.cpu[1])?;
         write_slope(&mut payload, 16, curve.cpu[1], curve.cpu[2])?;
@@ -156,10 +155,7 @@ fn validate_curve(curve: &FanCurve) -> Result<(), ProtoError> {
         // A wholly-zero fan means "this channel is absent or unused"; the EC
         // keeps its own curve for it. Allowing it lets a two-fan machine send a
         // curve without inventing points for a fan that does not exist.
-        if points
-            .iter()
-            .all(|p| p.temp == 0 && p.duty_pct == 0)
-        {
+        if points.iter().all(|p| p.temp == 0 && p.duty_pct == 0) {
             continue;
         }
         for (i, point) in points.iter().enumerate() {
@@ -410,11 +406,56 @@ mod tests {
         // where raw(p) = p * 255 / 100. Compute it independently to pin the
         // implementation to the EC's units rather than to a coincidence.
         let cases = [
-            (FanPoint { temp: 40, duty_pct: 25 }, FanPoint { temp: 60, duty_pct: 36 }),
-            (FanPoint { temp: 60, duty_pct: 36 }, FanPoint { temp: 80, duty_pct: 53 }),
-            (FanPoint { temp: 80, duty_pct: 53 }, FanPoint { temp: 100, duty_pct: 100 }),
-            (FanPoint { temp: 30, duty_pct: 0 }, FanPoint { temp: 31, duty_pct: 1 }),
-            (FanPoint { temp: 30, duty_pct: 40 }, FanPoint { temp: 90, duty_pct: 45 }),
+            (
+                FanPoint {
+                    temp: 40,
+                    duty_pct: 25,
+                },
+                FanPoint {
+                    temp: 60,
+                    duty_pct: 36,
+                },
+            ),
+            (
+                FanPoint {
+                    temp: 60,
+                    duty_pct: 36,
+                },
+                FanPoint {
+                    temp: 80,
+                    duty_pct: 53,
+                },
+            ),
+            (
+                FanPoint {
+                    temp: 80,
+                    duty_pct: 53,
+                },
+                FanPoint {
+                    temp: 100,
+                    duty_pct: 100,
+                },
+            ),
+            (
+                FanPoint {
+                    temp: 30,
+                    duty_pct: 0,
+                },
+                FanPoint {
+                    temp: 31,
+                    duty_pct: 1,
+                },
+            ),
+            (
+                FanPoint {
+                    temp: 30,
+                    duty_pct: 40,
+                },
+                FanPoint {
+                    temp: 90,
+                    duty_pct: 45,
+                },
+            ),
         ];
         for (from, to) in cases {
             let expected = {
@@ -432,31 +473,34 @@ mod tests {
     }
 
     #[test]
-    fn slope_is_not_the_percentage_formula() {
-        // Guard against regressing to the earlier `* 2.55 * 16` (percent-space)
-        // expression, which is wrong whenever the duty delta is not 100.
-        let from = FanPoint { temp: 40, duty_pct: 25 };
-        let to = FanPoint { temp: 60, duty_pct: 26 };
-        let wrong = ((1.0_f64 / 20.0) * 2.55 * 16.0).round() as u16; // 2
-        let right = compute_slope(from, to).unwrap(); // ~2.04 -> 2
-        // Both agree by luck at this delta; use a delta that separates them.
-        let from2 = FanPoint { temp: 40, duty_pct: 10 };
-        let to2 = FanPoint { temp: 60, duty_pct: 20 };
-        let wrong2 = ((10.0_f64 / 20.0) * 2.55 * 16.0).round() as u16; // 20
-        let right2 = compute_slope(from2, to2).unwrap(); // 10/100*255/20*16 = 20.4 -> 20
-        assert_eq!(wrong, right, "small deltas coincide");
-        assert_eq!(wrong2, right2, "10% delta coincides too");
-
-        // A 50% delta separates them: percent-space gives 50/20*40.8 = 102,
-        // raw-space gives 50/100*255/20*16 = 102 as well. Only a delta where
-        // 255/100 != 2.55 would differ, so both expressions are in fact equal
-        // for every delta; this test documents that they are algebraically the
-        // same and the earlier concern was unfounded.
-        let from3 = FanPoint { temp: 40, duty_pct: 50 };
-        let to3 = FanPoint { temp: 60, duty_pct: 100 };
-        let wrong3 = ((50.0_f64 / 20.0) * 2.55 * 16.0).round() as u16;
-        let right3 = compute_slope(from3, to3).unwrap();
-        assert_eq!(wrong3, right3);
+    fn slope_formula_is_the_reference_expression_in_raw_units() {
+        // The reference gives `* 2.55 * 16` on the percentage delta; the
+        // implementation computes it in raw-duty units. `/100*255*16` and
+        // `*2.55*16` are the same expression, so the two must agree for every
+        // delta. This pins that equivalence instead of asserting a difference
+        // that does not exist.
+        for (from_pct, to_pct) in [(25u8, 36u8), (10, 20), (50, 100), (0, 1)] {
+            for (t1, t2) in [(40u8, 60u8), (30, 31), (40, 90)] {
+                let from = FanPoint {
+                    temp: t1,
+                    duty_pct: from_pct,
+                };
+                let to = FanPoint {
+                    temp: t2,
+                    duty_pct: to_pct,
+                };
+                let reference = (((f64::from(to_pct) - f64::from(from_pct))
+                    / (f64::from(t2) - f64::from(t1)))
+                    * 2.55
+                    * 16.0)
+                    .round() as u16;
+                assert_eq!(
+                    compute_slope(from, to).unwrap(),
+                    reference,
+                    "slope {from:?} -> {to:?}"
+                );
+            }
+        }
     }
 
     #[test]

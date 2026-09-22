@@ -15,8 +15,7 @@ use std::sync::{Arc, Mutex};
 
 use clevo_proto::capability::{parse_capabilities, Capabilities};
 use clevo_proto::command::{
-    CMD_FAN_CURVE_READ, CMD_FAN_CURVE_WRITE, CMD_FAN_STATUS, CMD_MAIN, SUB_FAN_MODE,
-    SUB_POWER_MODE,
+    CMD_FAN_CURVE_READ, CMD_FAN_CURVE_WRITE, CMD_FAN_STATUS, CMD_MAIN, SUB_FAN_MODE, SUB_POWER_MODE,
 };
 use clevo_proto::constants::PAYLOAD_LEN;
 use clevo_proto::fan_curve::{encode_curve, parse_curve, FanCurve, FanPoint};
@@ -268,15 +267,14 @@ impl Service {
             return Err(ServiceError::NotWritable);
         }
         let payload = encode_curve(curve)?;
-        self.transport.execute(
-            CMD_FAN_CURVE_WRITE.get(),
-            &payload_from_slice(&payload)?,
-        )?;
+        self.transport
+            .execute(CMD_FAN_CURVE_WRITE.get(), &payload_from_slice(&payload)?)?;
         // Only select `custom` once the write itself succeeded: it is the mode
         // that makes the firmware use the table just written.
         const CUSTOM: u8 = 6;
         self.apply(SUB_FAN_MODE, CUSTOM)?;
-        self.last_fan_mode.store(u64::from(CUSTOM), Ordering::SeqCst);
+        self.last_fan_mode
+            .store(u64::from(CUSTOM), Ordering::SeqCst);
         self.state.lock().unwrap().fan_mode = Some(CUSTOM);
         Ok(())
     }

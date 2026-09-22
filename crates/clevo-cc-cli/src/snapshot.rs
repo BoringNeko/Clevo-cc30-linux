@@ -175,7 +175,8 @@ mod tests {
         let snap = FanSnapshot::from_status(&status, 2);
         assert_eq!(snap.gpu1.temp_c, None);
         assert!(
-            format_json(&snap).contains("\"gpu1\":{\"rpm\":0,\"period_raw\":0,\"duty_pct\":0,\"temp_c\":null}"),
+            format_json(&snap)
+                .contains("\"gpu1\":{\"rpm\":0,\"period_raw\":0,\"duty_pct\":0,\"temp_c\":null}"),
             "json: {}",
             format_json(&snap)
         );

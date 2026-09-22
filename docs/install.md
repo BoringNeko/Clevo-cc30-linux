@@ -318,3 +318,88 @@ sudo packaging/uninstall.sh --purge
 - 只有 `clevod` 访问硬件；CLI/UI 只是 D-Bus 客户端。
 - `clevo-cc` 组成员可直接写 sysfs，属特权操作。
 - 驱动为 GPL-2.0-only，其余为 MIT OR Apache-2.0。
+
+---
+
+## 10. 测试
+
+测试分三层：**完全离线** → **mock daemon 端到端** → **真机**。前两层
+不需要任何硬件，第三层按风险从只读排到写入。
+
+### 10.1 离线（CI 等价）
+
+```bash
+scripts/run-tests.sh              # 全部
+scripts/run-tests.sh --rust       # 只跑 Rust
+scripts/run-tests.sh --ui         # 只跑 UI（类型检查 + 前端 + 后端）
+scripts/run-tests.sh --kernel     # 只编译内核模块
+```
+
+它会依次跑 `cargo fmt --check`、`clippy -D warnings`、workspace 测试
+（含 `dbus-run-session` 的 D-Bus 集成测试）、前端类型检查与 vitest、
+UI 后端测试、内核模块编译。与 `.github/workflows/ci.yml` 一致，所以
+本地通过即 CI 通过。
+
+单跑某一层：
+
+```bash
+dbus-run-session -- cargo test --workspace        # Rust，含 D-Bus（推荐）
+cargo test --workspace                            # 无 session bus 时 D-Bus 测试自动跳过
+cd ui && pnpm test && pnpm typecheck
+cd ui/src-tauri && cargo test
+make -C kernel/clevo-cc                            # 需内核 headers
+```
+
+> Rust 与 UI 测试全部基于手写 fixture，**不会碰硬件**。`dbus-run-session`
+> 提供私有 session bus，让 D-Bus 集成测试真的走一遍 `org.clevo.CC` 的线协议
+> （属性读取、方法调用、PolicyKit 拒绝路径、信号）。
+
+### 10.2 mock daemon 端到端（不碰硬件，但走真实 D-Bus）
+
+```bash
+dbus-run-session -- sh -c '
+  ./target/release/clevod --session-bus --mock crates/clevod/tests/fixtures/test.fixture &
+  sleep 1
+  ./target/release/clevo-cc --transport dbus --dbus-session fan status
+  ./target/release/clevo-cc --transport dbus --dbus-session fan curve
+  ./target/release/clevo-cc --transport dbus --dbus-session fan set-curve --cpu "40,20 60,40 80,70 100,100"
+  ./target/release/clevo-cc --transport dbus --dbus-session fan set-curve --cpu "40,20 60,40 80,70 100,100" --apply
+'
+```
+
+最后一条会返回 `AccessDenied`（非 root、无 polkit 代理），这是**正确行为** ——
+它证明 PolicyKit 门确实生效了。以 root 或装了放行规则的桌面跑则是成功写入。
+
+### 10.3 真机（需要硬件，按风险递增）
+
+```bash
+sudo scripts/verify-hardware.sh --step 1   # 只读：acpi_call 读状态/曲线（最安全）
+sudo scripts/verify-hardware.sh --step 2   # 只读：驱动 hwmon 转速/温度 + sysfs 曲线
+sudo scripts/verify-hardware.sh --step 3   # 可逆：风扇模式 auto→max→auto
+sudo scripts/verify-hardware.sh             # 全部（含曲线写入往返，会先备份再还原）
+```
+
+脚本每步都会先打印将要做什么并征求确认；第 4 步会**先保存当前曲线**，写入
+测试曲线后读回比对，最后还原，并把风扇模式留在 `auto`（即使还原被跳过，固件
+也始终保有控制权）。
+
+真机上需要重点确认的三件事：
+
+| 检查点 | 位置 | 期望 |
+|---|---|---|
+| 温度是否可信 | step 1 输出的温度 | 与 `sensors` 等其他传感器一致（验证"温度就是摄氏度"的结论） |
+| 温度通道 | step 2 的 `temp1_input`/`temp2_input` | 合理的毫摄氏度值；`n/a` 表示 EC 未上报，属正常 |
+| 曲线写入是否被接受 | step 4 的读回比对 | 读回的点与写入的 `45,76 70,204` 一致 |
+
+第 4 步是唯一**尚未在真机验证过**的路径（编码有单测覆盖，Arg3 形状与能正常
+工作的命令 13 一致，但 EC 是否接受特定曲线只能实测）。若读回不匹配，把
+`dmesg` 与本脚本输出一并反馈。
+
+### 10.4 排障
+
+| 现象 | 排查 |
+|---|---|
+| D-Bus 测试被跳过 | 用 `dbus-run-session -- cargo test`；直接 `cargo test` 时会自动跳过 |
+| 内核模块编译失败 | 装内核 headers（`linux-headers` / `kernel-devel`）；CachyOS 这类 Clang+ThinLTO 内核由 Makefile 自动加 `LLVM=1` |
+| `_DSM` 返回 `0x80000002` | 该命令在本机固件不支持；查 `dmesg`  |
+| 曲线写入后无效果 | 确认已切到 `custom` 模式（CLI/UI 自动；直接写 sysfs 需手动 `echo custom > fan_mode`） |

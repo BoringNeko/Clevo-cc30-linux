@@ -161,7 +161,10 @@ async fn set_curve_writes_and_selects_custom() {
         .body()
         .deserialize()
         .unwrap();
-    assert!(read_back.contains("\"fan_count\":2"), "read back: {read_back}");
+    assert!(
+        read_back.contains("\"fan_count\":2"),
+        "read back: {read_back}"
+    );
     let cached: String = proxy.get_property("FanCurve").await.unwrap();
     assert_eq!(cached, read_back);
 }
