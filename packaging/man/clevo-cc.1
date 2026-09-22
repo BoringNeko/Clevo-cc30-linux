@@ -52,6 +52,20 @@ with duty in percent; temperatures must strictly increase.
 defaults to the CPU curve and
 .B \-\-gpu2
 to an all\-zero curve, which leaves that channel alone.
+.PP
+Command 14 replaces the whole table, so the stack reads the current curve first
+and merges only the channels you name; channels you omit keep their values.
+.PP
+Selecting the custom curve is a separate step in the driver interface, but
+.B set\-curve
+does it for you: writing a curve without selecting
+.B custom
+would leave the firmware on its auto curve.
+.SH SAFETY
+Writes need
+.B \-\-apply
+and, over D\-Bus, a PolicyKit authorization; without an authentication agent
+the daemon denies non\-root callers rather than silently allowing them.
 .SH SEE ALSO
 .BR clevod (8)
 .SH LICENSE

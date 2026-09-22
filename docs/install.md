@@ -114,6 +114,27 @@ clevo-cc --transport dbus fan set-curve --cpu "40,20 60,40 80,70 100,100" --appl
 温度必须严格递增，占空比 `0..100`。写入后会自动切到 `custom` 模式，
 否则固件不会使用新曲线。想恢复自动控制：`clevo-cc --transport dbus fan set-mode auto --apply`。
 
+> **底层语义**（排查时有用）：命令 14 是**整表替换**。内核驱动会先读当前曲线、
+> 只合并你点名的通道，再整份下发，所以只改 CPU 不会碰 GPU。详见
+> [`hardware-notes.md` §7.2](hardware-notes.md)。
+>
+> 直接写 sysfs 时请**每次只写一个通道**并读回校验：多行 `printf > fan_curve`
+> 会被 shell 拆成多次 `write()`，而退出码只反映最后一次。
+
+### 更新已装的内核驱动
+
+改过 `kernel/` 之后，**必须重装**才能让重启后自动加载新版本 —— 否则加载的
+仍是 DKMS 里的旧模块（表现为新功能"消失"）：
+
+```bash
+sudo packaging/install.sh            # 重新编译并安装 DKMS 模块 + 守护进程
+sudo rmmod clevo_cc && sudo modprobe clevo_cc   # 立即换成新模块
+cat /sys/module/clevo_cc/srcversion  # 与内核目录下的 .ko 比对
+modinfo -F srcversion kernel/clevo-cc/clevo-cc.ko
+```
+
+两个 `srcversion` 一致即表示加载的是最新构建。
+
 ### 离线自测（不碰硬件、无需安装）
 
 CLI 默认连**系统总线**；要连在私有 session bus 上跑的测试 daemon，加
@@ -415,17 +436,16 @@ sudo scripts/curve-test.sh 10    # 10 轮；每轮写 cpu+gpu1 各一次并校�
 测试曲线后读回比对，最后还原，并把风扇模式留在 `auto`（即使还原被跳过，固件
 也始终保有控制权）。
 
-真机上需要重点确认的三件事：
+真机上需要重点确认的三件事（**均已在 COLORFUL P15 23 上验证通过**）：
 
-| 检查点 | 位置 | 期望 |
-|---|---|---|
-| 温度是否可信 | step 1 输出的温度 | 与 `sensors` 等其他传感器一致（验证"温度就是摄氏度"的结论） |
-| 温度通道 | step 2 的 `temp1_input`/`temp2_input` | 合理的毫摄氏度值；`n/a` 表示 EC 未上报，属正常 |
-| 曲线写入是否被接受 | step 4 的读回比对 | 读回的点与写入的 `45,76 70,204` 一致 |
+| 检查点 | 位置 | 期望 | 实测结果 |
+|---|---|---|---|
+| 温度是否可信 | step 1/2 的温度 | 与 `sensors` 一致 | ✅ 负载时 87 = 87 °C |
+| 温度通道 | `temp1_input` | GPU 温度（m°C） | ✅ `n/a` 表示 EC 未上报 |
+| 曲线写入是否被接受 | 读回比对 | 读回的点与写入一致 | ✅ 10 轮压测全过 |
 
-第 4 步是唯一**尚未在真机验证过**的路径（编码有单测覆盖，Arg3 形状与能正常
-工作的命令 13 一致，但 EC 是否接受特定曲线只能实测）。若读回不匹配，把
-`dmesg` 与本脚本输出一并反馈。
+> CPU 温度由 `clevod` 换算（见上文），驱动的 `temp*_input` 只暴露 GPU；
+> 若读数明显偏离 `sensors`，检查 `cpu_tdp_class` 配置。
 
 ### 10.4 排障
 

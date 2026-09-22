@@ -148,10 +148,10 @@ Receives `BUFF = DerefOf(Arg2[0])` and writes:
 
 Returns `0x14` (20). T1/D1 and T4/D4 are not sent in the write payload.
 
-### 7.2 Three behaviours that only showed up on hardware
+### 7.2 Four behaviours that only showed up on hardware
 
 The layout above was known from the DSDT from the start; what took four attempts
-to get right were the *semantics* around it. All three are now implemented and
+to get right were the *semantics* around it. All four are now implemented and
 stress-tested (10 rounds, 40 read-back checks, `scripts/curve-test.sh`).
 
 **a) The success code is `0x14`, not the command number.**
