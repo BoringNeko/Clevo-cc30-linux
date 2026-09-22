@@ -517,8 +517,6 @@ export function CurveCard({
 
       <Legend series={series} dirtyChannels={dirtyChannels} />
 
-      <CurveTable series={series} />
-
       {writable && (
         <Box sx={{ display: "flex", alignItems: "center", gap: 1, pt: 0.5, borderTop: "1px solid", borderTopColor: "divider" }}>
           <Box
@@ -883,105 +881,6 @@ function Legend({ series, dirtyChannels }: { series: Series[]; dirtyChannels: Ch
           )}
         </Box>
       ))}
-    </Box>
-  );
-}
-
-/**
- * A small per-fan table of the curve points.
- *
- * Easier to scan than a run of "(temp,duty)" pairs: one row per fan, one column
- * per point, and the first cell carries the same colour as the line.
- */
-function CurveTable({ series }: { series: Series[] }) {
-  const columns = series[0]?.points.length ?? 0;
-  return (
-    <Box
-      component="table"
-      sx={{
-        width: "100%",
-        borderCollapse: "collapse",
-        tableLayout: "fixed",
-        fontSize: "0.6875rem",
-        "& th": {
-          textAlign: "right",
-          fontWeight: 500,
-          color: "text.disabled",
-          fontSize: "0.625rem",
-          textTransform: "uppercase",
-          letterSpacing: "0.08em",
-          pb: 0.25,
-        },
-        "& td": { textAlign: "right", py: 0.4 },
-      }}
-    >
-      <Box component="thead">
-        <Box component="tr">
-          <Box component="th" sx={{ textAlign: "left", width: 56, pl: 0.75 }}>
-            风扇
-          </Box>
-          {Array.from({ length: columns }, (_, i) => (
-            <Box component="th" key={i}>
-              <Box component="span" sx={{ mr: 0.5 }}>
-                点{i + 1}
-              </Box>
-              {/*
-               * Only the middle points are written by command 14; the EC keeps
-               * its own first and last, so those columns are marked as fixed.
-               */}
-              {!isEditablePoint(i) && (
-                <Box
-                  component="span"
-                  sx={{
-                    textTransform: "none",
-                    letterSpacing: 0,
-                    border: "1px solid",
-                    borderColor: "divider",
-                    borderRadius: 0.5,
-                    px: 0.375,
-                    fontSize: "0.5625rem",
-                  }}
-                >
-                  固件固定
-                </Box>
-              )}
-            </Box>
-          ))}
-        </Box>
-      </Box>
-      <Box component="tbody">
-        {series.map((s) => (
-          <Box
-            component="tr"
-            key={s.key}
-            sx={{
-              "& td:first-of-type": {
-                borderLeft: "3px solid",
-                borderLeftColor: s.color,
-                pl: 0.75,
-              },
-              "&:not(:last-of-type) td": {
-                borderBottom: "1px solid",
-                borderBottomColor: "divider",
-              },
-            }}
-          >
-            <Box component="td" sx={{ textAlign: "left", color: s.color, fontWeight: 700 }}>
-              {s.label}
-            </Box>
-            {s.points.map((p, i) => (
-              <Box component="td" key={i} sx={{ opacity: isEditablePoint(i) ? 1 : 0.5 }}>
-                <Box component="span" sx={{ color: "text.disabled", mr: 0.75 }}>
-                  {p.temp}°C
-                </Box>
-                <Box component="span" sx={{ fontWeight: 600, color: "text.primary" }}>
-                  {p.duty_pct}%
-                </Box>
-              </Box>
-            ))}
-          </Box>
-        ))}
-      </Box>
     </Box>
   );
 }

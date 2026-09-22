@@ -83,18 +83,24 @@ const asCurve = (cpu: CurvePoint[], gpu1: CurvePoint[] = BASE): FanCurve => ({
 });
 
 /**
- * The four points shown for a fan, read from its table row.
+ * The four points of a fan, read back from where its handles are drawn.
  *
- * Returns e.g. ["40°C 25%", "60°C36%", ...] by joining each cell's two spans,
- * which is what the table renders per point.
+ * The card no longer lists the values as text, so the geometry is the source of
+ * truth: each handle is centred on its point, and the inverse of that mapping
+ * recovers the (temp, duty) the curve holds.
  */
 function pointsOf(fan: "CPU" | "GPU1"): string[] {
-  const row = screen
-    .getAllByRole("row")
-    .find((r) => r.querySelector("td")?.textContent === fan);
-  if (!row) throw new Error(`no table row for ${fan}`);
-  const cells = Array.from(row.querySelectorAll("td")).slice(1);
-  return cells.map((c) => (c.textContent ?? "").replace(/\s+/g, " ").trim());
+  const handles = Array.from(document.querySelectorAll<HTMLElement>('[data-testid="curve-handle"]'));
+  const slice = fan === "CPU" ? handles.slice(0, 4) : handles.slice(4, 8);
+  return slice.map((el) => {
+    const style = getComputedStyle(el);
+    const xPct = parseFloat(style.left);
+    const yPct = parseFloat(style.top);
+    const span = 100 - 2 * PAD_PCT;
+    const temp = Math.round(((xPct - PAD_PCT) / span) * 100);
+    const duty = Math.round(((100 - PAD_PCT - yPct) / span) * 100);
+    return `${temp}°C${duty}%`;
+  });
 }
 
 /** A stable one-line summary of a fan's curve, for equality assertions. */
