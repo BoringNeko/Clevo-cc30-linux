@@ -299,6 +299,17 @@ export function CurveCard({ palette, curve, writable = false, onApplied }: Curve
           component="svg"
           ref={svgRef}
           viewBox={`0 0 ${W} ${H}`}
+          /*
+           * Stretch to fill the box rather than letterboxing it.
+           *
+           * The pointer maths in `toCurveCoords` maps the whole element
+           * rectangle onto the viewBox, which is only correct if the drawing
+           * covers the element. With the default `xMidYMid meet`, an element
+           * whose aspect ratio differs from 320:150 draws smaller and centred,
+           * so the mapping drifts - points further right were read as much as
+           * 4 units off, and the drag missed them.
+           */
+          preserveAspectRatio="none"
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={endDrag}

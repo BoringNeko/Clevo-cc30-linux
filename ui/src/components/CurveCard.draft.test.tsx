@@ -82,12 +82,6 @@ const asCurve = (cpu: CurvePoint[], gpu1: CurvePoint[] = BASE): FanCurve => ({
   gpu2: [P(0, 0), P(0, 0), P(0, 0), P(0, 0)],
 });
 
-/** CurveCard's geometry: W=320, H=150, PAD=18. */
-const toPx = (temp: number, duty: number) => ({
-  x: 18 + (temp / 100) * (320 - 36),
-  y: 150 - 18 - (duty / 100) * (150 - 36),
-});
-
 /**
  * The four points shown for a fan, read from its table row.
  *
@@ -108,7 +102,17 @@ function summaryOf(fan: "CPU" | "GPU1"): string {
   return pointsOf(fan).join(" | ");
 }
 
-function setup(curve: FanCurve) {
+/**
+ * The element's on-screen size.
+ *
+ * jsdom performs no layout, so `getBoundingClientRect` is all zeros and must be
+ * stubbed. The default deliberately differs from the 320:150 viewBox - a real
+ * card is about 2:1 while the viewBox is 2.13:1 - because a stubbed rect that
+ * exactly matches the viewBox hides any error in the coordinate mapping.
+ */
+const DEFAULT_RECT = { left: 0, top: 0, width: 700, height: 300 };
+
+function setup(curve: FanCurve, rect: { left: number; top: number; width: number; height: number } = DEFAULT_RECT) {
   const view = render(
     <CurveCard palette={palette} curve={curve} writable onApplied={() => {}} />,
   );
@@ -116,17 +120,64 @@ function setup(curve: FanCurve) {
   // viewBox rather than by tag - `querySelector("svg")` gets an icon and the
   // pointer events go nowhere.
   const svg = document.querySelector('svg[viewBox="0 0 320 150"]')!;
-  // jsdom performs no layout, so getBoundingClientRect is all zeros; pin it to
-  // the viewBox so the pointer maths lands where the points are drawn.
   svg.getBoundingClientRect = () =>
-    ({ left: 0, top: 0, width: 320, height: 150, right: 320, bottom: 150, x: 0, y: 0 }) as DOMRect;
-  return { view, svg };
+    ({
+      ...rect,
+      right: rect.left + rect.width,
+      bottom: rect.top + rect.height,
+      x: rect.left,
+      y: rect.top,
+    }) as DOMRect;
+  return { view, svg, rect };
+}
+
+/**
+ * Where a (temp, duty) point appears on screen, for a given element rectangle.
+ *
+ * This mirrors how the browser maps the viewBox onto the element, including
+ * `preserveAspectRatio`. When the ratios differ, the default ("xMidYMid meet")
+ * scales the drawing to fit and *centres* it, leaving margins; "none" stretches
+ * it to fill. Getting this wrong in the test is what let the mapping bug hide:
+ * computing screen positions as if the drawing always filled the element made
+ * the component's own (incorrect) assumption look right.
+ */
+function pointOnScreen(
+  temp: number,
+  duty: number,
+  rect: { left: number; top: number; width: number; height: number },
+  preserveAspectRatio: string = "none",
+) {
+  const vx = 18 + (temp / 100) * (320 - 36);
+  const vy = 150 - 18 - (duty / 100) * (150 - 36);
+
+  let scaleX = rect.width / 320;
+  let scaleY = rect.height / 150;
+  let offsetX = rect.left;
+  let offsetY = rect.top;
+
+  if (preserveAspectRatio !== "none") {
+    const scale = Math.min(scaleX, scaleY);
+    scaleX = scale;
+    scaleY = scale;
+    offsetX = rect.left + (rect.width - 320 * scale) / 2;
+    offsetY = rect.top + (rect.height - 150 * scale) / 2;
+  }
+
+  return { x: offsetX + vx * scaleX, y: offsetY + vy * scaleY };
 }
 
 /** Drag the point at `from` (a temp/duty pair) to the `to` pair. */
-function drag(svg: Element, from: [number, number], to: [number, number]) {
-  const a = toPx(from[0], from[1]);
-  const b = toPx(to[0], to[1]);
+function drag(
+  svg: Element,
+  from: [number, number],
+  to: [number, number],
+  rect: { left: number; top: number; width: number; height: number } = DEFAULT_RECT,
+) {
+  // Read the element's own declaration so the simulated pointer lands where the
+  // browser would really put the point.
+  const par = svg.getAttribute("preserveAspectRatio") ?? "";
+  const a = pointOnScreen(from[0], from[1], rect, par);
+  const b = pointOnScreen(to[0], to[1], rect, par);
   fireEvent.pointerDown(svg, { clientX: a.x, clientY: a.y, pointerId: 1 });
   fireEvent.pointerMove(svg, { clientX: b.x, clientY: b.y, pointerId: 1 });
   fireEvent.pointerUp(svg, { clientX: b.x, clientY: b.y, pointerId: 1 });
@@ -246,6 +297,45 @@ describe("isEditablePoint", () => {
     expect(isEditablePoint(1)).toBe(true);
     expect(isEditablePoint(2)).toBe(true);
     expect(isEditablePoint(3)).toBe(false);
+  });
+});
+
+describe("CurveCard coordinate mapping", () => {
+  // The element rarely has the viewBox's 320:150 ratio. When it does not, the
+  // browser either stretches the drawing or letterboxes it; the pointer maths
+  // assumes the former. Testing only at 320x150 stubs the rectangle to match
+  // the viewBox, which hides the discrepancy entirely.
+  const SIZES = [
+    { label: "wide", rect: { left: 0, top: 0, width: 700, height: 300 } },
+    { label: "tall", rect: { left: 0, top: 0, width: 300, height: 400 } },
+    { label: "exact", rect: { left: 0, top: 0, width: 320, height: 150 } },
+    { label: "offset", rect: { left: 40, top: 25, width: 640, height: 260 } },
+  ];
+
+  for (const { label, rect } of SIZES) {
+    it(`grabs each point when the element is ${label}`, () => {
+      const { svg } = setup(asCurve(BASE, GPU_OTHER), rect);
+
+      // Move each editable point in turn; every one must be picked up.
+      drag(svg, [60, 36], [58, 30], rect);
+      expect(pointsOf("CPU")).toContain("58°C30%");
+
+      drag(svg, [80, 53], [78, 60], rect);
+      expect(pointsOf("CPU")).toContain("78°C60%");
+
+      drag(svg, [65, 70], [63, 66], rect);
+      expect(pointsOf("GPU1")).toContain("63°C66%");
+
+      drag(svg, [85, 82], [83, 78], rect);
+      expect(pointsOf("GPU1")).toContain("83°C78%");
+    });
+  }
+
+  it("declares the stretch that the pointer maths assumes", () => {
+    // Without this the drawing is letterboxed inside the element and every
+    // coordinate is off by the size of the margin.
+    const { svg } = setup(asCurve(BASE));
+    expect(svg.getAttribute("preserveAspectRatio")).toBe("none");
   });
 });
 
