@@ -97,6 +97,11 @@ if [ "$WANT_UI" = 1 ]; then
     fi
 fi
 
+# Offline (needs no root and touches no files): the installer must restart a
+# daemon that is already running, or an upgrade keeps serving the old binary.
+step "Packaging: install.sh activation logic"
+try scripts/tests-install-restart.sh
+
 if [ "$WANT_KERNEL" = 1 ]; then
     step "Kernel: build the clevo-cc module (from clean)"
     if [ -d "/lib/modules/$(uname -r)/build" ]; then
