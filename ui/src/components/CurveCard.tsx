@@ -155,6 +155,9 @@ export function dutyAtTemp(temp: number, points: CurvePoint[]): number {
   return points[points.length - 1].duty_pct;
 }
 
+/** The duty axis is always the full 0..100 %: duty is absolute, not relative. */
+const DUTY_RANGE: Range = { lo: 0, hi: 100 };
+
 /** A closed span on one axis of the plot. */
 export interface Range {
   lo: number;
@@ -186,11 +189,6 @@ function rangeOf(values: number[], fallback: Range): Range {
 /** The temperature span covered by `series`, over both fans. */
 export function tempRangeOf(series: CurvePoint[][]): TempRange {
   return rangeOf(series.flat().map((p) => p.temp), { lo: 0, hi: 100 });
-}
-
-/** The duty span covered by `series`, over both fans. */
-export function dutyRangeOf(series: CurvePoint[][]): Range {
-  return rangeOf(series.flat().map((p) => p.duty_pct), { lo: 0, hi: 100 });
 }
 
 /** Map a value in `range` to 0..100 across the plot's data area. */
@@ -314,8 +312,14 @@ export function CurveCard({
    * pointer.
    */
   const tempRange = useMemo(() => tempRangeOf([curve.cpu, curve.gpu1]), [curve.cpu, curve.gpu1]);
-  /** The duty span the y-axis covers, derived the same way and for the same reason. */
-  const dutyRange = useMemo(() => dutyRangeOf([curve.cpu, curve.gpu1]), [curve.cpu, curve.gpu1]);
+  /**
+   * The duty axis stays a fixed 0..100 %.
+   *
+   * Scaling it to the curve (as the temperature axis is) would make a curve
+   * whose duties span only 25..100 look steeper than it is, and duty is an
+   * absolute quantity - 0 % means the fan is off, which the plot has to show.
+   */
+  const dutyRange = DUTY_RANGE;
 
   const series: Series[] = [
     {
@@ -539,6 +543,7 @@ export function CurveCard({
               {series.map((s) => (
                 <path
                   key={`${s.key}-line`}
+                  data-testid={`curve-line-${s.key}`}
                   d={curvePath(s.points, PAD_PCT, tempRange, dutyRange)}
                   fill="none"
                   stroke={s.color}
@@ -551,12 +556,19 @@ export function CurveCard({
               ))}
             </Box>
 
-            {/* The handles sit above the plot as square buttons, matching the
-                reference; the SVG underneath still owns the pointer events. */}
+            {/*
+             * Handles sit above the plot as square buttons, matching the
+             * reference; the SVG underneath still owns the pointer events.
+             *
+             * Only the points command 14 carries get one. The first and last
+             * belong to the EC, so a marker there would invite a drag that
+             * silently does nothing - the curve still runs through them, which
+             * is what gives it its shape.
+             */}
             {series.map((s, layer) =>
               s.points.map((p, i) => {
+                if (!isEditablePoint(i)) return null;
                 const active = dragging?.channel === s.key && dragging.index === i;
-                const movable = isEditablePoint(i);
                 return (
                   <Handle
                     key={`${s.key}-${i}`}
@@ -564,7 +576,6 @@ export function CurveCard({
                     y={PAD_PCT + (dutyToY(p.duty_pct, dutyRange) / 100) * (100 - 2 * PAD_PCT)}
                     color={s.color}
                     active={active}
-                    movable={movable}
                     /* The later series is drawn on top, which is also the
                        series the hit test prefers on a tie. */
                     layer={layer}
@@ -836,15 +847,16 @@ function XAxis({ range }: { range: TempRange }) {
 /**
  * One control handle.
  *
- * Square with a 6px radius and a white rim, per the reference; the first and
- * last points are hollow and dimmed because command 14 does not carry them.
+ * Square with a 6px radius and a white rim, per the reference. Only the two
+ * points command 14 carries get one, so there is nothing here but an editable
+ * point. The pointer events are handled by the SVG underneath, which is why
+ * this is inert.
  */
 function Handle({
   x,
   y,
   color,
   active,
-  movable,
   layer,
   label,
 }: {
@@ -852,7 +864,6 @@ function Handle({
   y: number;
   color: string;
   active: boolean;
-  movable: boolean;
   layer: number;
   label: string;
 }) {
@@ -866,16 +877,9 @@ function Handle({
         width: 14,
         height: 14,
         borderRadius: 0.75,
-        /*
-         * The ends belong to the EC and are never written, so they are hollow
-         * and dimmed rather than solid. The pointer events are handled by the
-         * SVG underneath, which is why this is inert.
-         */
-        backgroundColor: movable ? color : "transparent",
-        border: "2px solid",
-        borderColor: movable ? "rgba(255,255,255,0.9)" : "text.disabled",
-        opacity: movable ? 1 : 0.7,
-        boxShadow: movable ? (active ? "0 4px 12px rgba(0,0,0,0.5)" : "0 2px 6px rgba(0,0,0,0.4)") : "none",
+        backgroundColor: color,
+        border: "2px solid rgba(255,255,255,0.9)",
+        boxShadow: active ? "0 4px 12px rgba(0,0,0,0.5)" : "0 2px 6px rgba(0,0,0,0.4)",
         /*
          * `left`/`top` place the box's top-left corner on the point; the
          * translate re-centres it, so the handle is centred on the value.

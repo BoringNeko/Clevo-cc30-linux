@@ -5,7 +5,6 @@ import {
   FACTORY_CURVE,
   curvePath,
   dutyAtTemp,
-  dutyRangeOf,
   isEditablePoint,
   sameCurve,
   shouldAdoptCurve,
@@ -100,9 +99,9 @@ const asCurve = (cpu: CurvePoint[], gpu1: CurvePoint[] = BASE): FanCurve => ({
  * making every call site thread them through.
  */
 let currentTempRange: { lo: number; hi: number } = { lo: 0, hi: 100 };
-let currentDutyRange: { lo: number; hi: number } = { lo: 0, hi: 100 };
+const currentDutyRange = { lo: 0, hi: 100 };
 
-/** The span the card derives for one axis, mirroring `tempRangeOf`/`dutyRangeOf`. */
+/** The span the card derives for the temperature axis, mirroring `tempRangeOf`. */
 function spanOf(values: number[]): { lo: number; hi: number } {
   const lo = Math.min(...values);
   return { lo, hi: Math.max(lo + 1, Math.max(...values)) };
@@ -113,26 +112,73 @@ function toPct(value: number, range: { lo: number; hi: number }): number {
   return ((value - range.lo) / (range.hi - range.lo)) * 100;
 }
 
-/** The four points of a fan, read back from where its handles are drawn.
+/**
+ * The four points of a fan, recovered from where they are plotted.
  *
- * The card no longer lists the values as text, so the geometry is the source of
- * truth: each handle is centred on its point, and the inverse of that mapping
- * recovers the (temp, duty) the curve holds.
+ * Only the two editable points have handles, and their positions are read back
+ * directly. The first and last belong to the EC and have no marker, so they are
+ * recovered from the curve: `curvePath` emits one `C` per gap and each segment
+ * ends on the next point, so the path still contains all four.
  */
 function pointsOf(fan: "CPU" | "GPU1"): string[] {
   const handles = Array.from(document.querySelectorAll<HTMLElement>('[data-testid="curve-handle"]'));
-  const slice = fan === "CPU" ? handles.slice(0, 4) : handles.slice(4, 8);
-  return slice.map((el) => {
+  const slice = fan === "CPU" ? handles.slice(0, 2) : handles.slice(2, 4);
+  const span = 100 - 2 * PAD_PCT;
+  const fromHandle = (el: HTMLElement) => {
     const style = getComputedStyle(el);
-    const xPct = parseFloat(style.left);
-    const yPct = parseFloat(style.top);
-    const span = 100 - 2 * PAD_PCT;
-    const from = (pct: number, r: { lo: number; hi: number }) =>
-      Math.round(r.lo + (pct / 100) * (r.hi - r.lo));
-    const temp = from(((xPct - PAD_PCT) / span) * 100, currentTempRange);
-    const duty = from(((100 - PAD_PCT - yPct) / span) * 100, currentDutyRange);
-    return `${temp}°C${duty}%`;
+    return {
+      x: ((parseFloat(style.left) - PAD_PCT) / span) * 100,
+      y: ((100 - PAD_PCT - parseFloat(style.top)) / span) * 100,
+    };
+  };
+
+  // The curve is the only place the fixed ends still appear.
+  const d = document.querySelector(`[data-testid="curve-line-${fan.toLowerCase()}"]`)?.getAttribute("d") ?? "";
+  const nums = d.match(/-?[\d.]+/g)?.map(Number) ?? [];
+  // "M x y" then one "C c1x c1y c2x c2y x y" per gap (six numbers each). The
+  // curve passes through the M and through each C's own endpoint, which is the
+  // third pair of the group.
+  const fromPath: Array<{ x: number; y: number }> = [];
+  if (nums.length >= 8) {
+    fromPath.push({ x: nums[0], y: nums[1] });
+    for (let g = 2; g + 5 < nums.length; g += 6) {
+      fromPath.push({ x: nums[g + 4], y: nums[g + 5] });
+    }
+  }
+
+  const editable = slice.map(fromHandle);
+  // `fromPath` holds path coordinates (viewBox units, including the inset);
+  // `editable` holds percentages of the data area. Normalise both before
+  // converting.
+  const fromPathPct = fromPath.map((p) => ({
+    x: ((p.x - PAD_PCT) / span) * 100,
+    y: ((100 - PAD_PCT - p.y) / span) * 100,
+  }));
+  const pts = [
+    fromPathPct[0] ?? editable[0],
+    editable[0],
+    editable[1],
+    fromPathPct[fromPathPct.length - 1] ?? editable[1],
+  ];
+  const unit = (v: number, r: { lo: number; hi: number }) => Math.round(r.lo + (v / 100) * (r.hi - r.lo));
+  return pts.map((p) => `${unit(p.x, currentTempRange)}°C${unit(p.y, currentDutyRange)}%`);
+}
+
+/** The first and last points of a fan's curve, read from its plotted path. */
+function pathEnds(fan: "cpu" | "gpu1"): CurvePoint[] {
+  const d = document.querySelector(`[data-testid="curve-line-${fan}"]`)?.getAttribute("d") ?? "";
+  const nums = d.match(/-?[\d.]+/g)?.map(Number) ?? [];
+  if (nums.length < 8) throw new Error(`no curve path for ${fan}`);
+  const span = 100 - 2 * PAD_PCT;
+  const at = (x: number, y: number) => ({
+    temp: Math.round(currentTempRange.lo + (((x - PAD_PCT) / span) * 100 / 100) * (currentTempRange.hi - currentTempRange.lo)),
+    // y is measured from the top, so the duty is its mirror.
+    duty_pct: Math.round(
+      currentDutyRange.lo +
+        (((100 - PAD_PCT - y) / span)) * (currentDutyRange.hi - currentDutyRange.lo),
+    ),
   });
+  return [at(nums[0], nums[1]), at(nums[nums.length - 2], nums[nums.length - 1])];
 }
 
 /** A stable one-line summary of a fan's curve, for equality assertions. */
@@ -171,7 +217,6 @@ function setup(curve: FanCurve, rect: { left: number; top: number; width: number
       y: rect.top,
     }) as DOMRect;
   currentTempRange = spanOf([...curve.cpu, ...curve.gpu1].map((p) => p.temp));
-  currentDutyRange = spanOf([...curve.cpu, ...curve.gpu1].map((p) => p.duty_pct));
   return { view, svg, chart, rect, range: currentTempRange };
 }
 
@@ -310,16 +355,17 @@ describe("CurveCard dragging", () => {
   });
 
   it("does not move the firmware-owned first and last points", () => {
-    // Command 14 carries only the middle two points, so dragging the ends must
-    // do nothing - they belong to the EC.
+    // Command 14 carries only the middle two points, so the ends belong to the
+    // EC. There is no handle on them, so a drag aimed at one either does
+    // nothing or grabs a nearby editable point - either way the ends hold.
     const { svg } = setup(asCurve(BASE, GPU_OTHER));
 
-    drag(svg, [40, 25], [15, 90]); // first point
-    drag(svg, [100, 100], [60, 10]); // last point
+    drag(svg, [40, 25], [15, 90]); // at the first point
+    drag(svg, [100, 100], [40, 10]); // at the last point
 
-    expect(pointsOf("CPU")).toContain("40°C25%");
-    expect(pointsOf("CPU")).toContain("100°C100%");
-    expect(pointsOf("GPU1")).toContain("45°C60%");
+    // The fixed ends are still where they started, on both curves.
+    expect(pathEnds("cpu")).toEqual([P(40, 25), P(100, 100)]);
+    expect(pathEnds("gpu1")).toEqual([P(45, 60), P(100, 100)]);
   });
 });
 
@@ -393,27 +439,6 @@ describe("tempRangeOf", () => {
   it("keeps a non-zero span rather than dividing by zero", () => {
     const flat = [P(50, 10), P(50, 20), P(50, 30), P(50, 40)];
     expect(tempRangeOf([flat])).toEqual({ lo: 50, hi: 51 });
-  });
-});
-
-describe("dutyRangeOf", () => {
-  it("spans the outermost duties of both fans", () => {
-    expect(dutyRangeOf([BASE, GPU_OTHER])).toEqual({ lo: 25, hi: 100 });
-  });
-
-  it("takes the union, not just one fan", () => {
-    const cpu = [P(40, 20), P(50, 30), P(60, 40), P(70, 50)];
-    const gpu = [P(45, 10), P(60, 40), P(80, 60), P(95, 90)];
-    expect(dutyRangeOf([cpu, gpu])).toEqual({ lo: 10, hi: 90 });
-  });
-
-  it("keeps a non-zero span rather than dividing by zero", () => {
-    const flat = [P(40, 50), P(60, 50), P(80, 50), P(100, 50)];
-    expect(dutyRangeOf([flat])).toEqual({ lo: 50, hi: 51 });
-  });
-
-  it("falls back to a full scale when there is nothing to plot", () => {
-    expect(dutyRangeOf([[], []])).toEqual({ lo: 0, hi: 100 });
   });
 });
 
@@ -498,9 +523,11 @@ describe("CurveCard handles", () => {
     return Array.from(document.querySelectorAll<HTMLElement>('[data-testid="curve-handle"]'));
   }
 
-  it("renders one handle per curve point, both channels", () => {
+  it("renders handles for the editable points only", () => {
+    // Two per fan: the first and last belong to the EC and get no marker, so a
+    // drag can never be started on a point that is not written back.
     setup(asCurve(BASE, GPU_OTHER));
-    expect(handleBoxes()).toHaveLength(8);
+    expect(handleBoxes()).toHaveLength(4);
   });
 
   it("centres each handle on its point instead of hanging below it", () => {
@@ -516,44 +543,49 @@ describe("CurveCard handles", () => {
 
   it("places a handle at the percentage its point maps to", () => {
     setup(asCurve(BASE, GPU_OTHER));
-    // Both axes span the curve's own values. Temperatures run 40..100, so BASE
-    // point 2 (60°C) is (60-40)/60 = 33.3% across: x = 4 + 0.3333*92 = 34.67.
-    // Duties run 25..100, so its 36% is (100-36)/75 = 85.3% down from the top:
-    // y = 4 + 0.8533*92 = 82.51.
-    const second = getComputedStyle(handleBoxes()[1]);
+    // Only the editable points have handles, so [0] is CPU point 2 (60°C, 36%)
+    // and [1] is CPU point 3 (80°C, 53%).
+    // Temperature axis spans 40..100, so point 2 is (60-40)/60 = 33.3% across:
+    // x = 4 + 0.3333*92 = 34.67. Duty is the fixed 0..100 %, so 36% is 64%
+    // down: y = 4 + 0.64*92 = 62.88.
+    const second = getComputedStyle(handleBoxes()[0]);
     expect(parseFloat(second.left)).toBeCloseTo(34.666666, 5);
-    expect(parseFloat(second.top)).toBeCloseTo(82.506666, 5);
+    expect(parseFloat(second.top)).toBeCloseTo(62.88, 5);
+    // Point 3: (80-40)/60 = 66.7% across, 53% duty is 47% down.
+    const third = getComputedStyle(handleBoxes()[1]);
+    expect(parseFloat(third.left)).toBeCloseTo(4 + 0.666666 * 92, 3);
+    expect(parseFloat(third.top)).toBeCloseTo(4 + 0.47 * 92, 4);
   });
 
-  it("puts the first and last points on the axis ends", () => {
-    // The axes are derived from the curve, so their ends must coincide with the
-    // outermost points - the reported bug was the curve starting a third of the
-    // way in and floating above the bottom, because both axes were fixed at
-    // 0..100 while the curve occupies 40..100 °C and 25..100 %.
+  it("puts the curve's first and last points on the axis ends", () => {
+    // The temperature axis is derived from the curve, so its ends must coincide
+    // with the outermost points. The reported bug was the curve starting a
+    // third of the way in, because the axis was a fixed 0..100 °C while the
+    // curve occupies 40..100.
     setup(asCurve(BASE, GPU_OTHER));
-    const cpu = handleBoxes()
-      .slice(0, 4)
-      .map((el) => ({ x: parseFloat(getComputedStyle(el).left), y: parseFloat(getComputedStyle(el).top) }));
-    // The first point (40°C, 25%) is the bottom-left corner of the data area.
-    expect(cpu[0].x).toBeCloseTo(PAD_PCT, 6);
-    expect(cpu[0].y).toBeCloseTo(100 - PAD_PCT, 6);
-    // The last point (100°C, 100%) is the top-right corner.
-    expect(cpu[3].x).toBeCloseTo(100 - PAD_PCT, 6);
-    expect(cpu[3].y).toBeCloseTo(PAD_PCT, 6);
+    const d = Array.from(document.querySelectorAll("path"))
+      .map((el) => el.getAttribute("d") ?? "")
+      .find((v) => v.includes("C")) ?? "";
+    const nums = d.match(/-?[\d.]+/g)?.map(Number) ?? [];
+    // "M x y C …": the first coordinate is the curve's first point (40 °C), the
+    // second-to-last is the last point's x (100 °C). Both should sit on the ends
+    // of the data area, which is inset by PAD_PCT.
+    expect(nums[0]).toBeCloseTo(PAD_PCT, 6);
+    expect(nums[nums.length - 2]).toBeCloseTo(100 - PAD_PCT, 6);
   });
 
-  it("marks the firmware-owned ends as inert and the middle as editable", () => {
+  it("gives every handle a solid, movable look", () => {
     setup(asCurve(BASE, GPU_OTHER));
-    const cpu = handleBoxes().slice(0, 4).map((el) => getComputedStyle(el));
-    // The ends stay hollow and dimmed; the middle points are solid.
-    for (const style of [cpu[0], cpu[3]]) {
-      expect(style.backgroundColor).toBe("rgba(0, 0, 0, 0)");
-      expect(parseFloat(style.opacity)).toBeLessThan(1);
-    }
-    for (const style of [cpu[1], cpu[2]]) {
-      expect(style.backgroundColor).toBe("rgb(120, 200, 255)");
-      expect(parseFloat(style.opacity)).toBe(1);
-    }
+    // Four handles total, and every one is a solid marker in its fan's colour:
+    // there is no hollow "not yours" state any more, because the fixed points
+    // get no handle at all.
+    const colors = handleBoxes().map((el) => getComputedStyle(el).backgroundColor);
+    expect(colors).toEqual([
+      "rgb(120, 200, 255)",
+      "rgb(120, 200, 255)",
+      "rgb(180, 120, 255)",
+      "rgb(180, 120, 255)",
+    ]);
   });
 });
 
@@ -617,7 +649,6 @@ describe("CurveCard restore buttons", () => {
     drag(svg, [60, 36], [15, 90]);
 
     fireEvent.click(screen.getByRole("button", { name: /还原默认/ }));
-
     // The factory CPU curve, straight from hardware-notes.
     expect(pointsOf("CPU")).toEqual([
       "40°C25%",
