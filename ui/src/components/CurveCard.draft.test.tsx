@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, fireEvent, screen, waitFor } from "@testing-library/react";
-import { CurveCard, sameCurve, shouldAdoptCurve } from "./CurveCard";
+import { CurveCard, isEditablePoint, sameCurve, shouldAdoptCurve } from "./CurveCard";
 import { setFanCurve } from "../api/daemon";
 import type { CurvePoint, FanCurve } from "../api/daemon";
 
@@ -212,6 +212,40 @@ describe("CurveCard dragging", () => {
     drag(svg, [60, 36], [72, 80]);
     expect(pointsOf("GPU1")).toContain("72°C80%");
     expect(pointsOf("CPU")).toContain("60°C36%");
+  });
+
+  it("moves the third point of each line", () => {
+    // The reported bug: only the second point could be grabbed, because the
+    // fixed first/last points were also candidates and stole near misses.
+    const { svg } = setup(asCurve(BASE, GPU_OTHER));
+
+    drag(svg, [80, 53], [70, 25]);
+    expect(pointsOf("CPU")).toContain("70°C25%");
+
+    drag(svg, [85, 82], [72, 30]);
+    expect(pointsOf("GPU1")).toContain("72°C30%");
+  });
+
+  it("does not move the firmware-owned first and last points", () => {
+    // Command 14 carries only the middle two points, so dragging the ends must
+    // do nothing - they belong to the EC.
+    const { svg } = setup(asCurve(BASE, GPU_OTHER));
+
+    drag(svg, [40, 25], [15, 90]); // first point
+    drag(svg, [100, 100], [60, 10]); // last point
+
+    expect(pointsOf("CPU")).toContain("40°C25%");
+    expect(pointsOf("CPU")).toContain("100°C100%");
+    expect(pointsOf("GPU1")).toContain("45°C60%");
+  });
+});
+
+describe("isEditablePoint", () => {
+  it("only the middle two points of a four-point curve can move", () => {
+    expect(isEditablePoint(0)).toBe(false);
+    expect(isEditablePoint(1)).toBe(true);
+    expect(isEditablePoint(2)).toBe(true);
+    expect(isEditablePoint(3)).toBe(false);
   });
 });
 

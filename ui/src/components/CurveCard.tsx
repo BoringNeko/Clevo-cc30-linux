@@ -26,6 +26,20 @@ const PAD = 18;
 const HIT_RADIUS = 16;
 const MIN_GAP_C = 2;
 
+/**
+ * The point indices command 14 actually carries.
+ *
+ * The Windows stack sends only the middle two points of each fan; the EC keeps
+ * its own first and last. Only these two are therefore editable - offering the
+ * others would let a user move a point that is never written back.
+ */
+export const EDITABLE_INDICES: readonly number[] = [1, 2];
+
+/** Whether a point of a fan curve can be moved. */
+export function isEditablePoint(index: number): boolean {
+  return EDITABLE_INDICES.includes(index);
+}
+
 /** The two fans the firmware writes through command 14. */
 type Channel = "cpu" | "gpu1";
 
@@ -167,10 +181,13 @@ export function CurveCard({ palette, curve, writable = false, onApplied }: Curve
   /**
    * Find the point under the pointer, across *both* series.
    *
-   * Both curves are draggable, so a hit is a (channel, index) pair. The nearest
-   * point wins. On a tie the later-drawn series (GPU1) wins, matching what the
-   * user sees: GPU1 is painted over CPU, so it is the one visibly on top. The
-   * drag label then names the channel, and the user can pull the curves apart.
+   * Both curves are draggable, so a hit is a (channel, index) pair. Only the
+   * points command 14 carries are considered (see {@link EDITABLE_INDICES}):
+   * including the fixed first and last points let a nearby grab snap to one of
+   * them, which is why the third point could not be picked up.
+   *
+   * The nearest wins; on a tie the later-drawn series (GPU1) wins, matching
+   * what the user sees, and the drag label names which line was grabbed.
    */
   const nearestPoint = useCallback(
     (event: React.PointerEvent<SVGSVGElement>): { channel: Channel; index: number } | null => {
@@ -179,7 +196,9 @@ export function CurveCard({ palette, curve, writable = false, onApplied }: Curve
       let best: { channel: Channel; index: number } | null = null;
       let bestDist = HIT_RADIUS;
       (["cpu", "gpu1"] as Channel[]).forEach((channel) => {
-        draft[channel].forEach((p, i) => {
+        EDITABLE_INDICES.forEach((i) => {
+          const p = draft[channel][i];
+          if (!p) return;
           const dx = ((p.temp - coords.temp) / 100) * (W - 2 * PAD);
           const dy = ((p.duty_pct - coords.duty) / 100) * (H - 2 * PAD);
           const dist = Math.hypot(dx, dy);
@@ -315,15 +334,22 @@ export function CurveCard({ palette, curve, writable = false, onApplied }: Curve
                 const x = PAD + (p.temp / 100) * (W - 2 * PAD);
                 const y = H - PAD - (p.duty_pct / 100) * (H - 2 * PAD);
                 const active = dragging?.channel === s.key && dragging.index === i;
+                const movable = isEditablePoint(i);
                 return (
                   <g key={`${s.key}-${i}`}>
+                    {/*
+                     * The first and last points are the EC's: command 14 does
+                     * not carry them, so they are drawn hollow and grey to say
+                     * "shown for shape, not yours to move".
+                     */}
                     <circle
                       cx={x}
                       cy={y}
-                      r={active ? 5 : 3}
-                      fill={active ? "white" : s.color}
-                      stroke={s.color}
-                      strokeWidth={active ? 2 : 1}
+                      r={active ? 5 : movable ? 3 : 2.5}
+                      fill={active ? "white" : movable ? s.color : "none"}
+                      stroke={movable ? s.color : "currentColor"}
+                      strokeOpacity={movable ? 1 : 0.35}
+                      strokeWidth={active ? 2 : movable ? 1 : 1}
                     />
                     {/* While dragging, name the point being moved: with two
                         curves it is otherwise easy to grab the wrong one. */}
@@ -492,7 +518,29 @@ function CurveTable({ series }: { series: Series[] }) {
           </Box>
           {Array.from({ length: columns }, (_, i) => (
             <Box component="th" key={i}>
-              点{i + 1}
+              <Box component="span" sx={{ mr: 0.5 }}>
+                点{i + 1}
+              </Box>
+              {/*
+               * Only the middle points are written by command 14; the EC keeps
+               * its own first and last, so those columns are marked as fixed.
+               */}
+              {!isEditablePoint(i) && (
+                <Box
+                  component="span"
+                  sx={{
+                    textTransform: "none",
+                    letterSpacing: 0,
+                    border: "1px solid",
+                    borderColor: "divider",
+                    borderRadius: 0.5,
+                    px: 0.375,
+                    fontSize: "0.5625rem",
+                  }}
+                >
+                  固件固定
+                </Box>
+              )}
             </Box>
           ))}
         </Box>
@@ -518,7 +566,7 @@ function CurveTable({ series }: { series: Series[] }) {
               {s.label}
             </Box>
             {s.points.map((p, i) => (
-              <Box component="td" key={i}>
+              <Box component="td" key={i} sx={{ opacity: isEditablePoint(i) ? 1 : 0.5 }}>
                 <Box component="span" sx={{ color: "text.disabled", mr: 0.75 }}>
                   {p.temp}°C
                 </Box>

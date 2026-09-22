@@ -54,11 +54,20 @@ pub fn set_fan_curve(curve: crate::dbus::FanCurve) -> Result<(), String> {
 }
 
 /// Serialize a curve back into the daemon's JSON wire shape.
+///
+/// Duty percentages are converted back to the EC's raw 0..255, the inverse of
+/// `parse_curve_json`.
 fn curve_to_json(curve: &crate::dbus::FanCurve) -> String {
     let points = |points: &[crate::dbus::CurvePoint]| {
         points
             .iter()
-            .map(|p| format!("[{},{}]", p.temp, p.duty_pct))
+            .map(|p| {
+                format!(
+                    "[{},{}]",
+                    p.temp,
+                    crate::dbus::pct_to_raw_duty(p.duty_pct)
+                )
+            })
             .collect::<Vec<_>>()
             .join(",")
     };
