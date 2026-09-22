@@ -806,6 +806,15 @@ static ssize_t fan_curve_store(struct device *dev, struct device_attribute *attr
 
 		sep = strchr(line, ':');
 		if (!sep) {
+			/*
+			 * `fan_count=` / `kb_type=` are informational lines from the
+			 * read side. They use '=' rather than ':', so recognise them
+			 * before demanding a separator - otherwise echoing a read
+			 * back (which is how a curve is restored) fails with EINVAL.
+			 */
+			if (!strncmp(line, "fan_count", 9) ||
+			    !strncmp(line, "kb_type", 7))
+				continue;
 			err = -EINVAL;
 			break;
 		}

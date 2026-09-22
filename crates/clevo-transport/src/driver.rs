@@ -227,8 +227,15 @@ impl DriverTransport {
 /// points), so the text form reports the two points it can honestly describe.
 /// Slopes are not needed by the driver: it recomputes nothing and passes the
 /// points through.
+///
+/// Only the three fan lines are emitted. The read side also carries
+/// `fan_count=` / `kb_type=` lines, but the driver's `fan_curve_store` requires
+/// every line it parses to contain a `:` - and checks that *before* it looks at
+/// the line's name - so those `=`-separated informational lines made every
+/// write through this transport fail with `-EINVAL`. They carry nothing the
+/// write needs, so they are simply not produced here.
 pub fn decode_curve_for_driver(payload: &[u8; PAYLOAD_BYTES]) -> Result<String, TransportError> {
-    let mut out = String::from("fan_count=3\n");
+    let mut out = String::new();
     for (fan, base) in [("cpu", 2usize), ("gpu1", 6), ("gpu2", 10)] {
         let t2 = payload[base];
         let d2 = payload[base + 1];
@@ -470,6 +477,47 @@ mod tests {
         assert!(written.contains("cpu: 0,0 55,"), "written: {written}");
         assert!(written.contains("75,"), "written: {written}");
         assert!(written.contains("gpu1: 0,0 60,"), "written: {written}");
+
+        // Every line must be something the kernel's fan_curve_store accepts.
+        // It requires a ':' in each line *before* it looks at the line's name,
+        // so an `=`-separated line - like the read side's `fan_count=` - makes
+        // the whole write fail with EINVAL. This went unnoticed because the
+        // assertions above only checked that the wanted lines were present.
+        for line in written.lines() {
+            assert!(
+                line.contains(':'),
+                "line without a ':' would fail the kernel parse: {line:?}"
+            );
+            assert!(
+                ["cpu:", "gpu1:", "gpu2:"]
+                    .iter()
+                    .any(|p| line.starts_with(p)),
+                "unexpected line in a curve write: {line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn curve_write_text_is_accepted_by_the_kernel_rules() {
+        // A second, independent check of the exact defect that broke every
+        // daemon-driven write: the seed/echo text must not carry the read
+        // side's informational `fan_count=` line into the store path.
+        let mut payload = [0u8; PAYLOAD_BYTES];
+        // cpu and gpu1 populated, gpu2 absent.
+        payload[2] = 55;
+        payload[3] = 40;
+        payload[4] = 75;
+        payload[5] = 70;
+        payload[6] = 60;
+        payload[7] = 45;
+        payload[8] = 80;
+        payload[9] = 75;
+
+        let text = decode_curve_for_driver(&payload).unwrap();
+        assert!(!text.contains("fan_count"), "text: {text}");
+        assert!(!text.contains("kb_type"), "text: {text}");
+        assert!(text.contains("cpu: 0,0 55,40 75,70 0,0"), "text: {text}");
+        assert!(text.contains("gpu2: 0,0 0,0 0,0 0,0"), "text: {text}");
     }
 
     #[test]
