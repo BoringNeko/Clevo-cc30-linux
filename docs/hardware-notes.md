@@ -287,8 +287,11 @@ Still open:
       found in the DSDT yet; needed for `page 0..7` persistence and capability
       probing.
 - [ ] TurboFan (`121/25` bit 6) / DTT (bit 7) — reserved, not exposed.
-- [ ] Custom curve write has not yet been exercised on hardware (the encoding is
-      unit-tested and the Arg3 shape matches command 13, which does work live).
+- [ ] Custom curve write (command 14) has not yet been exercised on hardware:
+      the encoding is unit-tested, the Arg3 shape matches command 13 (which does
+      work live), the sysfs writer is implemented and `raw_curve` is available
+      to diff before/after. Awaiting a run of `scripts/verify-hardware.sh
+      --step 4`.
 
 ## 10.4 Command 12 duty and temperature offsets — resolved on hardware
 
@@ -349,6 +352,25 @@ the CPU genuinely matches one of the vendor's `cpu.ini` sections.
   paths agree.
 - **`[18]` tracks `sensors` directly** (see the table above).
 - `[21]` stays in the mid-30s, consistent with an idle discrete GPU.
+
+### `[18]` vs `sensors`: why they agree at load but not at idle
+
+Final verification on the P15 23, with the default (no conversion):
+
+| | CLI `[18]` | `sensors` Package | delta |
+|---|---|---|---|
+| idle | 45 °C | 53 °C | 8 |
+| load (4x `yes`, 20 s) | 87 °C | 87 °C | **0** |
+
+This asymmetry is expected, not a bug: `sensors`' `Package id 0` is the CPU's
+**internal core DTS**, while offset `[18]` is the EC's **package thermistor**.
+At idle the cores leak enough heat that the DTS reads a few degrees above the
+board sensor; under sustained load the two reach thermal equilibrium and
+converge. The exact match at 87 °C is the decisive evidence: a conversion error
+would not disappear at the high end.
+
+**Expected agreement is therefore a few degrees at idle and near-exact under
+load; do not "correct" the idle gap.**
 
 ### Three wrong answers before this one (worth recording)
 
