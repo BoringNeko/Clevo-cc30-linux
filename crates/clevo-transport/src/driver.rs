@@ -261,11 +261,15 @@ pub fn rpm_to_period(rpm: u32) -> u16 {
 }
 
 /// Map a `121/1` value to the name the driver's `fan_mode` accepts.
+///
+/// `custom` (6) is the curve mode: the driver makes the firmware use the curve
+/// stored in the EC, so it is what `set_curve` selects after a successful write.
 fn fan_mode_name(value: u32) -> TransportResult<&'static str> {
     match value {
         0 => Ok("auto"),
         1 => Ok("max"),
         5 => Ok("maxq"),
+        6 => Ok("custom"),
         8 => Ok("quiet"),
         other => Err(TransportError::Unsupported(format!(
             "fan mode {other} has no driver name"
@@ -365,6 +369,7 @@ fn fan_mode_value(name: &str) -> Option<u8> {
         "auto" => Some(0),
         "max" => Some(1),
         "maxq" => Some(5),
+        "custom" => Some(6),
         "quiet" => Some(8),
         _ => None,
     }
@@ -574,6 +579,23 @@ mod tests {
                 .trim(),
             "max"
         );
+    }
+
+    #[test]
+    fn writes_custom_fan_mode_and_reads_it_back() {
+        let fake = FakeSysfs::new("custommode");
+        let t = fake.transport();
+        let payload = build_subcommand_payload(6, SUB_FAN_MODE); // custom
+        let reply = t.execute(CMD_MAIN.get(), &payload).unwrap();
+        assert_eq!(response_integer(&reply).unwrap(), 121);
+        assert_eq!(
+            std::fs::read_to_string(fake.root.join("fan_mode"))
+                .unwrap()
+                .trim(),
+            "custom"
+        );
+        // The snapshot must report the same value the write used, not UNSET.
+        assert_eq!(t.current_modes().unwrap().0, Some(6));
     }
 
     #[test]

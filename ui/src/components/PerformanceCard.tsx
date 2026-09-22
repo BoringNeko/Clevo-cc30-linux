@@ -27,6 +27,10 @@ interface PerformanceCardProps {
  * Buttons reflect the daemon's reported mode (`255` = not reported, shown as
  * "unknown"). A click sends a write through the daemon; the result is always
  * followed by a refresh so a denied write does not appear to have taken effect.
+ *
+ * The curve mode is labelled `customize` here: picking it is what makes the
+ * dashboard reveal the fan-curve editor. The daemon still receives `custom`,
+ * the name it and the firmware use.
  */
 export function PerformanceCard({
   palette,
@@ -114,7 +118,7 @@ export function PerformanceCard({
         <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1 }}>
           {FAN_MODE_CHOICES.map((c) =>
             modeButton(c.value, c.label, snapshot.fan_mode, () =>
-              void apply(() => setFanMode(c.label)),
+              void apply(() => setFanMode(c.mode)),
             ),
           )}
         </Box>

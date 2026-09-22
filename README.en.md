@@ -18,10 +18,12 @@ UI added.
 
 - **Monitoring**: fan speed (CPU / GPU1), CPU/GPU temperature in Celsius, and the
   fan curve.
-- **Control**: fan mode (`auto` / `quiet` / `max` / `maxq` / `custom`), a
-  **custom four-point fan curve** (command 14, which selects `custom` when
-  written) and performance mode (`quiet` / `pwrsaving` / `performance` /
-  `entertainment`), through the kernel driver and PolicyKit, fully reversible.
+- **Control**: fan mode (`auto` / `quiet` / `max` / `maxq` / `customize` — the UI
+  label for the firmware's `custom`), a **custom four-point fan curve**
+  (command 14, which selects that mode when written; the curve card is only
+  shown while it is active) and performance mode (`quiet` / `pwrsaving` /
+  `performance` / `entertainment`), through the kernel driver and PolicyKit,
+  fully reversible.
 - **Daemon**: `clevod` is the only long-lived process that touches the hardware.
   It serves `org.clevo.CC` on the system D-Bus, caches readings and persists
   choices.
@@ -36,7 +38,7 @@ UI added.
 - **Safe by default**: writes are off by default; the `acpi_call` transport is
   read-only; unverified firmware constants are clearly marked.
 - **Offline-testable**: no hardware required, everything is tested against
-  hand-written fixtures (162 Rust + 25 UI-backend + 119 frontend tests).
+  hand-written fixtures (163 Rust + 25 UI-backend + 127 frontend tests).
 
 > Fan control (speed, temperature, curve read/write, fan and performance modes)
 > has been verified item by item on real hardware; the record is in

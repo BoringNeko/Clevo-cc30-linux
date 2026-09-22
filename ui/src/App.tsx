@@ -7,6 +7,7 @@ import { ThemeProvider } from "@mui/material/styles";
 import {
   getFanCurve,
   getFanSnapshot,
+  isCustomizeMode,
   pollFan,
   type FanCurve,
   type FanSnapshot,
@@ -17,6 +18,7 @@ import { WindowControls } from "./components/WindowControls";
 import { FansCard } from "./components/FansCard";
 import { PerformanceCard } from "./components/PerformanceCard";
 import { CurveCard } from "./components/CurveCard";
+import { CurveHintCard } from "./components/CurveHintCard";
 import { TelemetryCard } from "./components/TelemetryCard";
 import { useWallpaper } from "./hooks/useWallpaper";
 import { useLogo } from "./hooks/useLogo";
@@ -352,7 +354,9 @@ export default function App() {
                   />
                 </Box>
                 <Box id="curve" sx={{ scrollMarginTop: 16, minHeight: 0 }}>
-                  {curve ? (
+                  {!isCustomizeMode(snapshot.fan_mode) ? (
+                    <CurveHintCard palette={accentPalette} />
+                  ) : curve ? (
                     <CurveCard
                       palette={accentPalette}
                       curve={curve}

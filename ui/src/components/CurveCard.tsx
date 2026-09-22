@@ -165,7 +165,7 @@ export function CurveCard({ palette, curve, writable = false, onApplied }: Curve
     setNotice(null);
     try {
       await setFanCurve(pendingCurve());
-      setNotice("已写入自定义曲线并切换到 custom 模式");
+      setNotice("已写入自定义曲线并切换到 customize 模式");
       onApplied?.();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
