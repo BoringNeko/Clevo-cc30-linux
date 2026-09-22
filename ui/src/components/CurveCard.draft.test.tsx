@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, fireEvent, screen, waitFor } from "@testing-library/react";
-import { CurveCard, isEditablePoint, sameCurve, shouldAdoptCurve } from "./CurveCard";
+import { CurveCard, FACTORY_CURVE, isEditablePoint, sameCurve, shouldAdoptCurve } from "./CurveCard";
 import { setFanCurve } from "../api/daemon";
 import type { CurvePoint, FanCurve } from "../api/daemon";
 
@@ -342,11 +342,11 @@ describe("CurveCard coordinate mapping", () => {
 describe("CurveCard applying", () => {
   it("has an apply button that is disabled until something is edited", () => {
     const { svg } = setup(asCurve(BASE, GPU_OTHER));
-    expect(screen.getByRole("button", { name: /应用曲线/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /保存配置/ })).toBeDisabled();
 
     // After an edit it becomes usable.
     drag(svg, [60, 36], [72, 80]);
-    expect(screen.getByRole("button", { name: /应用曲线/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /保存配置/ })).toBeEnabled();
   });
 
   it("sends both edited curves to the daemon", async () => {
@@ -355,7 +355,7 @@ describe("CurveCard applying", () => {
     drag(svg, [60, 36], [72, 80]);
     drag(svg, [85, 82], [70, 20]);
 
-    fireEvent.click(screen.getByRole("button", { name: /应用曲线/ }));
+    fireEvent.click(screen.getByRole("button", { name: /保存配置/ }));
 
     await waitFor(() => expect(mockedSetFanCurve).toHaveBeenCalledTimes(1));
     const sent = mockedSetFanCurve.mock.calls[0][0] as FanCurve;
@@ -367,7 +367,58 @@ describe("CurveCard applying", () => {
   it("reports which fans were written", async () => {
     const { svg } = setup(asCurve(BASE, GPU_OTHER));
     drag(svg, [60, 36], [72, 80]);
-    fireEvent.click(screen.getByRole("button", { name: /应用曲线/ }));
+    fireEvent.click(screen.getByRole("button", { name: /保存配置/ }));
     expect(await screen.findByText(/CPU 曲线/)).toBeTruthy();
+  });
+});
+
+describe("CurveCard restore buttons", () => {
+  it("还原配置 discards the edit and does not write", () => {
+    const { svg } = setup(asCurve(BASE, GPU_OTHER));
+    drag(svg, [60, 36], [72, 80]);
+    expect(pointsOf("CPU")).toContain("72°C80%");
+
+    fireEvent.click(screen.getByRole("button", { name: /还原配置/ }));
+
+    expect(pointsOf("CPU")).toContain("60°C36%");
+    expect(mockedSetFanCurve).not.toHaveBeenCalled();
+  });
+
+  it("还原默认 loads the factory curve without writing", () => {
+    const { svg } = setup(asCurve(BASE, GPU_OTHER));
+    drag(svg, [60, 36], [15, 90]);
+
+    fireEvent.click(screen.getByRole("button", { name: /还原默认/ }));
+
+    // The factory CPU curve, straight from hardware-notes.
+    expect(pointsOf("CPU")).toEqual([
+      "40°C25%",
+      "60°C36%",
+      "80°C53%",
+      "100°C100%",
+    ]);
+    // Nothing reaches the EC until 保存配置.
+    expect(mockedSetFanCurve).not.toHaveBeenCalled();
+  });
+
+  it("saves the factory curve once 保存配置 is pressed", async () => {
+    const { svg } = setup(asCurve([P(40, 10), P(50, 10), P(60, 10), P(100, 10)]));
+    drag(svg, [50, 10], [55, 90]);
+
+    fireEvent.click(screen.getByRole("button", { name: /还原默认/ }));
+    fireEvent.click(screen.getByRole("button", { name: /保存配置/ }));
+
+    await waitFor(() => expect(mockedSetFanCurve).toHaveBeenCalledTimes(1));
+    const sent = mockedSetFanCurve.mock.calls[0][0] as FanCurve;
+    expect(sent.cpu).toEqual(FACTORY_CURVE.cpu);
+    expect(sent.gpu1).toEqual(FACTORY_CURVE.gpu1);
+  });
+
+  it("offers 还原默认 even when nothing has been edited yet", () => {
+    setup(asCurve(BASE, GPU_OTHER));
+    // Restoring the default is meaningful before any edit (the EC may already
+    // hold something else), so it must not be gated on a dirty draft.
+    expect(screen.getByRole("button", { name: /还原默认/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /还原配置/ })).toBeDisabled();
   });
 });

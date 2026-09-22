@@ -171,26 +171,26 @@ describe("curve editor gate", () => {
 
   it("hides the editor and shows the hint in a non-customize mode", () => {
     renderCard(0);
-    expect(screen.queryByRole("button", { name: "应用曲线" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "保存配置" })).toBeNull();
     expect(screen.getByText(/其他模式下固件不使用自定义曲线/)).toBeTruthy();
   });
 
   it("shows the editor in customize mode", () => {
     renderCard(6);
-    expect(screen.getByRole("button", { name: "应用曲线" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "保存配置" })).toBeTruthy();
     expect(screen.queryByText(/其他模式下固件不使用自定义曲线/)).toBeNull();
   });
 
   it("swaps the hint for the editor after switching to customize", async () => {
     renderCard(0);
     // Starts without the editor.
-    expect(screen.queryByRole("button", { name: "应用曲线" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "保存配置" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: /customize/ }));
 
     // The click wrote the mode; the refresh re-renders the mode as customize.
     await waitFor(() => expect(setFanMode).toHaveBeenCalledWith("custom"));
     // In the harness the snapshot follows the click, mirroring the poll.
-    expect(await screen.findByRole("button", { name: "应用曲线" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "保存配置" })).toBeTruthy();
   });
 });

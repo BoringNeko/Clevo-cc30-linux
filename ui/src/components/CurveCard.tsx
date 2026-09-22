@@ -3,6 +3,7 @@ import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Typography from "@mui/material/Typography";
 import CheckIcon from "@mui/icons-material/Check";
+import SettingsBackupRestoreIcon from "@mui/icons-material/SettingsBackupRestore";
 import ShowChartIcon from "@mui/icons-material/ShowChart";
 import RestoreIcon from "@mui/icons-material/Restore";
 import { CardHeader, GlassCard } from "./GlassCard";
@@ -39,6 +40,37 @@ export const EDITABLE_INDICES: readonly number[] = [1, 2];
 export function isEditablePoint(index: number): boolean {
   return EDITABLE_INDICES.includes(index);
 }
+
+/**
+ * The curve the machine shipped with.
+ *
+ * Read from the EC before anything was written (see `docs/hardware-notes.md`)
+ * and kept here so "还原默认" has something to restore. Duty is a percentage,
+ * as everywhere above `clevo-proto`.
+ */
+export const FACTORY_CURVE: FanCurve = {
+  fan_count: 2,
+  init_mode: 0,
+  kb_type: 6,
+  cpu: [
+    { temp: 40, duty_pct: 25 },
+    { temp: 60, duty_pct: 36 },
+    { temp: 80, duty_pct: 53 },
+    { temp: 100, duty_pct: 100 },
+  ],
+  gpu1: [
+    { temp: 40, duty_pct: 25 },
+    { temp: 60, duty_pct: 36 },
+    { temp: 80, duty_pct: 53 },
+    { temp: 99, duty_pct: 100 },
+  ],
+  gpu2: [
+    { temp: 0, duty_pct: 0 },
+    { temp: 0, duty_pct: 0 },
+    { temp: 0, duty_pct: 0 },
+    { temp: 0, duty_pct: 0 },
+  ],
+};
 
 /** The two fans the firmware writes through command 14. */
 type Channel = "cpu" | "gpu1";
@@ -118,7 +150,7 @@ interface Series {
 /**
  * The fan curve as two polylines (CPU and GPU1), both draggable.
  *
- * Editing is local until "应用曲线" is pressed, so the user can shape both
+ * Editing is local until "保存配置" is pressed, so the user can shape both
  * curves and only then send them to the EC (a write costs a PolicyKit prompt).
  */
 export function CurveCard({ palette, curve, writable = false, onApplied }: CurveCardProps) {
@@ -262,11 +294,32 @@ export function CurveCard({ palette, curve, writable = false, onApplied }: Curve
     }
   };
 
-  const reset = () => {
+  /**
+   * Put the edited curve back to what the EC currently holds (discard edits).
+   *
+   * Named 还原配置 in the UI: this undoes local editing, it does not write.
+   */
+  const restoreSaved = () => {
     setDraft({ ...draft, cpu: curve.cpu, gpu1: curve.gpu1 });
     adopted.current = { cpu: curve.cpu, gpu1: curve.gpu1 };
     setError(null);
     setNotice(null);
+  };
+
+  /**
+   * Load the factory curve into the editor.
+   *
+   * Nothing is written until 保存配置 is pressed, so this is safe to try: the
+   * user can see what the default looks like and still back out with 还原配置.
+   */
+  const restoreDefault = () => {
+    setDraft({
+      ...draft,
+      cpu: FACTORY_CURVE.cpu.map((p) => ({ ...p })),
+      gpu1: FACTORY_CURVE.gpu1.map((p) => ({ ...p })),
+    });
+    setError(null);
+    setNotice("已载入出厂默认曲线，按「保存配置」写入");
   };
 
   const series: Series[] = [
@@ -401,16 +454,31 @@ export function CurveCard({ palette, curve, writable = false, onApplied }: Curve
             onClick={apply}
             sx={{ textTransform: "none", minWidth: 96 }}
           >
-            {busy ? "写入中…" : "应用曲线"}
+            {busy ? "写入中…" : "保存配置"}
           </Button>
+          {/*
+           * Two different "undo"s: 还原配置 goes back to what the EC holds
+           * (discarding local edits), 还原默认 loads the factory curve into the
+           * editor. Neither writes - 保存配置 is still the only button that
+           * touches the hardware.
+           */}
           <Button
             size="small"
             startIcon={<RestoreIcon sx={{ fontSize: 14 }} />}
             disabled={!dirty || busy}
-            onClick={reset}
+            onClick={restoreSaved}
             sx={{ textTransform: "none", color: "text.secondary" }}
           >
-            重置
+            还原配置
+          </Button>
+          <Button
+            size="small"
+            startIcon={<SettingsBackupRestoreIcon sx={{ fontSize: 14 }} />}
+            disabled={busy}
+            onClick={restoreDefault}
+            sx={{ textTransform: "none", color: "text.secondary" }}
+          >
+            还原默认
           </Button>
           <Typography sx={{ fontSize: "0.6875rem", color: "text.disabled", ml: "auto" }}>
             拖动任一端点编辑
