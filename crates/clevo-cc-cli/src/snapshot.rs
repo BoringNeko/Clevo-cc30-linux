@@ -9,7 +9,7 @@
 //! Center formula (`clevo_proto::fan_status::period_raw_to_rpm`) is applied for
 //! display while the raw value is kept alongside.
 
-use clevo_proto::fan_status::period_raw_to_rpm;
+use clevo_proto::fan_status::{period_raw_to_rpm, raw_duty_to_pct};
 use clevo_proto::FanStatus;
 
 /// Number of fan channels the protocol can encode.
@@ -22,10 +22,10 @@ pub struct FanReading {
     pub period_raw: u16,
     /// Speed in rpm derived via the Control Center formula.
     pub rpm: u32,
-    /// Fan duty (0..=255, raw; offset unverified on this firmware).
-    pub duty: u8,
-    /// Raw temperature byte (unverified conversion).
-    pub temp_raw: u8,
+    /// Fan duty as a percentage (`0..=100`).
+    pub duty_pct: u8,
+    /// Temperature in degrees Celsius, or `None` when the EC reports none.
+    pub temp_c: Option<u8>,
     /// Whether this channel exists on this machine.
     pub available: bool,
 }
@@ -49,28 +49,17 @@ impl FanSnapshot {
     /// treated as available so raw data is never hidden.
     pub fn from_status(status: &FanStatus, fan_count: u8) -> Self {
         let available = |index: usize| fan_count == 0 || (index as u8) <= fan_count;
+        let read = |period: u16, duty: u8, temp: Option<u8>, index: usize| FanReading {
+            period_raw: period,
+            rpm: period_raw_to_rpm(period),
+            duty_pct: raw_duty_to_pct(duty),
+            temp_c: temp,
+            available: available(index),
+        };
         Self {
-            cpu: FanReading {
-                period_raw: status.cpu_rpm,
-                rpm: period_raw_to_rpm(status.cpu_rpm),
-                duty: status.cpu_duty,
-                temp_raw: status.cpu_temp_raw,
-                available: available(1),
-            },
-            gpu1: FanReading {
-                period_raw: status.gpu1_rpm,
-                rpm: period_raw_to_rpm(status.gpu1_rpm),
-                duty: status.gpu1_duty,
-                temp_raw: status.gpu1_temp_raw,
-                available: available(2),
-            },
-            gpu2: FanReading {
-                period_raw: status.gpu2_rpm,
-                rpm: period_raw_to_rpm(status.gpu2_rpm),
-                duty: status.gpu2_duty,
-                temp_raw: status.gpu2_temp_raw,
-                available: available(3),
-            },
+            cpu: read(status.cpu_period, status.cpu_duty, status.cpu_temp_c, 1),
+            gpu1: read(status.gpu1_period, status.gpu1_duty, status.gpu1_temp_c, 2),
+            gpu2: read(status.gpu2_period, status.gpu2_duty, status.gpu2_temp_c, 3),
         }
     }
 
@@ -84,12 +73,25 @@ impl FanSnapshot {
     }
 }
 
+/// Render a temperature for display; absent values are explicit.
+fn temp_text(temp_c: Option<u8>) -> String {
+    match temp_c {
+        Some(t) => format!("{t}C"),
+        None => "n/a".to_string(),
+    }
+}
+
 /// Render a snapshot as a single-line human-readable row.
 pub fn format_row(snapshot: &FanSnapshot) -> String {
     let mut parts = Vec::new();
     for (name, reading) in snapshot.readings() {
         if reading.available {
-            parts.push(format!("{name}={}rpm/{}C", reading.rpm, reading.temp_raw));
+            parts.push(format!(
+                "{name}={}rpm/{}%/{}",
+                reading.rpm,
+                reading.duty_pct,
+                temp_text(reading.temp_c)
+            ));
         } else {
             parts.push(format!("{name}=n/a"));
         }
@@ -103,9 +105,13 @@ pub fn format_json(snapshot: &FanSnapshot) -> String {
     for (name, reading) in snapshot.readings() {
         let key = name.to_ascii_lowercase();
         if reading.available {
+            let temp = match reading.temp_c {
+                Some(t) => t.to_string(),
+                None => "null".to_string(),
+            };
             fields.push(format!(
-                "\"{key}\":{{\"rpm\":{},\"period_raw\":{},\"duty\":{},\"temp_raw\":{}}}",
-                reading.rpm, reading.period_raw, reading.duty, reading.temp_raw
+                "\"{key}\":{{\"rpm\":{},\"period_raw\":{},\"duty_pct\":{},\"temp_c\":{}}}",
+                reading.rpm, reading.period_raw, reading.duty_pct, temp
             ));
         } else {
             fields.push(format!("\"{key}\":null"));
@@ -121,15 +127,15 @@ mod tests {
 
     fn status() -> FanStatus {
         FanStatus {
-            cpu_rpm: 452, // period raw; ~4770 rpm
-            gpu1_rpm: 0,
-            gpu2_rpm: 0,
-            cpu_duty: 63,
-            cpu_temp_raw: 37,
+            cpu_period: 452, // ~4770 rpm
+            gpu1_period: 0,
+            gpu2_period: 0,
+            cpu_duty: 63, // ~25%
             gpu1_duty: 0,
-            gpu1_temp_raw: 33,
             gpu2_duty: 0,
-            gpu2_temp_raw: 0,
+            cpu_temp_c: Some(37),
+            gpu1_temp_c: Some(33),
+            gpu2_temp_c: None,
         }
     }
 
@@ -150,6 +156,40 @@ mod tests {
     }
 
     #[test]
+    fn duty_is_a_percentage() {
+        let snap = FanSnapshot::from_status(&status(), 2);
+        assert_eq!(snap.cpu.duty_pct, 25);
+        assert_eq!(snap.gpu1.duty_pct, 0);
+    }
+
+    #[test]
+    fn absent_temperature_is_not_zero() {
+        let snap = FanSnapshot::from_status(&status(), 2);
+        assert_eq!(snap.cpu.temp_c, Some(37));
+        // GPU2 is absent on this machine, so the whole channel is null.
+        assert_eq!(snap.gpu2.temp_c, None);
+        // An available channel that reports 0 must still surface as null-ish,
+        // not as a real 0 °C: build one and check the JSON.
+        let mut status = status();
+        status.gpu1_temp_c = None;
+        let snap = FanSnapshot::from_status(&status, 2);
+        assert_eq!(snap.gpu1.temp_c, None);
+        assert!(
+            format_json(&snap).contains("\"gpu1\":{\"rpm\":0,\"period_raw\":0,\"duty_pct\":0,\"temp_c\":null}"),
+            "json: {}",
+            format_json(&snap)
+        );
+    }
+
+    #[test]
+    fn absent_temperature_renders_as_na_in_rows() {
+        let mut status = status();
+        status.cpu_temp_c = None;
+        let snap = FanSnapshot::from_status(&status, 2);
+        assert!(format_row(&snap).contains("CPU=4770rpm/25%/n/a"));
+    }
+
+    #[test]
     fn unknown_fan_count_keeps_all_available() {
         let snap = FanSnapshot::from_status(&status(), 0);
         assert!(snap.gpu2.available);
@@ -159,9 +199,9 @@ mod tests {
     fn row_marks_unavailable_channel() {
         let snap = FanSnapshot::from_status(&status(), 2);
         let row = format_row(&snap);
-        assert!(row.contains("CPU=4770rpm/37C"));
-        assert!(row.contains("GPU1=0rpm/33C"));
-        assert!(row.contains("GPU2=n/a"));
+        assert!(row.contains("CPU=4770rpm/25%/37C"), "row: {row}");
+        assert!(row.contains("GPU1=0rpm/0%/33C"), "row: {row}");
+        assert!(row.contains("GPU2=n/a"), "row: {row}");
     }
 
     #[test]

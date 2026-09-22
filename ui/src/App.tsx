@@ -151,6 +151,20 @@ export default function App() {
     };
   }, [applySnapshot]);
 
+  /**
+   * Re-read the curve from the EC.
+   *
+   * Called after a curve write so the card shows what the firmware actually
+   * stored rather than echoing back what was sent.
+   */
+  const refreshCurve = useCallback(async () => {
+    try {
+      setCurve(await getFanCurve());
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+
   // Periodic refresh.
   useEffect(() => {
     timer.current = window.setInterval(refresh, POLL_INTERVAL_MS);
@@ -339,7 +353,12 @@ export default function App() {
                 </Box>
                 <Box id="curve" sx={{ scrollMarginTop: 16, minHeight: 0 }}>
                   {curve ? (
-                    <CurveCard palette={accentPalette} curve={curve} />
+                    <CurveCard
+                      palette={accentPalette}
+                      curve={curve}
+                      writable={snapshot?.curve_writable ?? false}
+                      onApplied={refreshCurve}
+                    />
                   ) : (
                     <Typography sx={{ color: "text.disabled", fontSize: "0.75rem" }}>
                       风扇曲线不可用

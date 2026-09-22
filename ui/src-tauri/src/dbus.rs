@@ -51,8 +51,10 @@ impl From<serde_json::Error> for UiError {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct FanReading {
     pub rpm: u32,
-    pub duty: u8,
-    pub temp_raw: u8,
+    /// Duty as a percentage (`0..=100`).
+    pub duty_pct: u8,
+    /// Temperature in °C, or `null` when the EC reports none.
+    pub temp_c: Option<u8>,
     pub available: bool,
 }
 
@@ -67,17 +69,19 @@ pub struct FanSnapshot {
     pub fan_mode: u8,
     pub perf_mode: u8,
     pub writable: bool,
+    /// Whether a custom fan curve can be written.
+    pub curve_writable: bool,
 }
 
 /// A single curve point, as sent to the frontend.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CurvePoint {
     pub temp: u8,
     pub duty_pct: u8,
 }
 
-/// The parsed fan curve, as sent to the frontend.
-#[derive(Debug, Clone, serde::Serialize)]
+/// The parsed fan curve, as sent to the frontend (and accepted back for writes).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FanCurve {
     pub fan_count: u8,
     pub init_mode: u8,
@@ -179,6 +183,16 @@ impl DaemonClient {
         })
     }
 
+    /// Write a custom fan curve and select the `custom` fan mode.
+    ///
+    /// The curve is sent as the daemon's JSON wire shape. The daemon validates
+    /// it and authorizes the write through PolicyKit; a denial or a malformed
+    /// curve comes back as a D-Bus error.
+    pub fn set_curve(&self, curve_json: &str) -> Result<(), UiError> {
+        self.proxy()?.call_method("SetCurve", &(curve_json,))?;
+        Ok(())
+    }
+
     /// Read the full cached snapshot.
     ///
     /// The daemon's `FanCount` property is only populated after a curve read, so
@@ -191,29 +205,29 @@ impl DaemonClient {
                 fan_count = curve.fan_count;
             }
         }
-        let reading = |rpm: u32, duty: u8, temp_raw: u8, index: u8| FanReading {
+        let reading = |rpm: u32, duty: u8, temp_c: u8, index: u8| FanReading {
             rpm,
-            duty,
-            temp_raw,
+            duty_pct: clevo_duty_pct(duty),
+            temp_c: (temp_c != 0).then_some(temp_c),
             available: fan_count == 0 || index <= fan_count,
         };
         Ok(FanSnapshot {
             cpu: reading(
                 self.prop("CpuRpm")?,
                 self.prop("CpuDuty")?,
-                self.prop("CpuTempRaw")?,
+                self.prop("CpuTempC")?,
                 1,
             ),
             gpu1: reading(
                 self.prop("GpuRpm")?,
                 self.prop("GpuDuty")?,
-                self.prop("GpuTempRaw")?,
+                self.prop("GpuTempC")?,
                 2,
             ),
             gpu2: FanReading {
                 rpm: 0,
-                duty: 0,
-                temp_raw: 0,
+                duty_pct: 0,
+                temp_c: None,
                 available: fan_count >= 3,
             },
             freshness: self.prop("FanFreshness")?,
@@ -221,6 +235,7 @@ impl DaemonClient {
             fan_mode: self.prop("FanMode")?,
             perf_mode: self.prop("PerfMode")?,
             writable: self.prop("Writable")?,
+            curve_writable: self.prop("CurveWritable")?,
         })
     }
 
@@ -236,6 +251,11 @@ impl DaemonClient {
             })?;
         parse_curve_json(&json)
     }
+}
+
+/// Convert a raw duty byte from the daemon into a percentage.
+fn clevo_duty_pct(raw: u8) -> u8 {
+    ((u32::from(raw) * 100 + 127) / 255) as u8
 }
 
 /// Parse the daemon's `GetCurve` JSON string into a [`FanCurve`].

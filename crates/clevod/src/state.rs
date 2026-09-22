@@ -79,10 +79,10 @@ pub struct FanReading {
     pub period_raw: u16,
     /// Speed in rpm derived via the Control Center formula.
     pub rpm: u32,
-    /// Raw duty byte (offset unverified on this firmware).
+    /// Duty byte (`0..=255`, raw; 255 = 100%).
     pub duty: u8,
-    /// Raw temperature byte (conversion unverified).
-    pub temp_raw: u8,
+    /// Temperature in degrees Celsius (`None` when the EC reports 0).
+    pub temp_c: Option<u8>,
     /// Whether this channel exists on this machine.
     pub available: bool,
 }
@@ -107,17 +107,32 @@ impl FanState {
     /// treated as present so raw data is never hidden.
     pub fn from_status(status: &FanStatus, fan_count: u8) -> Self {
         let present = |index: usize| fan_count == 0 || (index as u8) <= fan_count;
-        let read = |period: u16, duty: u8, temp: u8, index: usize| FanReading {
+        let read = |period: u16, duty: u8, temp: Option<u8>, index: usize| FanReading {
             period_raw: period,
             rpm: period_raw_to_rpm(period),
             duty,
-            temp_raw: temp,
+            temp_c: temp,
             available: present(index),
         };
         Self {
-            cpu: read(status.cpu_rpm, status.cpu_duty, status.cpu_temp_raw, 1),
-            gpu1: read(status.gpu1_rpm, status.gpu1_duty, status.gpu1_temp_raw, 2),
-            gpu2: read(status.gpu2_rpm, status.gpu2_duty, status.gpu2_temp_raw, 3),
+            cpu: read(
+                status.cpu_period,
+                status.cpu_duty,
+                status.cpu_temp_c,
+                1,
+            ),
+            gpu1: read(
+                status.gpu1_period,
+                status.gpu1_duty,
+                status.gpu1_temp_c,
+                2,
+            ),
+            gpu2: read(
+                status.gpu2_period,
+                status.gpu2_duty,
+                status.gpu2_temp_c,
+                3,
+            ),
             freshness: Freshness::Fresh,
         }
     }
@@ -168,15 +183,15 @@ mod tests {
 
     fn status() -> FanStatus {
         FanStatus {
-            cpu_rpm: 452,
-            gpu1_rpm: 0,
-            gpu2_rpm: 0,
+            cpu_period: 452,
+            gpu1_period: 0,
+            gpu2_period: 0,
             cpu_duty: 63,
-            cpu_temp_raw: 37,
             gpu1_duty: 0,
-            gpu1_temp_raw: 33,
             gpu2_duty: 0,
-            gpu2_temp_raw: 0,
+            cpu_temp_c: Some(37),
+            gpu1_temp_c: Some(33),
+            gpu2_temp_c: None,
         }
     }
 

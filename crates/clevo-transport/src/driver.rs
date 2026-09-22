@@ -12,11 +12,13 @@
 //! |---|---|
 //! | `12` fan status | hwmon `fan1_input`, `fan2_input` |
 //! | `13` fan curve  | sysfs `fan_curve` |
+//! | `14` fan curve write | sysfs `fan_curve` |
 //! | `121/1` fan mode | sysfs `fan_mode` |
 //! | `121/25` perf mode | sysfs `perf_mode` |
 //!
-//! Only the values the driver actually reports are filled in; unverified fields
-//! (duty, raw temperature) are left at zero rather than invented.
+//! Only the values the driver actually reports are filled in; temperature and
+//! duty fields are left at zero (which the parser surfaces as "not reported")
+//! rather than invented.
 
 use crate::error::{TransportError, TransportResult};
 use crate::{Transport, TransportKind, PAYLOAD_BYTES};
@@ -96,9 +98,13 @@ impl DriverTransport {
     /// Build a synthetic command `12` reply from hwmon.
     ///
     /// The DCHU reply carries a rotation *period*, and `clevo-proto` converts it
-    /// back to rpm with `period = 2_156_250 / rpm`. hwmon already reports rpm,
-    /// so we invert that formula here; writing the rpm directly into the period
-    /// field would apply the conversion twice and under-report the speed.
+    /// back to rpm with `period = RPM_PERIOD_SCALE / rpm`. hwmon already reports
+    /// rpm, so we invert that formula here; writing the rpm directly into the
+    /// period field would apply the conversion twice and under-report the speed.
+    ///
+    /// hwmon does not expose fan duty or temperatures, so those bytes stay zero.
+    /// `parse_fan_status` reads a zero temperature as "not reported", so the UI
+    /// shows no temperature rather than a false 0 °C.
     fn fan_status_reply(&self) -> TransportResult<Vec<u8>> {
         let cpu_rpm = self.read_rpm("fan1_input")?;
         let gpu_rpm = self.read_rpm("fan2_input").unwrap_or(0);
@@ -106,6 +112,17 @@ impl DriverTransport {
         payload[2..4].copy_from_slice(&rpm_to_period(cpu_rpm).to_be_bytes());
         payload[4..6].copy_from_slice(&rpm_to_period(gpu_rpm).to_be_bytes());
         Ok(wrap_payload(&payload))
+    }
+
+    /// Write a command `14` payload to the sysfs `fan_curve` attribute.
+    ///
+    /// Decodes the on-wire layout the protocol layer produced and emits the
+    /// driver's textual form (the inverse of [`Self::fan_curve_reply`]) so the
+    /// driver can hand it to the EC unchanged.
+    fn write_fan_curve(&self, payload: &[u8; PAYLOAD_BYTES]) -> TransportResult<Vec<u8>> {
+        let text = decode_curve_for_driver(payload)?;
+        self.write_attr("fan_curve", text.trim_end())?;
+        Ok(wrap_integer(14))
     }
 
     /// Build a synthetic command `13` reply from the sysfs curve file.
@@ -171,6 +188,38 @@ impl DriverTransport {
     }
 }
 
+/// Decode a command `14` payload into the driver's `fan_curve` text form.
+///
+/// The on-wire payload only carries points 2 and 3 (`T1`/`D1` and `T4`/`D4` are
+/// not sent by the Windows stack, and the EC keeps its own first and last
+/// points), so the text form reports the two points it can honestly describe.
+/// Slopes are not needed by the driver: it recomputes nothing and passes the
+/// points through.
+pub fn decode_curve_for_driver(payload: &[u8; PAYLOAD_BYTES]) -> Result<String, TransportError> {
+    let mut out = String::from("fan_count=3\n");
+    for (fan, base) in [("cpu", 2usize), ("gpu1", 6), ("gpu2", 10)] {
+        let t2 = payload[base];
+        let d2 = payload[base + 1];
+        let t3 = payload[base + 2];
+        let d3 = payload[base + 3];
+        if t2 == 0 && t3 == 0 {
+            // An untouched fan: keep it out of the write so the EC retains its
+            // own curve for that channel.
+            out.push_str(&format!("{fan}: 0,0 0,0 0,0 0,0\n"));
+            continue;
+        }
+        if t3 <= t2 {
+            return Err(TransportError::MalformedResponse(format!(
+                "{fan}: curve write has non-increasing temperatures T2={t2} T3={t3}"
+            )));
+        }
+        out.push_str(&format!(
+            "{fan}: 0,0 {t2},{d2} {t3},{d3} 0,0\n"
+        ));
+    }
+    Ok(out)
+}
+
 /// Convert an rpm value from hwmon into the rotation period the DCHU reply is
 /// expected to carry.
 ///
@@ -178,11 +227,7 @@ impl DriverTransport {
 /// so the inverse is `period = 2_156_250 / rpm`. rpm 0 (stopped) maps to 0, which
 /// the parser also treats as 0.
 pub fn rpm_to_period(rpm: u32) -> u16 {
-    if rpm == 0 {
-        return 0;
-    }
-    let period = 2_156_250u32 / rpm;
-    period.min(u16::MAX as u32) as u16
+    clevo_proto::fan_status::rpm_to_period_raw(rpm)
 }
 
 /// Map a `121/1` value to the name the driver's `fan_mode` accepts.
@@ -238,6 +283,7 @@ impl Transport for DriverTransport {
         match command {
             12 => self.fan_status_reply(),
             13 => self.fan_curve_reply(),
+            14 => self.write_fan_curve(payload),
             121 => self.main_command(payload),
             other => Err(TransportError::Unsupported(format!(
                 "command {other} is not supported by the driver transport"
@@ -353,6 +399,72 @@ mod tests {
     }
 
     #[test]
+    fn rejects_unsupported_commands() {
+        let fake = FakeSysfs::new("unsupported");
+        let t = fake.transport();
+        assert!(matches!(
+            t.execute(99, &empty_payload()),
+            Err(TransportError::Unsupported(_))
+        ));
+    }
+
+    #[test]
+    fn writes_curve_to_sysfs() {
+        use clevo_proto::fan_curve::{encode_curve, FanCurve, FanPoint};
+
+        let fake = FakeSysfs::new("curvewrite");
+        let t = fake.transport();
+        let point = |temp, duty_pct| FanPoint { temp, duty_pct };
+        let curve = FanCurve {
+            cpu: [
+                point(40, 20),
+                point(55, 40),
+                point(75, 70),
+                point(95, 100),
+            ],
+            gpu1: [
+                point(45, 25),
+                point(60, 45),
+                point(80, 75),
+                point(99, 100),
+            ],
+            gpu2: [point(0, 0); 4],
+        };
+        let payload = encode_curve(&curve).unwrap();
+        let reply = t.execute(14, &payload).unwrap();
+        assert_eq!(response_integer(&reply).unwrap(), 14);
+
+        let written = std::fs::read_to_string(fake.root.join("fan_curve")).unwrap();
+        // Points 2 and 3 are surfaced; the write carries raw duty bytes.
+        assert!(written.contains("cpu: 0,0 55,"), "written: {written}");
+        assert!(written.contains("75,"), "written: {written}");
+        assert!(written.contains("gpu1: 0,0 60,"), "written: {written}");
+    }
+
+    #[test]
+    fn curve_write_rejects_non_increasing_temperatures() {
+        use clevo_proto::fan_curve::{encode_curve, FanCurve, FanPoint};
+
+        let fake = FakeSysfs::new("curvebad");
+        let t = fake.transport();
+        let point = |temp, duty_pct| FanPoint { temp, duty_pct };
+        // encode_curve validates, so build the payload by hand to reach the
+        // driver's own guard.
+        let mut payload = encode_curve(&FanCurve {
+            cpu: [point(40, 20), point(55, 40), point(75, 70), point(95, 100)],
+            gpu1: [point(45, 25), point(60, 45), point(80, 75), point(99, 100)],
+            gpu2: [point(0, 0); 4],
+        })
+        .unwrap();
+        // Force T3 <= T2 for the CPU channel.
+        payload[4] = payload[2];
+        assert!(matches!(
+            t.execute(14, &payload).unwrap_err(),
+            TransportError::MalformedResponse(_)
+        ));
+    }
+
+    #[test]
     fn reads_fan_status_from_hwmon() {
         use clevo_proto::fan_status::period_raw_to_rpm;
 
@@ -364,10 +476,13 @@ mod tests {
         // The reply carries a period; converting it back must recover the rpm
         // hwmon reported (3718 and 1788) within the granularity of the 16-bit
         // period field, not a double-converted value.
-        let cpu = period_raw_to_rpm(status.cpu_rpm);
-        let gpu = period_raw_to_rpm(status.gpu1_rpm);
+        let cpu = status.cpu_rpm();
+        let gpu = status.gpu1_rpm();
         assert!((cpu as i64 - 3718).abs() < 50, "cpu back = {cpu}");
         assert!((gpu as i64 - 1788).abs() < 50, "gpu back = {gpu}");
+        assert_eq!(period_raw_to_rpm(status.cpu_period), cpu);
+        // hwmon has no temperature source, so the driver reports none.
+        assert_eq!(status.cpu_temp_c, None);
     }
 
     #[test]
@@ -387,7 +502,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn reads_curve_from_sysfs() {
         let fake = FakeSysfs::new("curve");
@@ -442,13 +556,19 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unsupported_commands() {
-        let fake = FakeSysfs::new("unsupported");
+    fn curve_write_is_now_supported() {
+        use clevo_proto::fan_curve::{encode_curve, FanCurve, FanPoint};
+
+        let fake = FakeSysfs::new("curveok");
         let t = fake.transport();
-        assert!(matches!(
-            t.execute(14, &empty_payload()),
-            Err(TransportError::Unsupported(_))
-        ));
+        let point = |temp, duty_pct| FanPoint { temp, duty_pct };
+        let curve = FanCurve {
+            cpu: [point(40, 20), point(55, 40), point(75, 70), point(95, 100)],
+            gpu1: [point(45, 25), point(60, 45), point(80, 75), point(99, 100)],
+            gpu2: [point(0, 0); 4],
+        };
+        let payload = encode_curve(&curve).unwrap();
+        assert!(t.execute(14, &payload).is_ok());
     }
 
     #[test]

@@ -5,12 +5,13 @@ use std::io::{self, Write};
 
 use clevo_proto::capability::{parse_capabilities, Page7Version};
 use clevo_proto::command::{
-    CMD_FAN_CURVE_READ, CMD_FAN_STATUS, CMD_MAIN, SUB_FAN_MODE, SUB_POWER_MODE,
+    CMD_FAN_CURVE_READ, CMD_FAN_CURVE_WRITE, CMD_FAN_STATUS, CMD_MAIN, SUB_FAN_MODE,
+    SUB_POWER_MODE,
 };
 use clevo_proto::constants::PAYLOAD_LEN;
-use clevo_proto::fan_curve::parse_curve;
+use clevo_proto::fan_curve::{encode_curve, parse_curve, FanCurve, FanPoint};
 use clevo_proto::fan_status::parse_fan_status;
-use clevo_proto::message::{build_subcommand_payload, empty_payload};
+use clevo_proto::message::{build_subcommand_payload, empty_payload, payload_from_slice};
 use clevo_proto::response::response_first_record;
 use clevo_transport::Transport;
 
@@ -21,6 +22,8 @@ use crate::{CliError, FanCommand, ProfileCommand};
 pub const FAN_MODE_AUTO: u8 = 0;
 /// Fan mode `121/1` value for quiet / slow operation.
 pub const FAN_MODE_QUIET: u8 = 8;
+/// Fan mode `121/1` value selecting the curve written by command `14`.
+pub const FAN_MODE_CUSTOM: u8 = 6;
 
 /// Read the fan status package (command `12`).
 pub fn read_fan_status(transport: &dyn Transport) -> Result<clevo_proto::FanStatus, CliError> {
@@ -66,20 +69,19 @@ pub fn run_fan(
             let snapshot = read_fan_snapshot(transport)?;
             for (name, reading) in snapshot.readings() {
                 if reading.available {
+                    let temp = match reading.temp_c {
+                        Some(t) => format!("{t}C"),
+                        None => "n/a".to_string(),
+                    };
                     writeln!(
                         out,
-                        "{name:<4} rpm={:<5} period_raw={:<5} duty(unv)={:<4} temp_raw(unv)={}",
-                        reading.rpm, reading.period_raw, reading.duty, reading.temp_raw
+                        "{name:<4} rpm={:<5} period_raw={:<5} duty={:<4}% temp={}",
+                        reading.rpm, reading.period_raw, reading.duty_pct, temp
                     )?;
                 } else {
                     writeln!(out, "{name:<4} n/a (channel not present)")?;
                 }
             }
-            writeln!(
-                out,
-                "note: duty/temp offsets are inherited from the reference and are \
-                 not verified on this firmware"
-            )?;
             Ok(())
         }
         FanCommand::Curve => {
@@ -104,20 +106,171 @@ pub fn run_fan(
             let value = match mode.as_str() {
                 "auto" => FAN_MODE_AUTO,
                 "quiet" => FAN_MODE_QUIET,
+                "maxq" => 5,
+                "max" => 1,
+                "custom" => FAN_MODE_CUSTOM,
                 other => {
                     return Err(CliError::Invalid(format!(
-                        "unknown fan mode {other:?}; expected 'auto' or 'quiet'"
+                        "unknown fan mode {other:?}; expected auto, quiet, maxq, max or custom"
                     )))
                 }
             };
             set_axis(transport, SUB_FAN_MODE, value, *apply, out, "fan mode")
         }
+        FanCommand::SetCurve {
+            cpu,
+            gpu1,
+            gpu2,
+            apply,
+        } => run_set_curve(transport, cpu, gpu1.as_deref(), gpu2.as_deref(), *apply, out),
         FanCommand::Watch {
             interval_ms,
             count,
             json,
         } => run_fan_watch(transport, *interval_ms, *count, *json, out),
     }
+}
+
+/// Parse a `temp,duty` point list into a four-point curve.
+///
+/// Exactly four pairs are required; temperatures must strictly increase and
+/// duty must be `0..=100`. Validation happens here as well as in
+/// `clevo_proto::fan_curve::encode_curve` so the CLI can print a precise
+/// message about which point was wrong.
+pub fn parse_curve_arg(text: &str) -> Result<[FanPoint; 4], CliError> {
+    let mut points = [FanPoint {
+        temp: 0,
+        duty_pct: 0,
+    }; 4];
+    let entries: Vec<&str> = text.split_whitespace().collect();
+    if entries.len() != 4 {
+        return Err(CliError::Invalid(format!(
+            "expected 4 `temp,duty` points, got {} in {text:?}",
+            entries.len()
+        )));
+    }
+    for (i, entry) in entries.iter().enumerate() {
+        let (temp, duty) = entry.split_once(',').ok_or_else(|| {
+            CliError::Invalid(format!("point {i} {entry:?} is not `temp,duty`"))
+        })?;
+        let temp: u8 = temp
+            .trim()
+            .parse()
+            .map_err(|e| CliError::Invalid(format!("point {i} temperature {temp:?}: {e}")))?;
+        let duty: u8 = duty
+            .trim()
+            .parse()
+            .map_err(|e| CliError::Invalid(format!("point {i} duty {duty:?}: {e}")))?;
+        if duty > 100 {
+            return Err(CliError::Invalid(format!(
+                "point {i} duty {duty}% exceeds 100%"
+            )));
+        }
+        points[i] = FanPoint {
+            temp,
+            duty_pct: duty,
+        };
+    }
+    for i in 0..3 {
+        if points[i + 1].temp <= points[i].temp {
+            return Err(CliError::Invalid(format!(
+                "temperatures must strictly increase: T{}={} >= T{}={}",
+                i + 1,
+                points[i].temp,
+                i + 2,
+                points[i + 1].temp
+            )));
+        }
+    }
+    Ok(points)
+}
+
+/// Build a [`FanCurve`] from the three per-fan point lists.
+pub fn curve_from_args(
+    cpu: &str,
+    gpu1: Option<&str>,
+    gpu2: Option<&str>,
+) -> Result<FanCurve, CliError> {
+    let cpu = parse_curve_arg(cpu)?;
+    // Most machines share the CPU and GPU1 curve shape; defaulting to the CPU
+    // curve matches what the Control Center does when a user only edits one.
+    let gpu1 = match gpu1 {
+        Some(text) => parse_curve_arg(text)?,
+        None => cpu,
+    };
+    let gpu2 = match gpu2 {
+        Some(text) => parse_curve_arg(text)?,
+        None => [FanPoint {
+            temp: 0,
+            duty_pct: 0,
+        }; 4],
+    };
+    Ok(FanCurve { cpu, gpu1, gpu2 })
+}
+
+/// Encode a curve to the daemon's JSON wire format.
+pub fn curve_to_json(curve: &FanCurve) -> String {
+    let points = |points: &[FanPoint; 4]| {
+        points
+            .iter()
+            .map(|p| format!("[{},{}]", p.temp, p.duty_pct))
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    format!(
+        "{{\"cpu\":[{}],\"gpu1\":[{}],\"gpu2\":[{}]}}",
+        points(&curve.cpu),
+        points(&curve.gpu1),
+        points(&curve.gpu2)
+    )
+}
+
+/// Write a custom fan curve, or print what would be written.
+fn run_set_curve(
+    transport: &dyn Transport,
+    cpu: &str,
+    gpu1: Option<&str>,
+    gpu2: Option<&str>,
+    apply: bool,
+    out: &mut dyn Write,
+) -> Result<(), CliError> {
+    let curve = curve_from_args(cpu, gpu1, gpu2)?;
+    let payload = encode_curve(&curve)?;
+
+    if !apply {
+        writeln!(out, "dry run: would write fan curve (command 14) and set custom mode")?;
+        for (name, points) in [
+            ("cpu", &curve.cpu),
+            ("gpu1", &curve.gpu1),
+            ("gpu2", &curve.gpu2),
+        ] {
+            write!(out, "{name:<4}:")?;
+            for point in points {
+                write!(out, " ({}C,{}%)", point.temp, point.duty_pct)?;
+            }
+            writeln!(out)?;
+        }
+        writeln!(
+            out,
+            "payload: [2]={} [3]={} [4]={} [5]={}",
+            payload[2], payload[3], payload[4], payload[5]
+        )?;
+        writeln!(out, "pass --apply to execute")?;
+        return Ok(());
+    }
+
+    if !transport.writable() {
+        return Err(CliError::Transport(
+            clevo_transport::TransportError::NotVerified("fan curve write".into()),
+        ));
+    }
+
+    transport.execute(CMD_FAN_CURVE_WRITE.get(), &payload_from_slice(&payload)?)?;
+    // Selecting `custom` is what makes the firmware use the new table.
+    let mode = build_subcommand_payload(u32::from(FAN_MODE_CUSTOM), SUB_FAN_MODE);
+    transport.execute(CMD_MAIN.get(), &mode)?;
+    writeln!(out, "wrote fan curve and set fan mode to custom")?;
+    Ok(())
 }
 
 /// Continuously print fan status until `count` samples are emitted (`0` = run
@@ -335,6 +488,26 @@ fn run_fan_dbus(
             writeln!(out, "set fan mode {mode:?} (121/1 = {value})")?;
             Ok(())
         }
+        FanCommand::SetCurve {
+            cpu,
+            gpu1,
+            gpu2,
+            apply,
+        } => {
+            let curve = curve_from_args(cpu, gpu1.as_deref(), gpu2.as_deref())?;
+            if !*apply {
+                writeln!(
+                    out,
+                    "dry run: would write fan curve and set custom mode via the daemon"
+                )?;
+                writeln!(out, "{}", curve_to_json(&curve))?;
+                writeln!(out, "pass --apply to execute")?;
+                return Ok(());
+            }
+            client.set_curve(&curve_to_json(&curve))?;
+            writeln!(out, "wrote fan curve and set fan mode to custom")?;
+            Ok(())
+        }
     }
 }
 
@@ -388,16 +561,27 @@ fn print_dbus_status(
     out: &mut dyn Write,
 ) -> Result<(), CliError> {
     let status = client.status()?;
+    let temp = |c: u8| {
+        if c == 0 {
+            "n/a".to_string()
+        } else {
+            format!("{c}C")
+        }
+    };
     writeln!(
         out,
-        "CPU  rpm={:<5} duty(unv)={:<4} temp_raw(unv)={}",
-        status.cpu_rpm, status.cpu_duty, status.cpu_temp_raw
+        "CPU  rpm={:<5} duty={:<4}% temp={}",
+        status.cpu_rpm,
+        crate::duty_pct(status.cpu_duty),
+        temp(status.cpu_temp_c)
     )?;
     if status.fan_count == 0 || status.fan_count >= 2 {
         writeln!(
             out,
-            "GPU1 rpm={:<5} duty(unv)={:<4} temp_raw(unv)={}",
-            status.gpu_rpm, status.gpu_duty, status.gpu_temp_raw
+            "GPU1 rpm={:<5} duty={:<4}% temp={}",
+            status.gpu_rpm,
+            crate::duty_pct(status.gpu_duty),
+            temp(status.gpu_temp_c)
         )?;
     } else {
         writeln!(out, "GPU1 n/a (channel not present)")?;
@@ -410,27 +594,32 @@ fn print_dbus_status(
         "freshness: {}  fan_mode: {}  perf_mode: {}",
         status.freshness, status.fan_mode, status.perf_mode
     )?;
-    writeln!(
-        out,
-        "note: duty/temp offsets are unverified on this firmware"
-    )?;
     Ok(())
 }
 
 fn dbus_json(status: &crate::dbus::DbusStatus) -> String {
+    let temp = |c: u8| {
+        if c == 0 {
+            "null".to_string()
+        } else {
+            c.to_string()
+        }
+    };
     let gpu1 = if status.fan_count == 0 || status.fan_count >= 2 {
         format!(
-            "{{\"rpm\":{},\"duty\":{},\"temp_raw\":{}}}",
-            status.gpu_rpm, status.gpu_duty, status.gpu_temp_raw
+            "{{\"rpm\":{},\"duty_pct\":{},\"temp_c\":{}}}",
+            status.gpu_rpm,
+            crate::duty_pct(status.gpu_duty),
+            temp(status.gpu_temp_c)
         )
     } else {
         "null".to_string()
     };
     format!(
-        "{{\"cpu\":{{\"rpm\":{},\"duty\":{},\"temp_raw\":{}}},\"gpu1\":{},\"freshness\":\"{}\",\"fan_mode\":{},\"perf_mode\":{}}}",
+        "{{\"cpu\":{{\"rpm\":{},\"duty_pct\":{},\"temp_c\":{}}},\"gpu1\":{},\"freshness\":\"{}\",\"fan_mode\":{},\"perf_mode\":{}}}",
         status.cpu_rpm,
-        status.cpu_duty,
-        status.cpu_temp_raw,
+        crate::duty_pct(status.cpu_duty),
+        temp(status.cpu_temp_c),
         gpu1,
         status.freshness,
         status.fan_mode,

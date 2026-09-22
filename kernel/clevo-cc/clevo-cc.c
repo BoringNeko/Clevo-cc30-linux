@@ -24,9 +24,16 @@
 #define CLEVO_DSM_GUID "93F224E4-FBDC-4BBF-ADD6-DB71BDC0AFAD"
 #define CLEVO_PAYLOAD_LEN 256
 
+/*
+ * Shortest command-12 reply that carries the verified fields: the temperature
+ * triple ends at offset 21. The live firmware answers with 42 bytes.
+ */
+#define CLEVO_FAN_STATUS_MIN_LEN 22
+
 /* Command numbers (verified; see clevo-proto). */
 #define CLEVO_CMD_FAN_STATUS 12
 #define CLEVO_CMD_FAN_CURVE 13
+#define CLEVO_CMD_FAN_CURVE_WRITE 14
 #define CLEVO_CMD_MAIN 121
 
 /* CLEVO_CMD_MAIN sub-command for fan mode. */
@@ -46,6 +53,7 @@
 #define CLEVO_FAN_MODE_AUTO 0
 #define CLEVO_FAN_MODE_MAXIMUM 1
 #define CLEVO_FAN_MODE_MAXQ 5
+#define CLEVO_FAN_MODE_CUSTOM 6
 #define CLEVO_FAN_MODE_QUIET 8
 
 /* Driver-visible fan modes. */
@@ -54,6 +62,7 @@ enum clevo_fan_mode {
 	CLEVO_MODE_QUIET,
 	CLEVO_MODE_MAX,
 	CLEVO_MODE_MAXQ,
+	CLEVO_MODE_CUSTOM,
 };
 
 /* Driver-visible performance modes (DCHU 121/25 values). */
@@ -153,8 +162,21 @@ out:
 }
 
 /* Build Arg3 as Package { Buffer(256) }, for read commands (class PK*). */
+static int clevo_cc_dsm_payload(struct clevo_cc *cc, u32 function, const u8 *in,
+				u8 *out, size_t out_cap, size_t *out_len);
+
 static int clevo_cc_dsm_buffer(struct clevo_cc *cc, u32 function, u8 *out,
 			       size_t out_cap, size_t *out_len)
+{
+	return clevo_cc_dsm_payload(cc, function, NULL, out, out_cap, out_len);
+}
+
+/*
+ * Like clevo_cc_dsm_buffer, but sends `in` (256 bytes) as the payload instead
+ * of zeros. Used by command 14, which carries the curve in the buffer.
+ */
+static int clevo_cc_dsm_payload(struct clevo_cc *cc, u32 function, const u8 *in,
+				u8 *out, size_t out_cap, size_t *out_len)
 {
 	union acpi_object pkg;
 	u8 *payload;
@@ -163,6 +185,8 @@ static int clevo_cc_dsm_buffer(struct clevo_cc *cc, u32 function, u8 *out,
 	payload = kzalloc(CLEVO_PAYLOAD_LEN, GFP_KERNEL);
 	if (!payload)
 		return -ENOMEM;
+	if (in)
+		memcpy(payload, in, CLEVO_PAYLOAD_LEN);
 
 	pkg.type = ACPI_TYPE_PACKAGE;
 	pkg.package.count = 1;
@@ -259,7 +283,16 @@ static const char *clevo_cc_perf_name(enum clevo_perf_mode mode)
 	}
 }
 
-static int clevo_cc_read_fan(struct clevo_cc *cc, u32 *cpu_rpm, u32 *gpu_rpm)
+/*
+ * Read fan speeds (command 12).
+ *
+ * The reply carries a rotation period for each fan; rpm is derived with the
+ * Control Center formula `2156250 / period`. RGB temperatures are returned in
+ * `temps` when non-NULL (entry `i` is 0 when the EC reports nothing for that
+ * channel).
+ */
+static int clevo_cc_read_fan(struct clevo_cc *cc, u32 *cpu_rpm, u32 *gpu_rpm,
+			     u8 *temps)
 {
 	u8 payload[CLEVO_PAYLOAD_LEN];
 	size_t len = 0;
@@ -271,7 +304,7 @@ static int clevo_cc_read_fan(struct clevo_cc *cc, u32 *cpu_rpm, u32 *gpu_rpm)
 	if (err)
 		return err;
 
-	if (len < 8)
+	if (len < CLEVO_FAN_STATUS_MIN_LEN)
 		return -EPROTO;
 
 	/* Command 12 stores the rotation period, big-endian. */
@@ -281,6 +314,17 @@ static int clevo_cc_read_fan(struct clevo_cc *cc, u32 *cpu_rpm, u32 *gpu_rpm)
 	/* rpm = 60 / (5.565217391304348e-05 * period) * 2 = 2156250 / period */
 	*cpu_rpm = cpu_period ? DIV_ROUND_CLOSEST(2156250, cpu_period) : 0;
 	*gpu_rpm = gpu_period ? DIV_ROUND_CLOSEST(2156250, gpu_period) : 0;
+
+	if (temps) {
+		/*
+		 * Verified layout: duty triple at [16..18], then the temperature
+		 * triple at [19..21], in degrees Celsius. 0 means "not
+		 * reported".
+		 */
+		temps[0] = payload[19];
+		temps[1] = payload[20];
+		temps[2] = payload[21];
+	}
 	return 0;
 }
 
@@ -300,14 +344,43 @@ static int clevo_cc_read_curve(struct clevo_cc *cc, u8 *out, size_t out_cap,
 static umode_t clevo_cc_is_visible(const void *data, enum hwmon_sensor_types type,
 				   u32 attr, int channel)
 {
-	if (type != hwmon_fan)
-		return 0;
-	switch (attr) {
-	case hwmon_fan_input:
-		return 0444;
+	switch (type) {
+	case hwmon_fan:
+		return attr == hwmon_fan_input ? 0444 : 0;
+	case hwmon_temp:
+		return attr == hwmon_temp_input ? 0444 : 0;
 	default:
 		return 0;
 	}
+}
+
+/*
+ * hwmon temperature inputs. Channel 1 is the CPU, channel 2 the GPU.
+ * A temperature of 0 means the EC reported nothing, which maps to -ENODATA so
+ * the reading is absent rather than a plausible-looking 0 °C.
+ */
+static int clevo_cc_read_temp(struct device *dev, u32 attr, int channel,
+			      long *val)
+{
+	struct clevo_cc *cc = dev_get_drvdata(dev);
+	u8 temps[3] = { 0 };
+	u32 cpu_rpm, gpu_rpm;
+	int err;
+
+	if (attr != hwmon_temp_input)
+		return -EOPNOTSUPP;
+	if (channel < 0 || channel > 1)
+		return -EOPNOTSUPP;
+
+	err = clevo_cc_read_fan(cc, &cpu_rpm, &gpu_rpm, temps);
+	if (err)
+		return err;
+
+	if (temps[channel] == 0)
+		return -ENODATA;
+
+	*val = (long)temps[channel] * 1000; /* hwmon wants millidegrees */
+	return 0;
 }
 
 static int clevo_cc_read(struct device *dev, enum hwmon_sensor_types type,
@@ -317,10 +390,13 @@ static int clevo_cc_read(struct device *dev, enum hwmon_sensor_types type,
 	u32 cpu_rpm, gpu_rpm;
 	int err;
 
+	if (type == hwmon_temp)
+		return clevo_cc_read_temp(dev, attr, channel, val);
+
 	if (type != hwmon_fan || attr != hwmon_fan_input)
 		return -EOPNOTSUPP;
 
-	err = clevo_cc_read_fan(cc, &cpu_rpm, &gpu_rpm);
+	err = clevo_cc_read_fan(cc, &cpu_rpm, &gpu_rpm, NULL);
 	if (err)
 		return err;
 
@@ -339,6 +415,7 @@ static int clevo_cc_read(struct device *dev, enum hwmon_sensor_types type,
 
 static const struct hwmon_channel_info *clevo_cc_info[] = {
 	HWMON_CHANNEL_INFO(fan, HWMON_F_INPUT, HWMON_F_INPUT),
+	HWMON_CHANNEL_INFO(temp, HWMON_T_INPUT, HWMON_T_INPUT),
 	NULL
 };
 
@@ -372,6 +449,8 @@ static const char *clevo_cc_mode_name(enum clevo_fan_mode mode)
 		return "max";
 	case CLEVO_MODE_MAXQ:
 		return "maxq";
+	case CLEVO_MODE_CUSTOM:
+		return "custom";
 	default:
 		return "auto";
 	}
@@ -405,6 +484,13 @@ static ssize_t fan_mode_store(struct device *dev, struct device_attribute *attr,
 	} else if (sysfs_streq(buf, "maxq")) {
 		mode = CLEVO_MODE_MAXQ;
 		value = CLEVO_FAN_MODE_MAXQ;
+	} else if (sysfs_streq(buf, "custom")) {
+		/*
+		 * Selecting "custom" only makes the firmware use the curve
+		 * stored in the EC; write one through `fan_curve` first.
+		 */
+		mode = CLEVO_MODE_CUSTOM;
+		value = CLEVO_FAN_MODE_CUSTOM;
 	} else {
 		return -EINVAL;
 	}
@@ -419,11 +505,22 @@ static ssize_t fan_mode_store(struct device *dev, struct device_attribute *attr,
 static DEVICE_ATTR_RW(fan_mode);
 
 /*
- * sysfs: fan_curve (read-only, placeholder for the custom-curve interface)
+ * sysfs: fan_curve
  *
- * Reports the current curve so the future graphical editor has a data source.
- * Format: "fan_count=<n> kb_type=<k> cpu:T1,D1,T2,D2,T3,D3,T4,D4 ..." with D
- * as raw 0..255. Writing a curve is intentionally not supported yet.
+ * Reports the current curve and accepts a new one.
+ *
+ * Read format: "fan_count=<n> kb_type=<k> cpu:T1,D1,... gpu1:... gpu2:..." with
+ * D as raw 0..255.
+ *
+ * Write format: the same per-fan point lists, e.g.
+ *
+ *   echo "cpu: 0,0 55,102 75,178 0,0" > fan_curve
+ *
+ * Only points 2 and 3 are sent to the EC (command 14), matching the Windows
+ * stack: T1/D1 and T4/D4 are not part of the write payload. A fan list whose
+ * temperatures are all zero is skipped, so a two-fan machine never has to
+ * invent points for a fan it does not have. Writing does *not* select "custom";
+ * echo custom > fan_mode does that.
  */
 static ssize_t fan_curve_show(struct device *dev, struct device_attribute *attr,
 			      char *buf)
@@ -452,7 +549,145 @@ static ssize_t fan_curve_show(struct device *dev, struct device_attribute *attr,
 	}
 	return n;
 }
-static DEVICE_ATTR_RO(fan_curve);
+
+/*
+ * Parse one fan's point list ("T,D T,D T,D T,D") into `out`, returning the
+ * number of points read. Accepts the four-point form the read side emits; only
+ * points 2 and 3 are used by the write payload.
+ */
+static int clevo_cc_parse_points(const char *text, u8 temps[4], u8 duties[4])
+{
+	const char *p = text;
+	int count = 0;
+
+	while (count < 4) {
+		unsigned int t, d;
+		int consumed = 0;
+
+		/* Skip separators. */
+		while (*p == ' ' || *p == '\t' || *p == ',')
+			p++;
+		if (*p == '\0' || *p == '\n')
+			break;
+		if (sscanf(p, "%u,%u%n", &t, &d, &consumed) != 2)
+			return -EINVAL;
+		if (t > 255 || d > 255)
+			return -EINVAL;
+		temps[count] = (u8)t;
+		duties[count] = (u8)d;
+		count++;
+		p += consumed;
+	}
+	return count;
+}
+
+static ssize_t fan_curve_store(struct device *dev, struct device_attribute *attr,
+			       const char *buf, size_t count)
+{
+	struct clevo_cc *cc = dev_get_drvdata(dev);
+	u8 payload[CLEVO_PAYLOAD_LEN] = { 0 };
+	char *copy, *line;
+	int err = 0;
+
+	copy = kstrdup(buf, GFP_KERNEL);
+	if (!copy)
+		return -ENOMEM;
+
+	for (line = strsep(&copy, "\n"); line; line = strsep(&copy, "\n")) {
+		u8 temps[4] = { 0 }, duties[4] = { 0 };
+		const char *sep;
+		int base, slope_base, n, i;
+
+		/* Strip leading whitespace. */
+		while (*line == ' ' || *line == '\t')
+			line++;
+		if (*line == '\0')
+			continue;
+
+		sep = strchr(line, ':');
+		if (!sep) {
+			err = -EINVAL;
+			break;
+		}
+		if (!strncmp(line, "cpu", 3)) {
+			base = 2; /* payload offset of F1T2 */
+			slope_base = 14;
+		} else if (!strncmp(line, "gpu1", 4)) {
+			base = 6;
+			slope_base = 20;
+		} else if (!strncmp(line, "gpu2", 4)) {
+			base = 10;
+			slope_base = 26;
+		} else if (!strncmp(line, "fan_count", 9) ||
+			 !strncmp(line, "kb_type", 7)) {
+			continue; /* informational lines from the read side */
+		} else {
+			err = -EINVAL;
+			break;
+		}
+
+		n = clevo_cc_parse_points(sep + 1, temps, duties);
+		if (n != 4) {
+			err = -EINVAL;
+			break;
+		}
+
+		/* A wholly zero fan means "leave this channel alone". */
+		if (!temps[0] && !temps[1] && !temps[2] && !temps[3] &&
+		    !duties[0] && !duties[1] && !duties[2] && !duties[3])
+			continue;
+		if (temps[2] <= temps[1]) {
+			err = -EINVAL;
+			break;
+		}
+
+		payload[base] = temps[1];
+		payload[base + 1] = duties[1];
+		payload[base + 2] = temps[2];
+		payload[base + 3] = duties[2];
+
+		/*
+		 * Slopes in raw-duty units scaled by 16, big-endian:
+		 *   round((raw(D(n+1)) - raw(Dn)) / (T(n+1) - Tn) * 16)
+		 * with raw(p) = p * 255 / 100. Computed with the *sent* duty
+		 * bytes so the firmware and the driver agree on the value.
+		 */
+		for (i = 0; i < 3; i++) {
+			int dt = (int)temps[i + 1] - (int)temps[i];
+			int dd = (int)duties[i + 1] - (int)duties[i];
+			long slope;
+			int off = slope_base + i * 2;
+
+			if (dt <= 0) {
+				err = -EINVAL;
+				goto out;
+			}
+			slope = DIV_ROUND_CLOSEST((long)dd * 16, dt);
+			slope = clamp_t(long, slope, 0, 0xFFFF);
+			payload[off] = (u8)(slope >> 8);
+			payload[off + 1] = (u8)(slope & 0xFF);
+		}
+	}
+	/* Fall through to `out` with the parse error, if any. */
+out:
+	kfree(copy);
+	if (err)
+		return err;
+
+	{
+		u8 reply[CLEVO_PAYLOAD_LEN];
+		size_t reply_len = 0;
+
+		err = clevo_cc_dsm_payload(cc, CLEVO_CMD_FAN_CURVE_WRITE,
+					   payload, reply, sizeof(reply),
+					   &reply_len);
+	}
+	if (err)
+		return err;
+
+	return count;
+}
+static DEVICE_ATTR_RW(fan_curve);
 
 /*
  * sysfs: perf_mode

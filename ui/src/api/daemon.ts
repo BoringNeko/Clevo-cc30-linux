@@ -12,10 +12,10 @@ export type Freshness = "fresh" | "stale" | "unknown";
 export interface FanReading {
   /** Speed in rpm. */
   rpm: number;
-  /** Raw duty byte (conversion unverified). */
-  duty: number;
-  /** Raw temperature byte (conversion unverified). */
-  temp_raw: number;
+  /** Duty as a percentage (0–100). */
+  duty_pct: number;
+  /** Temperature in °C, or `null` when the EC reports none. */
+  temp_c: number | null;
   /** Whether the channel exists on this machine. */
   available: boolean;
 }
@@ -36,6 +36,8 @@ export interface FanSnapshot {
   fan_mode: number;
   perf_mode: number;
   writable: boolean;
+  /** Whether a custom fan curve can be written. */
+  curve_writable: boolean;
 }
 
 /** Parsed fan curve. */
@@ -53,6 +55,7 @@ export const FAN_MODE_NAMES: Record<number, string> = {
   0: "auto",
   1: "max",
   5: "maxq",
+  6: "custom",
   8: "quiet",
 };
 
@@ -94,12 +97,23 @@ export async function getFanCurve(): Promise<FanCurve> {
   return invoke<FanCurve>("get_fan_curve");
 }
 
+/**
+ * Write a custom fan curve and select the `custom` fan mode.
+ *
+ * The daemon validates the curve and authorizes the write through PolicyKit;
+ * a denial or an unsupported request rejects with a message the UI must show.
+ */
+export async function setFanCurve(curve: FanCurve): Promise<void> {
+  return invoke<void>("set_fan_curve", { curve });
+}
+
 /** Fan modes the UI offers, in display order. */
 export const FAN_MODE_CHOICES: Array<{ value: number; label: string }> = [
   { value: 0, label: "auto" },
   { value: 8, label: "quiet" },
   { value: 5, label: "maxq" },
   { value: 1, label: "max" },
+  { value: 6, label: "custom" },
 ];
 
 /** Performance modes the UI offers, in display order. */

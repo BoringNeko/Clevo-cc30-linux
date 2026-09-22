@@ -43,6 +43,33 @@ pub fn set_perf_mode(mode: String) -> Result<u8, String> {
     client()?.set_perf_mode(&mode).map_err(|e| e.message)
 }
 
+/// Write a custom fan curve and select the `custom` fan mode.
+///
+/// `curve` is the same shape [`get_fan_curve`] returns, so the UI can read the
+/// current curve, let the user drag points, and send it straight back.
+#[tauri::command]
+pub fn set_fan_curve(curve: crate::dbus::FanCurve) -> Result<(), String> {
+    let json = curve_to_json(&curve);
+    client()?.set_curve(&json).map_err(|e| e.message)
+}
+
+/// Serialize a curve back into the daemon's JSON wire shape.
+fn curve_to_json(curve: &crate::dbus::FanCurve) -> String {
+    let points = |points: &[crate::dbus::CurvePoint]| {
+        points
+            .iter()
+            .map(|p| format!("[{},{}]", p.temp, p.duty_pct))
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    format!(
+        "{{\"cpu\":[{}],\"gpu1\":[{}],\"gpu2\":[{}]}}",
+        points(&curve.cpu),
+        points(&curve.gpu1),
+        points(&curve.gpu2)
+    )
+}
+
 /// Read the launch-time compatibility preferences.
 #[tauri::command]
 pub fn get_launch_prefs() -> crate::prefs::LaunchPrefs {

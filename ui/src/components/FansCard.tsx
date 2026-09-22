@@ -69,8 +69,9 @@ export function FansCard({ palette, snapshot }: FansCardProps) {
         }}
       >
         <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
-          <ThermostatIcon sx={{ fontSize: 13 }} /> CPU {snapshot.cpu.temp_raw}° · GPU{" "}
-          {snapshot.gpu1.temp_raw}° (原始值，未验证)
+          <ThermostatIcon sx={{ fontSize: 13 }} /> CPU{" "}
+          {snapshot.cpu.temp_c === null ? "n/a" : `${snapshot.cpu.temp_c}°`} · GPU{" "}
+          {snapshot.gpu1.temp_c === null ? "n/a" : `${snapshot.gpu1.temp_c}°`}
         </Box>
       </Box>
     </GlassCard>

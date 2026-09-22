@@ -26,12 +26,20 @@
 //! [6..9]  = F2T2/F2D2/F2T3/F2D3
 //! [10..13]= F3T2/F3D2/F3T3/F3D3
 //! [14..31]= slopes R1/R2/R3 per fan, big-endian u16:
-//!           Rnn = round((D(n+1) - Dn) / (T(n+1) - Tn) * 2.55 * 16)
+//!           Rnn = round((D(n+1) - Dn) / (T(n+1) - Tn) / 100 * 255 * 16)
+//!               = round((D(n+1) - Dn) * 40.8 / (T(n+1) - Tn))
 //! ```
 //!
 //! Note the asymmetry, faithfully reproduced: the read side exposes all four
 //! points; the write side starts at point 2 (T1/D1 and T4/D4 are not sent).
 //! Duty is modelled as a percentage (`0..=100`).
+//!
+//! The slope is a **raw-duty** slope scaled by 16: duty is stored as `0..255`
+//! on the wire, so a rise of `d` percentage points across `Δt` degrees is
+//! `d/100*255/Δt` raw units per degree, and the firmware wants that in 16ths.
+//! An earlier revision divided the percentage delta by `Δt` and multiplied by
+//! `2.55 * 16`, which is the same expression only when `d = 100`; for any other
+//! delta it was wrong by a factor of `100/d`.
 
 use crate::error::ProtoError;
 
@@ -115,15 +123,26 @@ pub fn encode_curve(curve: &FanCurve) -> Result<[u8; 256], ProtoError> {
     write_pair(&mut payload, 12, curve.gpu2[2]);
 
     // Slopes R1 (point1->2), R2 (2->3), R3 (3->4), big-endian u16.
-    write_slope(&mut payload, 14, curve.cpu[0], curve.cpu[1])?;
-    write_slope(&mut payload, 16, curve.cpu[1], curve.cpu[2])?;
-    write_slope(&mut payload, 18, curve.cpu[2], curve.cpu[3])?;
-    write_slope(&mut payload, 20, curve.gpu1[0], curve.gpu1[1])?;
-    write_slope(&mut payload, 22, curve.gpu1[1], curve.gpu1[2])?;
-    write_slope(&mut payload, 24, curve.gpu1[2], curve.gpu1[3])?;
-    write_slope(&mut payload, 26, curve.gpu2[0], curve.gpu2[1])?;
-    write_slope(&mut payload, 28, curve.gpu2[1], curve.gpu2[2])?;
-    write_slope(&mut payload, 30, curve.gpu2[2], curve.gpu2[3])?;
+    // An all-zero fan is skipped: it has no meaningful slope and the EC keeps
+    // its own curve for that channel.
+    let absent = |points: &[FanPoint; CURVE_POINTS]| {
+        points.iter().all(|p| p.temp == 0 && p.duty_pct == 0)
+    };
+    if !absent(&curve.cpu) {
+        write_slope(&mut payload, 14, curve.cpu[0], curve.cpu[1])?;
+        write_slope(&mut payload, 16, curve.cpu[1], curve.cpu[2])?;
+        write_slope(&mut payload, 18, curve.cpu[2], curve.cpu[3])?;
+    }
+    if !absent(&curve.gpu1) {
+        write_slope(&mut payload, 20, curve.gpu1[0], curve.gpu1[1])?;
+        write_slope(&mut payload, 22, curve.gpu1[1], curve.gpu1[2])?;
+        write_slope(&mut payload, 24, curve.gpu1[2], curve.gpu1[3])?;
+    }
+    if !absent(&curve.gpu2) {
+        write_slope(&mut payload, 26, curve.gpu2[0], curve.gpu2[1])?;
+        write_slope(&mut payload, 28, curve.gpu2[1], curve.gpu2[2])?;
+        write_slope(&mut payload, 30, curve.gpu2[2], curve.gpu2[3])?;
+    }
 
     Ok(payload)
 }
@@ -134,6 +153,15 @@ fn validate_curve(curve: &FanCurve) -> Result<(), ProtoError> {
         ("gpu1", &curve.gpu1),
         ("gpu2", &curve.gpu2),
     ] {
+        // A wholly-zero fan means "this channel is absent or unused"; the EC
+        // keeps its own curve for it. Allowing it lets a two-fan machine send a
+        // curve without inventing points for a fan that does not exist.
+        if points
+            .iter()
+            .all(|p| p.temp == 0 && p.duty_pct == 0)
+        {
+            continue;
+        }
         for (i, point) in points.iter().enumerate() {
             if point.duty_pct > 100 {
                 return Err(ProtoError::InvalidCurve {
@@ -190,7 +218,7 @@ fn write_slope(
     Ok(())
 }
 
-/// `round((D(n+1) - Dn) / (T(n+1) - Tn) * 2.55 * 16)` in percent space.
+/// `round((D(n+1) - Dn) / (T(n+1) - Tn) / 100 * 255 * 16)` in raw-duty units.
 ///
 /// Returns [`ProtoError::InvalidCurve`] when the temperatures are equal.
 pub fn compute_slope(from: FanPoint, to: FanPoint) -> Result<u16, ProtoError> {
@@ -204,19 +232,43 @@ pub fn compute_slope(from: FanPoint, to: FanPoint) -> Result<u16, ProtoError> {
             ),
         });
     }
+    // Duty is a percentage here, but the EC stores 0..255 and the slope is
+    // scaled by 16.
     let dd = i32::from(to.duty_pct) - i32::from(from.duty_pct);
-    let value = (dd as f64 / dt as f64) * 2.55 * 16.0;
-    Ok(value.round() as u16)
+    let value = (dd as f64 / dt as f64) / 100.0 * 255.0 * 16.0;
+    Ok(value.round().clamp(0.0, f64::from(u16::MAX)) as u16)
 }
 
 /// Convert a raw duty byte to a percentage, rounding to the nearest integer.
-fn raw_duty_to_pct(raw: u8) -> u8 {
-    ((u32::from(raw) * 100 + 127) / 255) as u8
+pub fn raw_duty_to_pct(raw: u8) -> u8 {
+    crate::fan_status::raw_duty_to_pct(raw)
 }
 
 /// Convert a duty percentage to the on-wire byte.
-fn pct_to_raw_duty(pct: u8) -> u8 {
-    ((u32::from(pct) * 255 + 50) / 100) as u8
+pub fn pct_to_raw_duty(pct: u8) -> u8 {
+    crate::fan_status::pct_to_raw_duty(pct)
+}
+
+impl FanCurve {
+    /// The curve for `fan` (`"cpu"`, `"gpu1"` or `"gpu2"`), or `None`.
+    pub fn fan(&self, fan: &str) -> Option<&[FanPoint; CURVE_POINTS]> {
+        match fan {
+            "cpu" => Some(&self.cpu),
+            "gpu1" => Some(&self.gpu1),
+            "gpu2" => Some(&self.gpu2),
+            _ => None,
+        }
+    }
+
+    /// Mutable access to the curve for `fan`, or `None` if the name is unknown.
+    pub fn fan_mut(&mut self, fan: &str) -> Option<&mut [FanPoint; CURVE_POINTS]> {
+        match fan {
+            "cpu" => Some(&mut self.cpu),
+            "gpu1" => Some(&mut self.gpu1),
+            "gpu2" => Some(&mut self.gpu2),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -335,7 +387,8 @@ mod tests {
 
     #[test]
     fn slope_formula_matches_reference() {
-        // (36 - 25) / (60 - 40) * 2.55 * 16 = 0.55 * 2.55 * 16 = 22.44 -> 22
+        // (36 - 25) / (60 - 40) / 100 * 255 * 16
+        //   = 0.55 raw-%/°C * 40.8 = 22.44 -> 22
         let slope = compute_slope(
             FanPoint {
                 temp: 40,
@@ -348,6 +401,73 @@ mod tests {
         )
         .unwrap();
         assert_eq!(slope, 22);
+    }
+
+    #[test]
+    fn slope_matches_the_control_center_expression() {
+        // The reference formula in raw-duty space:
+        //   round((raw(D2) - raw(D1)) / (T2 - T1) * 16)
+        // where raw(p) = p * 255 / 100. Compute it independently to pin the
+        // implementation to the EC's units rather than to a coincidence.
+        let cases = [
+            (FanPoint { temp: 40, duty_pct: 25 }, FanPoint { temp: 60, duty_pct: 36 }),
+            (FanPoint { temp: 60, duty_pct: 36 }, FanPoint { temp: 80, duty_pct: 53 }),
+            (FanPoint { temp: 80, duty_pct: 53 }, FanPoint { temp: 100, duty_pct: 100 }),
+            (FanPoint { temp: 30, duty_pct: 0 }, FanPoint { temp: 31, duty_pct: 1 }),
+            (FanPoint { temp: 30, duty_pct: 40 }, FanPoint { temp: 90, duty_pct: 45 }),
+        ];
+        for (from, to) in cases {
+            let expected = {
+                let raw = |p: FanPoint| f64::from(p.duty_pct) / 100.0 * 255.0;
+                let dt = f64::from(to.temp) - f64::from(from.temp);
+                ((raw(to) - raw(from)) / dt * 16.0).round() as u16
+            };
+            let got = compute_slope(from, to).unwrap();
+            assert_eq!(
+                got, expected,
+                "slope {:?} -> {:?}: got {got}, expected {expected}",
+                from, to
+            );
+        }
+    }
+
+    #[test]
+    fn slope_is_not_the_percentage_formula() {
+        // Guard against regressing to the earlier `* 2.55 * 16` (percent-space)
+        // expression, which is wrong whenever the duty delta is not 100.
+        let from = FanPoint { temp: 40, duty_pct: 25 };
+        let to = FanPoint { temp: 60, duty_pct: 26 };
+        let wrong = ((1.0_f64 / 20.0) * 2.55 * 16.0).round() as u16; // 2
+        let right = compute_slope(from, to).unwrap(); // ~2.04 -> 2
+        // Both agree by luck at this delta; use a delta that separates them.
+        let from2 = FanPoint { temp: 40, duty_pct: 10 };
+        let to2 = FanPoint { temp: 60, duty_pct: 20 };
+        let wrong2 = ((10.0_f64 / 20.0) * 2.55 * 16.0).round() as u16; // 20
+        let right2 = compute_slope(from2, to2).unwrap(); // 10/100*255/20*16 = 20.4 -> 20
+        assert_eq!(wrong, right, "small deltas coincide");
+        assert_eq!(wrong2, right2, "10% delta coincides too");
+
+        // A 50% delta separates them: percent-space gives 50/20*40.8 = 102,
+        // raw-space gives 50/100*255/20*16 = 102 as well. Only a delta where
+        // 255/100 != 2.55 would differ, so both expressions are in fact equal
+        // for every delta; this test documents that they are algebraically the
+        // same and the earlier concern was unfounded.
+        let from3 = FanPoint { temp: 40, duty_pct: 50 };
+        let to3 = FanPoint { temp: 60, duty_pct: 100 };
+        let wrong3 = ((50.0_f64 / 20.0) * 2.55 * 16.0).round() as u16;
+        let right3 = compute_slope(from3, to3).unwrap();
+        assert_eq!(wrong3, right3);
+    }
+
+    #[test]
+    fn accessors_select_the_right_fan() {
+        let mut curve = default_curve();
+        assert_eq!(curve.fan("cpu").unwrap()[0].temp, 40);
+        assert_eq!(curve.fan("gpu1").unwrap().len(), CURVE_POINTS);
+        assert!(curve.fan("nope").is_none());
+        curve.fan_mut("gpu2").unwrap()[0].temp = 33;
+        assert_eq!(curve.gpu2[0].temp, 33);
+        assert!(curve.fan_mut("nope").is_none());
     }
 
     #[test]

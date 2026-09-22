@@ -38,7 +38,20 @@ clevo\-cc \-\-fixture fixtures/example.fixture fan status
 sudo clevo\-cc \-\-transport acpi\-call fan watch \-\-interval\-ms 1000
 clevo\-cc \-\-transport dbus fan status
 clevo\-cc \-\-transport dbus fan set\-mode max \-\-apply
+clevo\-cc \-\-transport dbus fan set\-curve \-\-cpu "40,20 60,40 80,70 100,100" \-\-apply
 .fi
+.SH FAN CURVES
+.B fan set\-curve
+writes a four\-point curve (command 14) and selects the
+.B custom
+fan mode, which is what makes the firmware use it.
+Points are given as
+.IR "temp,duty" ,
+with duty in percent; temperatures must strictly increase.
+.B \-\-gpu1
+defaults to the CPU curve and
+.B \-\-gpu2
+to an all\-zero curve, which leaves that channel alone.
 .SH SEE ALSO
 .BR clevod (8)
 .SH LICENSE

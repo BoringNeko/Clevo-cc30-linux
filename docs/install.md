@@ -76,6 +76,23 @@ systemctl status clevod
 clevo-cc --transport dbus fan status
 ```
 
+### 自定义风扇曲线
+
+```bash
+# 先看当前曲线（只读）
+clevo-cc --transport dbus fan curve
+
+# 预演要写入的内容（不碰硬件）
+clevo-cc --transport dbus fan set-curve --cpu "40,20 60,40 80,70 100,100"
+
+# 真正写入并切换到 custom 模式（触发 PolicyKit 授权）
+clevo-cc --transport dbus fan set-curve --cpu "40,20 60,40 80,70 100,100" --apply
+```
+
+`--gpu1` 省略时沿用 CPU 曲线；`--gpu2` 省略时为全零（表示"不动这个通道"）。
+温度必须严格递增，占空比 `0..100`。写入后会自动切到 `custom` 模式，
+否则固件不会使用新曲线。想恢复自动控制：`clevo-cc --transport dbus fan set-mode auto --apply`。
+
 ### 离线自测（不碰硬件、无需安装）
 
 CLI 默认连**系统总线**；要连在私有 session bus 上跑的测试 daemon，加
@@ -287,7 +304,10 @@ sudo packaging/uninstall.sh --purge
 | `clevod` 启动失败 | `journalctl -u clevod -b`；确认 `--driver` 时模块已加载，否则回退 acpi_call |
 | UI 无数据 | `busctl --system status org.clevo.CC`；确认服务在系统总线 |
 | 写入无反应/报错 | 无桌面认证代理时写入仅限 root；KDE/GNOME 才有弹窗（见 `support-matrix.md`） |
-| 风扇模式不生效 | 别是 `silent(3)`（空实现）或 `custom(6)`（需先写曲线） |
+| 风扇模式不生效 | 别是 `silent(3)`（空实现）；`custom(6)` 需要先写入曲线 |
+| 自定义曲线不生效 | 写曲线后**必须**再切到 `custom` 模式（CLI/UI 会自动切换；直接写 sysfs 时需 `echo custom > fan_mode`） |
+| 曲线被 EC 拒绝 | 温度必须严格递增、占空比 0–100；`dmesg` 会记录 `_DSM` 的失败原因 |
+| 温度显示 `n/a` | 该通道 EC 未上报（原始值为 0）；不代表 0°C，属正常 |
 | DKMS 未随内核重编 | `dkms status`；确认 `linux-headers` 与 DKMS 服务已启用 |
 
 ---

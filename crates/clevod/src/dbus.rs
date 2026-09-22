@@ -207,6 +207,36 @@ impl CcDaemon {
         Ok(curve_to_json(&info))
     }
 
+    /// Write a custom fan curve (`14`) and select the `custom` fan mode.
+    ///
+    /// `curve` is the same JSON shape `GetCurve` returns. The daemon validates
+    /// it fully before touching the hardware and then switches the fan mode to
+    /// `custom` so the new curve takes effect; without that second step the
+    /// firmware would keep using the auto curve.
+    ///
+    /// PolicyKit-gated: writing a curve programs the EC and is an
+    /// administrator action.
+    async fn set_curve(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(signal_context)] emitter: SignalEmitter<'_>,
+        curve: &str,
+    ) -> zbus::fdo::Result<()> {
+        self.require(header.sender(), &emitter, policy::ACTION_FAN_CURVE)
+            .await?;
+        match self.service.set_curve_json(curve) {
+            Ok(()) => {
+                self.emit_fan_changed(&emitter).await;
+                Ok(())
+            }
+            Err(e) => {
+                let message = e.to_string();
+                let _ = CcDaemon::error(&emitter, &message).await;
+                Err(zbus::fdo::Error::Failed(message))
+            }
+        }
+    }
+
     /// Current fan mode value (`121/1`), or `255` if never set this session.
     #[zbus(property)]
     fn fan_mode(&self) -> u8 {
@@ -248,25 +278,39 @@ impl CcDaemon {
         self.service.state().lock().unwrap().fan.gpu1.rpm
     }
 
-    /// CPU temperature raw byte (conversion unverified).
+    /// CPU temperature in degrees Celsius (`0` = the EC reports none).
     #[zbus(property)]
-    fn cpu_temp_raw(&self) -> u8 {
-        self.service.state().lock().unwrap().fan.cpu.temp_raw
+    fn cpu_temp_c(&self) -> u8 {
+        self.service
+            .state()
+            .lock()
+            .unwrap()
+            .fan
+            .cpu
+            .temp_c
+            .unwrap_or(0)
     }
 
-    /// GPU1 temperature raw byte (conversion unverified).
+    /// GPU1 temperature in degrees Celsius (`0` = the EC reports none).
     #[zbus(property)]
-    fn gpu_temp_raw(&self) -> u8 {
-        self.service.state().lock().unwrap().fan.gpu1.temp_raw
+    fn gpu_temp_c(&self) -> u8 {
+        self.service
+            .state()
+            .lock()
+            .unwrap()
+            .fan
+            .gpu1
+            .temp_c
+            .unwrap_or(0)
     }
 
-    /// CPU duty raw byte (offset unverified).
+    /// CPU duty raw byte (255 = 100%).
     #[zbus(property)]
     fn cpu_duty(&self) -> u8 {
         self.service.state().lock().unwrap().fan.cpu.duty
     }
 
-    /// GPU1 duty raw byte (offset unverified).
+    /// GPU1 duty raw byte (255 = 100%).
     #[zbus(property)]
     fn gpu_duty(&self) -> u8 {
         self.service.state().lock().unwrap().fan.gpu1.duty
@@ -282,6 +326,25 @@ impl CcDaemon {
             .curve
             .map(|c| c.fan_count)
             .unwrap_or(0)
+    }
+
+    /// The cached fan curve as a compact JSON string (`""` when never read).
+    #[zbus(property)]
+    fn fan_curve(&self) -> String {
+        self.service
+            .state()
+            .lock()
+            .unwrap()
+            .curve
+            .as_ref()
+            .map(curve_to_json)
+            .unwrap_or_default()
+    }
+
+    /// Whether the transport can write a custom fan curve (`14`).
+    #[zbus(property)]
+    fn curve_writable(&self) -> bool {
+        self.service.writable()
     }
 }
 

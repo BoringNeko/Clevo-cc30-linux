@@ -6,6 +6,7 @@ describe("mode name helpers", () => {
     expect(fanModeName(0)).toBe("auto");
     expect(fanModeName(1)).toBe("max");
     expect(fanModeName(5)).toBe("maxq");
+    expect(fanModeName(6)).toBe("custom");
     expect(fanModeName(8)).toBe("quiet");
   });
 
@@ -41,6 +42,6 @@ describe("mode choices", () => {
   it("lists every fan mode the driver accepts", async () => {
     const { FAN_MODE_CHOICES } = await import("./daemon");
     const labels = FAN_MODE_CHOICES.map((c) => c.label).sort();
-    expect(labels).toEqual(["auto", "max", "maxq", "quiet"]);
+    expect(labels).toEqual(["auto", "custom", "max", "maxq", "quiet"]);
   });
 });
