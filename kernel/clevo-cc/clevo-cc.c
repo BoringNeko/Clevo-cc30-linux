@@ -1006,14 +1006,6 @@ static int clevo_cc_probe(struct platform_device *pdev)
 
 	if (!adev)
 		return -ENODEV;
-v = ACPI_COMPANION(&pdev->dev);
-	struct clevo_cc *cc;
-	struct device *hwmon;
-	acpi_handle h;
-	acpi_status status;
-
-	if (!adev)
-		return -ENODEV;
 
 	cc = devm_kzalloc(&pdev->dev, sizeof(*cc), GFP_KERNEL);
 	if (!cc)

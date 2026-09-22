@@ -98,11 +98,24 @@ if [ "$WANT_UI" = 1 ]; then
 fi
 
 if [ "$WANT_KERNEL" = 1 ]; then
-    step "Kernel: build the clevo-cc module"
+    step "Kernel: build the clevo-cc module (from clean)"
     if [ -d "/lib/modules/$(uname -r)/build" ]; then
-        # Run make *inside* the module dir: its Makefile derives M=$(PWD), and
-        # `make -C dir` would make PWD the repository root instead.
-        try bash -c "cd kernel/clevo-cc && make"
+        # Build in a *copy*, from clean. Building in place reuses stale .o files
+        # and hides syntax errors: a broken source tree built 'successfully'
+        # because the object was left over from before the breakage, while DKMS
+        # (which builds fresh in /usr/src) failed. Copying also keeps the tree
+        # free of intermediate files.
+        if try bash -c '
+            set -e
+            tmp="$(mktemp -d)"
+            trap "rm -rf \"$tmp\"" EXIT
+            cp kernel/clevo-cc/clevo-cc.c kernel/clevo-cc/Makefile "$tmp/"
+            cd "$tmp"
+            make KERNELRELEASE="$(uname -r)" >/dev/null
+            test -f clevo-cc.ko
+        '; then
+            echo "   (clean build produced clevo-cc.ko)"
+        fi
     else
         echo "!! skipping kernel: no headers for $(uname -r)" >&2
         echo "   install them (linux-headers / kernel-devel) to build the module"
