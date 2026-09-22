@@ -185,11 +185,10 @@ export function curvePath(points: CurvePoint[], inset = 0): string {
   }, `M ${first.x} ${first.y}`);
 }
 
-/** The two fans' names, colours and points, as the chart and table need them. */
+/** The two fans' names, colours and points, as the chart and readout need them. */
 interface Series {
   key: Channel;
   label: string;
-  note: string;
   color: string;
   points: CurvePoint[];
 }
@@ -258,14 +257,12 @@ export function CurveCard({
     {
       key: "cpu",
       label: "CPU",
-      note: "处理器风扇",
       color: colors.cpu,
       points: draft.cpu,
     },
     {
       key: "gpu1",
       label: "GPU1",
-      note: "显卡风扇",
       color: colors.gpu1,
       points: draft.gpu1,
     },
@@ -514,8 +511,6 @@ export function CurveCard({
 
         <XAxis />
       </Box>
-
-      <Legend series={series} dirtyChannels={dirtyChannels} />
 
       {writable && (
         <Box sx={{ display: "flex", alignItems: "center", gap: 1, pt: 0.5, borderTop: "1px solid", borderTopColor: "divider" }}>
@@ -829,58 +824,6 @@ function Handle({
           {label}
         </Box>
       )}
-    </Box>
-  );
-}
-
-/** The colour key: a line swatch plus the fan name and what it controls. */
-function Legend({ series, dirtyChannels }: { series: Series[]; dirtyChannels: Channel[] }) {
-  return (
-    <Box sx={{ display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
-      {series.map((s) => (
-        <Box key={s.key} sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
-          <Box
-            sx={{
-              width: 18,
-              height: 3,
-              borderRadius: 0.5,
-              backgroundColor: s.color,
-              position: "relative",
-              "&::after": {
-                content: '""',
-                position: "absolute",
-                left: 8,
-                top: -2.5,
-                width: 8,
-                height: 8,
-                borderRadius: "50%",
-                backgroundColor: s.color,
-              },
-            }}
-          />
-          <Typography sx={{ fontSize: "0.6875rem", fontWeight: 600, color: s.color }}>
-            {s.label}
-          </Typography>
-          <Typography sx={{ fontSize: "0.625rem", color: "text.disabled" }}>
-            {s.note}
-          </Typography>
-          {dirtyChannels.includes(s.key) && (
-            <Typography
-              sx={{
-                fontSize: "0.5625rem",
-                color: "warning.main",
-                border: "1px solid",
-                borderColor: "warning.main",
-                borderRadius: 0.5,
-                px: 0.5,
-                lineHeight: 1.4,
-              }}
-            >
-              已改
-            </Typography>
-          )}
-        </Box>
-      ))}
     </Box>
   );
 }
