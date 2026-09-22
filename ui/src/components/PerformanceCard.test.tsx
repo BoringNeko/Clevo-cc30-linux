@@ -1,10 +1,15 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { useState } from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { PerformanceCard } from "./PerformanceCard";
+import { PerformanceCard, isFullWidthMode } from "./PerformanceCard";
 import { CurveCard } from "./CurveCard";
 import { CurveHintCard } from "./CurveHintCard";
-import { isCustomizeMode, type FanSnapshot, type FanCurve } from "../api/daemon";
+import {
+  CUSTOMIZE_FAN_MODE,
+  isCustomizeMode,
+  type FanSnapshot,
+  type FanCurve,
+} from "../api/daemon";
 
 const setFanMode = vi.fn();
 const setPerfMode = vi.fn();
@@ -139,6 +144,23 @@ describe("PerformanceCard", () => {
     renderCard(0);
     const button = screen.getByRole("button", { name: /customize/ });
     expect(button.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("gives the curve mode its own full-width row", () => {
+    // The four presets share a 2x2 grid; customize spans it so it does not read
+    // as a fifth preset. Emotion folds `gridColumn` into a generated class, so
+    // the placement is asserted through the helper that decides it.
+    renderCard(0);
+    expect(isFullWidthMode(CUSTOMIZE_FAN_MODE)).toBe(true);
+    for (const preset of [0, 1, 5, 8]) {
+      expect(isFullWidthMode(preset)).toBe(false);
+    }
+
+    // And the rendered cell really is the curve mode's own wrapper.
+    const button = screen.getByRole("button", { name: /customize/ });
+    const cell = button.parentElement as HTMLElement;
+    expect(cell).not.toBe(button);
+    expect(cell.className).not.toBe("");
   });
 });
 
