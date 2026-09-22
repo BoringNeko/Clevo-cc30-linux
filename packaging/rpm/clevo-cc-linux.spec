@@ -122,6 +122,11 @@ dkms install -m clevo-cc -v %{version} >/dev/null 2>&1 || :
 /usr/src/clevo-cc-%{version}
 
 %changelog
+* Wed Sep 23 2026 BoringNeko <noreply@github.com> - 0.1.3-1
+- Add a `customize` fan mode
+- Add a custom fan curve editor (command 14)
+- Add temperature readings and the verified command-12 offsets
+
 * Tue Sep 22 2026 BoringNeko <noreply@github.com> - 0.1.2-1
 - Fix NVIDIA exit crash (core dump on every close) by moving Skia to CPU
 - Close the window to the tray instead of quitting
