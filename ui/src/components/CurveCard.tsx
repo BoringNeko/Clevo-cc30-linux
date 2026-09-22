@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Typography from "@mui/material/Typography";
+import CheckIcon from "@mui/icons-material/Check";
 import ShowChartIcon from "@mui/icons-material/ShowChart";
 import RestoreIcon from "@mui/icons-material/Restore";
 import { CardHeader, GlassCard } from "./GlassCard";
@@ -22,8 +23,11 @@ const W = 320;
 const H = 150;
 const PAD = 18;
 /** Pointer distance (in viewBox units) that counts as grabbing a point. */
-const HIT_RADIUS = 14;
+const HIT_RADIUS = 16;
 const MIN_GAP_C = 2;
+
+/** The two fans the firmware writes through command 14. */
+type Channel = "cpu" | "gpu1";
 
 /** Map a (temp, duty) curve to the SVG polyline the design uses. */
 function toPath(points: CurvePoint[]): string {
@@ -89,56 +93,63 @@ export function movePoint(
   return next;
 }
 
+/** One draggable series: its name, colour and current points. */
+interface Series {
+  key: Channel;
+  label: string;
+  color: string;
+  points: CurvePoint[];
+}
+
 /**
- * The fan curve as two restrained polylines (CPU and GPU1).
+ * The fan curve as two polylines (CPU and GPU1), both draggable.
  *
- * When `writable`, the CPU points can be dragged. Editing is local until
- * "应用" is pressed, so the user can shape the whole curve and only then send
- * it to the EC (a write costs a PolicyKit prompt).
+ * Editing is local until "应用曲线" is pressed, so the user can shape both
+ * curves and only then send them to the EC (a write costs a PolicyKit prompt).
  */
 export function CurveCard({ palette, curve, writable = false, onApplied }: CurveCardProps) {
-  const cpuColor = rgbString(palette.primary);
-  const gpuColor = rgbString(palette.secondary);
+  const colors: Record<Channel, string> = {
+    cpu: rgbString(palette.primary),
+    gpu1: rgbString(palette.secondary),
+  };
 
-  const [draft, setDraft] = useState<CurvePoint[]>(curve.cpu);
-  const [dragging, setDragging] = useState<number | null>(null);
+  const [draft, setDraft] = useState<FanCurve>(curve);
+  const [dragging, setDragging] = useState<{ channel: Channel; index: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
 
-  /**
-   * The daemon curve this component last agreed on, compared by *content*.
-   *
-   * The adopt effect used to depend on `dragging`, so releasing a point
-   * (`dragging` back to `null`) re-ran it and reset the draft to the EC's
-   * values - the edit vanished the moment the pointer came up. What matters is
-   * whether the daemon's curve actually changed, not whether a drag is in
-   * progress, so the comparison is against content.
-   */
-  const adopted = useRef(curve.cpu);
+  // The daemon curve this component last agreed on, per channel, compared by
+  // *content*. Using `dragging` as an effect dependency once made a release
+  // reset the draft; content comparison is what actually matters.
+  const adopted = useRef({ cpu: curve.cpu, gpu1: curve.gpu1 });
   const draftRef = useRef(draft);
   draftRef.current = draft;
 
   useEffect(() => {
-    const incoming = curve.cpu;
-    if (shouldAdoptCurve(incoming, adopted.current, draftRef.current)) {
-      setDraft(incoming);
-      // Advance the comparison point only when the curve was actually taken. If
-      // it was held back because of an unsaved edit, leaving `adopted` alone
-      // means it is still seen as new once that edit is gone (applied or
-      // discarded), instead of being silently forgotten.
-      adopted.current = incoming;
+    const incoming = { cpu: curve.cpu, gpu1: curve.gpu1 };
+    const take = (channel: Channel) =>
+      shouldAdoptCurve(incoming[channel], adopted.current[channel], draftRef.current[channel]);
+    if (take("cpu") || take("gpu1")) {
+      setDraft((current) => ({
+        ...current,
+        cpu: take("cpu") ? incoming.cpu : current.cpu,
+        gpu1: take("gpu1") ? incoming.gpu1 : current.gpu1,
+      }));
     }
-  }, [curve.cpu]);
+    if (take("cpu")) adopted.current.cpu = incoming.cpu;
+    if (take("gpu1")) adopted.current.gpu1 = incoming.gpu1;
+  }, [curve.cpu, curve.gpu1]);
 
-  const dirty = useMemo(
-    () =>
-      draft.some(
-        (p, i) => p.temp !== curve.cpu[i]?.temp || p.duty_pct !== curve.cpu[i]?.duty_pct,
-      ),
-    [draft, curve.cpu],
-  );
+  /** Channels whose draft differs from what the daemon last reported. */
+  const dirtyChannels = useMemo(() => {
+    const list: Channel[] = [];
+    if (!sameCurve(draft.cpu, curve.cpu)) list.push("cpu");
+    if (!sameCurve(draft.gpu1, curve.gpu1)) list.push("gpu1");
+    return list;
+  }, [draft, curve.cpu, curve.gpu1]);
+  const dirty = dirtyChannels.length > 0;
 
   /** Convert a pointer event into (temp, duty) in viewBox units. */
   const toCurveCoords = useCallback((event: React.PointerEvent<SVGSVGElement>) => {
@@ -153,20 +164,31 @@ export function CurveCard({ palette, curve, writable = false, onApplied }: Curve
     };
   }, []);
 
+  /**
+   * Find the point under the pointer, across *both* series.
+   *
+   * Both curves are draggable, so a hit is a (channel, index) pair. The nearest
+   * point wins. On a tie the later-drawn series (GPU1) wins, matching what the
+   * user sees: GPU1 is painted over CPU, so it is the one visibly on top. The
+   * drag label then names the channel, and the user can pull the curves apart.
+   */
   const nearestPoint = useCallback(
-    (event: React.PointerEvent<SVGSVGElement>) => {
+    (event: React.PointerEvent<SVGSVGElement>): { channel: Channel; index: number } | null => {
       const coords = toCurveCoords(event);
       if (!coords) return null;
-      let best: number | null = null;
+      let best: { channel: Channel; index: number } | null = null;
       let bestDist = HIT_RADIUS;
-      draft.forEach((p, i) => {
-        const dx = ((p.temp - coords.temp) / 100) * (W - 2 * PAD);
-        const dy = ((p.duty_pct - coords.duty) / 100) * (H - 2 * PAD);
-        const dist = Math.hypot(dx, dy);
-        if (dist <= bestDist) {
-          bestDist = dist;
-          best = i;
-        }
+      (["cpu", "gpu1"] as Channel[]).forEach((channel) => {
+        draft[channel].forEach((p, i) => {
+          const dx = ((p.temp - coords.temp) / 100) * (W - 2 * PAD);
+          const dy = ((p.duty_pct - coords.duty) / 100) * (H - 2 * PAD);
+          const dist = Math.hypot(dx, dy);
+          // `<=` lets a later series take an exact tie.
+          if (dist <= bestDist) {
+            bestDist = dist;
+            best = { channel, index: i };
+          }
+        });
       });
       return best;
     },
@@ -175,10 +197,10 @@ export function CurveCard({ palette, curve, writable = false, onApplied }: Curve
 
   const onPointerDown = (event: React.PointerEvent<SVGSVGElement>) => {
     if (!writable) return;
-    const index = nearestPoint(event);
-    if (index === null) return;
+    const hit = nearestPoint(event);
+    if (hit === null) return;
     event.currentTarget.setPointerCapture(event.pointerId);
-    setDragging(index);
+    setDragging(hit);
     setError(null);
     setNotice(null);
   };
@@ -187,7 +209,11 @@ export function CurveCard({ palette, curve, writable = false, onApplied }: Curve
     if (dragging === null) return;
     const coords = toCurveCoords(event);
     if (!coords) return;
-    setDraft((current) => movePoint(current, dragging, coords.temp, coords.duty));
+    const { channel, index } = dragging;
+    setDraft((current) => ({
+      ...current,
+      [channel]: movePoint(current[channel], index, coords.temp, coords.duty),
+    }));
   };
 
   const endDrag = (event: React.PointerEvent<SVGSVGElement>) => {
@@ -198,19 +224,17 @@ export function CurveCard({ palette, curve, writable = false, onApplied }: Curve
     setDragging(null);
   };
 
-  /**
-   * Build the curve to send: CPU uses the draft, the other fans keep the
-   * EC's current values so a CPU edit never silently rewrites the GPU curve.
-   */
-  const pendingCurve = (): FanCurve => ({ ...curve, cpu: draft });
-
   const apply = async () => {
     setBusy(true);
     setError(null);
     setNotice(null);
     try {
-      await setFanCurve(pendingCurve());
-      setNotice("已写入自定义曲线并切换到 customize 模式");
+      await setFanCurve({ ...curve, cpu: draft.cpu, gpu1: draft.gpu1 });
+      setNotice(
+        dirtyChannels.length === 1
+          ? `已写入 ${dirtyChannels[0] === "cpu" ? "CPU" : "GPU1"} 曲线并切换到 customize 模式`
+          : "已写入 CPU 与 GPU1 曲线并切换到 customize 模式",
+      );
       onApplied?.();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -219,18 +243,32 @@ export function CurveCard({ palette, curve, writable = false, onApplied }: Curve
     }
   };
 
-  const series = [
-    { label: "CPU", points: draft, color: cpuColor, editable: writable },
-    { label: "GPU1", points: curve.gpu1, color: gpuColor, editable: false },
+  const reset = () => {
+    setDraft({ ...draft, cpu: curve.cpu, gpu1: curve.gpu1 });
+    adopted.current = { cpu: curve.cpu, gpu1: curve.gpu1 };
+    setError(null);
+    setNotice(null);
+  };
+
+  const series: Series[] = [
+    { key: "cpu", label: "CPU", color: colors.cpu, points: draft.cpu },
+    { key: "gpu1", label: "GPU1", color: colors.gpu1, points: draft.gpu1 },
   ];
 
   return (
-    <GlassCard sx={{ gap: 2 }}>
-      <CardHeader icon={<ShowChartIcon sx={{ fontSize: 16 }} />} title="风扇曲线" />
+    <GlassCard sx={{ gap: 1.5 }}>
+      <CardHeader
+        icon={<ShowChartIcon sx={{ fontSize: 16 }} />}
+        title="风扇曲线"
+        hint={dirty ? "未应用" : undefined}
+      />
+
+      <Legend palette={palette} dirtyChannels={dirtyChannels} />
 
       <Box
         sx={{
           flex: 1,
+          minHeight: 0,
           borderRadius: 1,
           border: "1px solid", borderColor: "divider",
           backgroundColor: "action.hover",
@@ -256,13 +294,19 @@ export function CurveCard({ palette, curve, writable = false, onApplied }: Curve
         >
           <line x1={PAD} y1={H - PAD} x2={W - PAD} y2={H - PAD} stroke="currentColor" strokeOpacity={0.18} />
           <line x1={PAD} y1={PAD} x2={PAD} y2={H - PAD} stroke="currentColor" strokeOpacity={0.18} />
+          {/* Axis labels: temperature across, duty up. */}
+          <text x={PAD} y={H - 5} fill="currentColor" fillOpacity={0.4} fontSize={7}>0°C</text>
+          <text x={W - PAD} y={H - 5} fill="currentColor" fillOpacity={0.4} fontSize={7} textAnchor="end">100°C</text>
+          <text x={PAD - 4} y={H - PAD} fill="currentColor" fillOpacity={0.4} fontSize={7} textAnchor="end">0%</text>
+          <text x={PAD - 4} y={PAD + 4} fill="currentColor" fillOpacity={0.4} fontSize={7} textAnchor="end">100%</text>
+
           {series.map((s) => (
-            <g key={s.label}>
+            <g key={s.key}>
               <path
                 d={toPath(s.points)}
                 fill="none"
                 stroke={s.color}
-                strokeWidth={1.75}
+                strokeWidth={dragging?.channel === s.key ? 2.5 : 1.75}
                 strokeLinecap="round"
                 strokeLinejoin="round"
                 style={{ transition: dragging === null ? "stroke 500ms ease" : undefined }}
@@ -270,17 +314,37 @@ export function CurveCard({ palette, curve, writable = false, onApplied }: Curve
               {s.points.map((p, i) => {
                 const x = PAD + (p.temp / 100) * (W - 2 * PAD);
                 const y = H - PAD - (p.duty_pct / 100) * (H - 2 * PAD);
-                const active = dragging === i && s.editable;
+                const active = dragging?.channel === s.key && dragging.index === i;
                 return (
-                  <circle
-                    key={`${s.label}-${i}`}
-                    cx={x}
-                    cy={y}
-                    r={active ? 4.5 : 2.5}
-                    fill={active ? "white" : s.color}
-                    stroke={s.color}
-                    strokeWidth={active ? 2 : 0}
-                  />
+                  <g key={`${s.key}-${i}`}>
+                    <circle
+                      cx={x}
+                      cy={y}
+                      r={active ? 5 : 3}
+                      fill={active ? "white" : s.color}
+                      stroke={s.color}
+                      strokeWidth={active ? 2 : 1}
+                    />
+                    {/* While dragging, name the point being moved: with two
+                        curves it is otherwise easy to grab the wrong one. */}
+                    {active && (
+                      <g>
+                        <rect
+                          x={x + 7}
+                          y={y - 15}
+                          width={s.label.length * 7 + 44}
+                          height={16}
+                          rx={2}
+                          fill="rgba(0,0,0,0.8)"
+                          stroke={s.color}
+                          strokeWidth={0.75}
+                        />
+                        <text x={x + 12} y={y - 4} fill="#fff" fontSize={8}>
+                          {s.label} · {p.temp}°C {p.duty_pct}%
+                        </text>
+                      </g>
+                    )}
+                  </g>
                 );
               })}
             </g>
@@ -288,28 +352,17 @@ export function CurveCard({ palette, curve, writable = false, onApplied }: Curve
         </Box>
       </Box>
 
-      <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}>
-        {series.map((s) => (
-          <Typography
-            key={s.label}
-            sx={{ fontSize: "0.6875rem", color: "text.secondary" }}
-          >
-            <Box component="span" sx={{ color: s.color, fontWeight: 600 }}>
-              {s.label}:
-            </Box>{" "}
-            {s.points.map((p) => `(${p.temp}°C,${p.duty_pct}%)`).join(" ")}
-          </Typography>
-        ))}
-      </Box>
+      <CurveTable series={series} />
 
       {writable && (
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1, pt: 0.5, borderTop: "1px solid", borderTopColor: "divider" }}>
           <Button
             size="small"
-            variant="outlined"
+            variant="contained"
+            startIcon={busy ? undefined : <CheckIcon sx={{ fontSize: 15 }} />}
             disabled={!dirty || busy}
             onClick={apply}
-            sx={{ textTransform: "none" }}
+            sx={{ textTransform: "none", minWidth: 96 }}
           >
             {busy ? "写入中…" : "应用曲线"}
           </Button>
@@ -317,18 +370,13 @@ export function CurveCard({ palette, curve, writable = false, onApplied }: Curve
             size="small"
             startIcon={<RestoreIcon sx={{ fontSize: 14 }} />}
             disabled={!dirty || busy}
-            onClick={() => {
-              setDraft(curve.cpu);
-              adopted.current = curve.cpu;
-              setError(null);
-              setNotice(null);
-            }}
+            onClick={reset}
             sx={{ textTransform: "none", color: "text.secondary" }}
           >
             重置
           </Button>
-          <Typography sx={{ fontSize: "0.6875rem", color: "text.disabled" }}>
-            拖动 CPU 折线端点编辑
+          <Typography sx={{ fontSize: "0.6875rem", color: "text.disabled", ml: "auto" }}>
+            拖动任一端点编辑
           </Typography>
         </Box>
       )}
@@ -344,5 +392,144 @@ export function CurveCard({ palette, curve, writable = false, onApplied }: Curve
         </Typography>
       )}
     </GlassCard>
+  );
+}
+
+/** The colour key: a swatch plus the fan name and what it controls. */
+function Legend({
+  palette,
+  dirtyChannels,
+}: {
+  palette: ExtractedPalette;
+  dirtyChannels: Channel[];
+}) {
+  const items: Array<{ channel: Channel; label: string; note: string; color: string }> = [
+    { channel: "cpu", label: "CPU", note: "处理器风扇", color: rgbString(palette.primary) },
+    { channel: "gpu1", label: "GPU1", note: "显卡风扇", color: rgbString(palette.secondary) },
+  ];
+  return (
+    <Box sx={{ display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
+      {items.map((item) => (
+        <Box key={item.channel} sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
+          <Box
+            sx={{
+              width: 18,
+              height: 3,
+              borderRadius: 0.5,
+              backgroundColor: item.color,
+              position: "relative",
+              "&::after": {
+                content: '""',
+                position: "absolute",
+                left: 8,
+                top: -2.5,
+                width: 8,
+                height: 8,
+                borderRadius: "50%",
+                backgroundColor: item.color,
+              },
+            }}
+          />
+          <Typography sx={{ fontSize: "0.6875rem", fontWeight: 600, color: item.color }}>
+            {item.label}
+          </Typography>
+          <Typography sx={{ fontSize: "0.625rem", color: "text.disabled" }}>
+            {item.note}
+          </Typography>
+          {dirtyChannels.includes(item.channel) && (
+            <Typography
+              sx={{
+                fontSize: "0.5625rem",
+                color: "warning.main",
+                border: "1px solid",
+                borderColor: "warning.main",
+                borderRadius: 0.5,
+                px: 0.5,
+                lineHeight: 1.4,
+              }}
+            >
+              已改
+            </Typography>
+          )}
+        </Box>
+      ))}
+    </Box>
+  );
+}
+
+/**
+ * A small per-fan table of the curve points.
+ *
+ * Easier to scan than a run of "(temp,duty)" pairs: one row per fan, one column
+ * per point, and the first cell carries the same colour as the line.
+ */
+function CurveTable({ series }: { series: Series[] }) {
+  const columns = series[0]?.points.length ?? 0;
+  return (
+    <Box
+      component="table"
+      sx={{
+        width: "100%",
+        borderCollapse: "collapse",
+        tableLayout: "fixed",
+        fontSize: "0.6875rem",
+        "& th": {
+          textAlign: "right",
+          fontWeight: 500,
+          color: "text.disabled",
+          fontSize: "0.625rem",
+          textTransform: "uppercase",
+          letterSpacing: "0.08em",
+          pb: 0.25,
+        },
+        "& td": { textAlign: "right", py: 0.4 },
+      }}
+    >
+      <Box component="thead">
+        <Box component="tr">
+          <Box component="th" sx={{ textAlign: "left", width: 56, pl: 0.75 }}>
+            风扇
+          </Box>
+          {Array.from({ length: columns }, (_, i) => (
+            <Box component="th" key={i}>
+              点{i + 1}
+            </Box>
+          ))}
+        </Box>
+      </Box>
+      <Box component="tbody">
+        {series.map((s) => (
+          <Box
+            component="tr"
+            key={s.key}
+            sx={{
+              "& td:first-of-type": {
+                borderLeft: "3px solid",
+                borderLeftColor: s.color,
+                pl: 0.75,
+              },
+              "&:not(:last-of-type) td": {
+                borderBottom: "1px solid",
+                borderBottomColor: "divider",
+              },
+            }}
+          >
+            <Box component="td" sx={{ textAlign: "left", color: s.color, fontWeight: 700 }}>
+              {s.label}
+            </Box>
+            {s.points.map((p, i) => (
+              <Box component="td" key={i}>
+                <Box component="span" sx={{ color: "text.disabled", mr: 0.75 }}>
+                  {p.temp}°C
+                </Box>
+                <Box component="span" sx={{ fontWeight: 600, color: "text.primary" }}>
+                  {p.duty_pct}%
+                </Box>
+              </Box>
+            ))}
+          </Box>
+        ))}
+      </Box>
+    </Box>
   );
 }
