@@ -339,8 +339,19 @@ fi
 if (( ENABLE )); then
     if (( DRY_RUN )); then
         printf '  [dry-run] systemctl enable --now clevod.service\n'
+        printf '  [dry-run] systemctl restart clevod.service  (if already running)\n'
     elif command -v systemctl >/dev/null 2>&1; then
-        systemctl enable --now clevod.service
+        # `enable --now` starts a stopped unit but does nothing to a running one,
+        # so an installed upgrade would keep serving the *old* binary until the
+        # next boot. That is invisible from the outside and shows up as an error
+        # that points at the source rather than at the stale process (e.g. a new
+        # D-Bus property reading as "Unknown property"). Restart explicitly.
+        if systemctl is-active --quiet clevod.service; then
+            log "restarting clevod to pick up the new binary"
+            systemctl restart clevod.service
+        else
+            systemctl enable --now clevod.service
+        fi
     fi
 fi
 
