@@ -512,6 +512,38 @@ describe("CurveCard applying", () => {
   });
 });
 
+describe("CurveCard text selection", () => {
+  /**
+   * The reported bug: pressing on a point and sweeping the pointer across the
+   * axis labels started a native text selection, so the gesture became "drag the
+   * selection" - the point stopped following and the chart lost the pointer.
+   */
+  it("cancels the default action when a drag starts", () => {
+    const { svg } = setup(asCurve(BASE, GPU_OTHER));
+    const a = pointOnScreen(60, 36, DEFAULT_RECT);
+    // `dispatchEvent` returns false when a listener called preventDefault.
+    const allowed = fireEvent.pointerDown(svg, { clientX: a.x, clientY: a.y, pointerId: 1 });
+    expect(allowed).toBe(false);
+  });
+
+  it("does not cancel the default action when nothing was grabbed", () => {
+    // Only the chart's own presses are ours to consume; a press in empty space
+    // must stay a normal click.
+    const { svg } = setup(asCurve(BASE, GPU_OTHER));
+    // The readout row is 77px tall and the chart starts below it, so this point
+    // is outside every handle's grab radius.
+    const far = pointOnScreen(95, 5, DEFAULT_RECT);
+    const allowed = fireEvent.pointerDown(svg, { clientX: far.x, clientY: far.y, pointerId: 1 });
+    expect(allowed).toBe(true);
+  });
+
+  it("makes the card unselectable, so a sweeping drag cannot select the labels", () => {
+    setup(asCurve(BASE, GPU_OTHER));
+    const card = document.querySelector(".MuiCard-root") as HTMLElement;
+    expect(getComputedStyle(card).userSelect).toBe("none");
+  });
+});
+
 describe("CurveCard handles", () => {
   /**
    * The handle boxes, in DOM order: CPU's four then GPU1's four.

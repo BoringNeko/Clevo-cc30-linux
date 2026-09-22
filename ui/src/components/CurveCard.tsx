@@ -370,18 +370,20 @@ export function CurveCard({
       const coords = toCurveCoords(event);
       if (!chart || !coords) return null;
       const rect = chart.getBoundingClientRect();
-      // The grab radius is a screen distance, converted to percent-of-plot, so
-      // the target feels the same whatever size the card is drawn at.
-      const perPxX = (100 - 2 * PAD_PCT) / rect.width;
-      const perPxY = (100 - 2 * PAD_PCT) / rect.height;
+      // The grab radius is a screen distance. The point is located in
+      // percent-of-plot, so a percent difference converts to pixels by dividing
+      // by the pixels-per-percent - multiplying would scale it the wrong way and
+      // make every press land on a point.
+      const pxPerPctX = rect.width / (100 - 2 * PAD_PCT);
+      const pxPerPctY = rect.height / (100 - 2 * PAD_PCT);
       let best: { channel: Channel; index: number } | null = null;
       let bestDist = HIT_RADIUS_PX;
       CHANNELS.forEach((channel) => {
         EDITABLE_INDICES.forEach((i) => {
           const p = draft[channel][i];
           if (!p) return;
-          const dx = (toPct(p.temp, tempRange) - toPct(coords.temp, tempRange)) * perPxX;
-          const dy = (toPct(p.duty_pct, dutyRange) - toPct(coords.duty, dutyRange)) * perPxY;
+          const dx = (toPct(p.temp, tempRange) - toPct(coords.temp, tempRange)) * pxPerPctX;
+          const dy = (toPct(p.duty_pct, dutyRange) - toPct(coords.duty, dutyRange)) * pxPerPctY;
           const dist = Math.hypot(dx, dy);
           // `<=` lets a later series take an exact tie.
           if (dist <= bestDist) {
@@ -399,6 +401,17 @@ export function CurveCard({
     if (!writable) return;
     const hit = nearestPoint(event);
     if (hit === null) return;
+    /*
+     * Stop the browser's default handling of a press-drag.
+     *
+     * Without this the gesture becomes a native text selection: the pointer
+     * sweeps across the axis labels below the plot, selects them, and the drag
+     * turns into "dragging the selection" - the curve loses the pointer and the
+     * point stops following. `user-select: none` on the chart backs this up, but
+     * the default action has to be cancelled too, otherwise the browser still
+     * starts a selection at the press.
+     */
+    event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
     setDragging(hit);
     setError(null);
@@ -472,7 +485,12 @@ export function CurveCard({
   };
 
   return (
-    <GlassCard sx={{ gap: 1.5 }}>
+    /*
+     * Nothing in this card is meant to be selected: the readout and the drag
+     * label are live values, and a drag that sweeps across them must keep
+     * moving the point rather than start a text selection.
+     */
+    <GlassCard sx={{ gap: 1.5, userSelect: "none", WebkitUserSelect: "none" }}>
       <CardHeader
         icon={<ShowChartIcon sx={{ fontSize: 16 }} />}
         title="风扇曲线"
@@ -482,7 +500,7 @@ export function CurveCard({
       <Readout series={series} dragging={dragging} temps={temps} />
 
       {/* The chart: a duty gutter on the left, the plot on the right. */}
-      <Box sx={{ display: "flex", flexDirection: "column" }}>
+      <Box sx={{ display: "flex", flexDirection: "column", userSelect: "none" }}>
         <Box sx={{ display: "flex", height: CHART_H }}>
           <YAxis range={dutyRange} />
           <Box
@@ -494,6 +512,10 @@ export function CurveCard({
               borderRadius: 1,
               border: "1px solid", borderColor: "divider",
               backgroundColor: "action.hover",
+              // A drag across the plot must move the point, never select the
+              // axis labels or the drag label it passes over.
+              userSelect: "none",
+              WebkitUserSelect: "none",
             }}
           >
             <Box
