@@ -10,7 +10,7 @@
 //! tested without a bus or hardware.
 
 use clevo_proto::fan_status::period_raw_to_rpm;
-use clevo_proto::{FanCurveInfo, FanStatus};
+use clevo_proto::{FanCurveInfo, FanStatus, TdpClass};
 
 /// Fan channels the protocol can encode.
 pub const MAX_FANS: usize = 3;
@@ -79,10 +79,11 @@ pub struct FanReading {
     pub period_raw: u16,
     /// Speed in rpm derived via the Control Center formula.
     pub rpm: u32,
-    /// Raw duty byte (offset unverified on this firmware).
-    pub duty: u8,
-    /// Raw temperature byte (conversion unverified).
-    pub temp_raw: u8,
+    /// Temperature in degrees Celsius (`None` when the EC reports none).
+    ///
+    /// The CPU value has already been through [`clevo_proto::cal_cpu_temp`];
+    /// the GPU values are direct Celsius.
+    pub temp_c: Option<u8>,
     /// Whether this channel exists on this machine.
     pub available: bool,
 }
@@ -105,19 +106,18 @@ impl FanState {
     ///
     /// A `fan_count` of `0` means "unknown", in which case every channel is
     /// treated as present so raw data is never hidden.
-    pub fn from_status(status: &FanStatus, fan_count: u8) -> Self {
+    pub fn from_status(status: &FanStatus, fan_count: u8, tdp: TdpClass) -> Self {
         let present = |index: usize| fan_count == 0 || (index as u8) <= fan_count;
-        let read = |period: u16, duty: u8, temp: u8, index: usize| FanReading {
+        let read = |period: u16, temp: Option<u8>, index: usize| FanReading {
             period_raw: period,
             rpm: period_raw_to_rpm(period),
-            duty,
-            temp_raw: temp,
+            temp_c: temp,
             available: present(index),
         };
         Self {
-            cpu: read(status.cpu_rpm, status.cpu_duty, status.cpu_temp_raw, 1),
-            gpu1: read(status.gpu1_rpm, status.gpu1_duty, status.gpu1_temp_raw, 2),
-            gpu2: read(status.gpu2_rpm, status.gpu2_duty, status.gpu2_temp_raw, 3),
+            cpu: read(status.cpu_period, status.cpu_temp_c(tdp), 1),
+            gpu1: read(status.gpu1_period, status.gpu1_temp_c, 2),
+            gpu2: read(status.gpu2_period, status.gpu2_temp_c, 3),
             freshness: Freshness::Fresh,
         }
     }
@@ -147,8 +147,10 @@ pub struct DaemonState {
 
 impl DaemonState {
     /// Record a successful fan poll.
-    pub fn apply_status(&mut self, status: &FanStatus, fan_count: u8) {
-        self.fan = FanState::from_status(status, fan_count);
+    ///
+    /// `tdp` is the CPU's TDP class, needed to convert the raw CPU temperature.
+    pub fn apply_status(&mut self, status: &FanStatus, fan_count: u8, tdp: TdpClass) {
+        self.fan = FanState::from_status(status, fan_count, tdp);
     }
 
     /// Mark fan readings stale after a failed poll.
@@ -168,15 +170,12 @@ mod tests {
 
     fn status() -> FanStatus {
         FanStatus {
-            cpu_rpm: 452,
-            gpu1_rpm: 0,
-            gpu2_rpm: 0,
-            cpu_duty: 63,
+            cpu_period: 452,
+            gpu1_period: 0,
+            gpu2_period: 0,
             cpu_temp_raw: 37,
-            gpu1_duty: 0,
-            gpu1_temp_raw: 33,
-            gpu2_duty: 0,
-            gpu2_temp_raw: 0,
+            gpu1_temp_c: Some(33),
+            gpu2_temp_c: None,
         }
     }
 
@@ -184,16 +183,36 @@ mod tests {
     fn fresh_after_success() {
         let mut st = DaemonState::default();
         assert_eq!(st.fan.freshness, Freshness::Unknown);
-        st.apply_status(&status(), 2);
+        st.apply_status(&status(), 2, TdpClass::Raw);
         assert_eq!(st.fan.freshness, Freshness::Fresh);
         assert_eq!(st.fan.cpu.rpm, 4770);
         assert!(!st.fan.gpu2.available);
     }
 
     #[test]
+    fn cpu_temperature_defaults_to_no_conversion_and_gpu_is_direct() {
+        let mut st = DaemonState::default();
+        // Raw is the default: the byte is used as-is.
+        st.apply_status(&status(), 2, TdpClass::Raw);
+        assert_eq!(st.fan.cpu.temp_c, Some(37));
+        // GPU1 is already Celsius.
+        assert_eq!(st.fan.gpu1.temp_c, Some(33));
+        // GPU2 absent.
+        assert_eq!(st.fan.gpu2.temp_c, None);
+    }
+
+    #[test]
+    fn a_configured_tdp_class_is_applied() {
+        let mut st = DaemonState::default();
+        // 37 through the 47 W curve: 37*0.5 + 13 = 31.5 -> 32.
+        st.apply_status(&status(), 2, TdpClass::W47);
+        assert_eq!(st.fan.cpu.temp_c, Some(32));
+    }
+
+    #[test]
     fn failure_marks_stale_but_keeps_value() {
         let mut st = DaemonState::default();
-        st.apply_status(&status(), 2);
+        st.apply_status(&status(), 2, TdpClass::Raw);
         st.mark_fan_stale();
         assert_eq!(st.fan.freshness, Freshness::Stale);
         assert_eq!(st.fan.cpu.rpm, 4770);

@@ -76,6 +76,82 @@ systemctl status clevod
 clevo-cc --transport dbus fan status
 ```
 
+### CPU 温度（默认不需要换算）
+
+命令 12 的 CPU 温度在偏移 `[18]`。原厂会用 CPU 型号去 `cpu.ini` 查 TDP 档位
+再做分段换算，**查不到就不换算**。
+
+实测 COLORFUL P15 23 属"查不到"那类：原始字节本身就是摄氏度（`raw 52` vs
+`sensors 54°C`，`raw 88` vs `87°C`）。**所以默认不做任何换算。**
+
+只有确认你的 CPU 确实属于原厂 `cpu.ini` 的某一档时，才在
+`/etc/clevo-cc/clevod.toml` 里设置：
+
+```toml
+cpu_tdp_class = "35W"   # 或 47W / 65W / 84W / 91W
+```
+
+**设错档位会让读数变差**（本机设成 47W 会把 54°C 变成 39°C、87°C 变成
+57°C）。不填即不换算，是安全默认。GPU 温度始终是直接摄氏度。
+
+CLI 可临时覆盖：`CLEVO_TDP_CLASS=65W clevo-cc --transport driver fan status`。
+
+验证方式：与 `sensors` 的 `Package id 0` 对照，差距应在几度以内。
+
+### 自定义风扇曲线
+```bash
+# 先看当前曲线（只读）
+clevo-cc --transport dbus fan curve
+
+# 预演要写入的内容（不碰硬件）
+clevo-cc --transport dbus fan set-curve --cpu "40,20 60,40 80,70 100,100"
+
+# 真正写入并切换到 custom 模式（触发 PolicyKit 授权）
+clevo-cc --transport dbus fan set-curve --cpu "40,20 60,40 80,70 100,100" --apply
+```
+
+`--gpu1` 省略时沿用 CPU 曲线；`--gpu2` 省略时为全零（表示"不动这个通道"）。
+温度必须严格递增，占空比 `0..100`。写入后会自动切到 `custom` 模式，
+否则固件不会使用新曲线。想恢复自动控制：`clevo-cc --transport dbus fan set-mode auto --apply`。
+
+> **底层语义**（排查时有用）：命令 14 是**整表替换**。内核驱动会先读当前曲线、
+> 只合并你点名的通道，再整份下发，所以只改 CPU 不会碰 GPU。详见
+> [`hardware-notes.md` §7.2](hardware-notes.md)。
+>
+> 直接写 sysfs 时请**每次只写一个通道**并读回校验：多行 `printf > fan_curve`
+> 会被 shell 拆成多次 `write()`，而退出码只反映最后一次。
+
+### 更新已装的内核驱动与守护进程
+
+改过 `kernel/` 或 Rust 代码之后，**必须重装**才会生效：
+
+```bash
+sudo packaging/install.sh            # DKMS 模块 + clevod/clevo-cc + UI
+sudo rmmod clevo_cc && sudo modprobe clevo_cc   # 立即换成新模块
+cat /sys/module/clevo_cc/srcversion  # 与内核目录下的 .ko 比对
+modinfo -F srcversion kernel/clevo-cc/clevo-cc.ko
+```
+
+两个 `srcversion` 一致即表示加载的是最新构建。
+
+**`install.sh` 会自动重启正在运行的 `clevod`**（打印
+`restarting clevod to pick up the new binary`）。这一点很关键：`systemctl
+enable --now` 对已在运行的服务是空操作，换了二进制却不重启，内存里跑的还是
+旧代码，而症状是**报错指向源码而非旧进程** —— 例如新属性读成
+`Unknown property`、新支持的模式被拒。
+
+> 排查时先看进程启动时间，它比二进制旧就说明没重启：
+>
+> ```bash
+> systemctl show clevod -p ActiveEnterTimestamp --value
+> stat -c %y /usr/bin/clevod
+> ```
+>
+> 手动重启：`sudo systemctl restart clevod`。
+
+**内核模块与用户态是分开的**：只改 Rust（`clevod` / CLI / UI）时，重装即可，
+`.ko` 未变、`srcversion` 也不会变。
+
 ### 离线自测（不碰硬件、无需安装）
 
 CLI 默认连**系统总线**；要连在私有 session bus 上跑的测试 daemon，加
@@ -287,7 +363,12 @@ sudo packaging/uninstall.sh --purge
 | `clevod` 启动失败 | `journalctl -u clevod -b`；确认 `--driver` 时模块已加载，否则回退 acpi_call |
 | UI 无数据 | `busctl --system status org.clevo.CC`；确认服务在系统总线 |
 | 写入无反应/报错 | 无桌面认证代理时写入仅限 root；KDE/GNOME 才有弹窗（见 `support-matrix.md`） |
-| 风扇模式不生效 | 别是 `silent(3)`（空实现）或 `custom(6)`（需先写曲线） |
+| 风扇模式不生效 | 别是 `silent(3)`（空实现）；`custom(6)` 需要先写入曲线 |
+| 自定义曲线不生效 | 写曲线后**必须**再切到 `custom` 模式（CLI/UI 会自动切换；直接写 sysfs 时需 `echo custom > fan_mode`） |
+| 曲线被 EC 拒绝 | 温度必须严格递增、占空比 0–100；`dmesg` 会记录 `_DSM` 的失败原因 |
+| 温度显示 `n/a` | 该通道 EC 未上报（原始值为 0）；不代表 0°C，属正常 |
+| CPU 温度不对/偏高 | 配置里 `cpu_tdp_class` 必须是本机 CPU 的 TDP 档（`35W`/`47W`/`65W`/`84W`/`91W`）。默认 `47W`（P15 23）；写错档位会得到错误的 CPU 温度 |
+| 想核对原始字节 | `cat /sys/devices/platform/CLV0001:00/raw_status`（命令 12 的原始 hex） |
 | DKMS 未随内核重编 | `dkms status`；确认 `linux-headers` 与 DKMS 服务已启用 |
 
 ---
@@ -298,3 +379,96 @@ sudo packaging/uninstall.sh --purge
 - 只有 `clevod` 访问硬件；CLI/UI 只是 D-Bus 客户端。
 - `clevo-cc` 组成员可直接写 sysfs，属特权操作。
 - 驱动为 GPL-2.0-only，其余为 MIT OR Apache-2.0。
+
+---
+
+## 10. 测试
+
+测试分三层：**完全离线** → **mock daemon 端到端** → **真机**。前两层
+不需要任何硬件，第三层按风险从只读排到写入。
+
+### 10.1 离线（CI 等价）
+
+```bash
+scripts/run-tests.sh              # 全部
+scripts/run-tests.sh --rust       # 只跑 Rust
+scripts/run-tests.sh --ui         # 只跑 UI（类型检查 + 前端 + 后端）
+scripts/run-tests.sh --kernel     # 只编译内核模块
+```
+
+它会依次跑 `cargo fmt --check`、`clippy -D warnings`、workspace 测试
+（含 `dbus-run-session` 的 D-Bus 集成测试）、前端类型检查与 vitest、
+UI 后端测试、内核模块编译。与 `.github/workflows/ci.yml` 一致，所以
+本地通过即 CI 通过。
+
+单跑某一层：
+
+```bash
+dbus-run-session -- cargo test --workspace        # Rust，含 D-Bus（推荐）
+cargo test --workspace                            # 无 session bus 时 D-Bus 测试自动跳过
+cd ui && pnpm test && pnpm typecheck
+cd ui/src-tauri && cargo test
+make -C kernel/clevo-cc                            # 需内核 headers
+```
+
+> Rust 与 UI 测试全部基于手写 fixture，**不会碰硬件**。`dbus-run-session`
+> 提供私有 session bus，让 D-Bus 集成测试真的走一遍 `org.clevo.CC` 的线协议
+> （属性读取、方法调用、PolicyKit 拒绝路径、信号）。
+
+### 10.2 mock daemon 端到端（不碰硬件，但走真实 D-Bus）
+
+```bash
+dbus-run-session -- sh -c '
+  ./target/release/clevod --session-bus --mock crates/clevod/tests/fixtures/test.fixture &
+  sleep 1
+  ./target/release/clevo-cc --transport dbus --dbus-session fan status
+  ./target/release/clevo-cc --transport dbus --dbus-session fan curve
+  ./target/release/clevo-cc --transport dbus --dbus-session fan set-curve --cpu "40,20 60,40 80,70 100,100"
+  ./target/release/clevo-cc --transport dbus --dbus-session fan set-curve --cpu "40,20 60,40 80,70 100,100" --apply
+'
+```
+
+最后一条会返回 `AccessDenied`（非 root、无 polkit 代理），这是**正确行为** ——
+它证明 PolicyKit 门确实生效了。以 root 或装了放行规则的桌面跑则是成功写入。
+
+### 10.3 真机（需要硬件，按风险递增）
+
+```bash
+sudo scripts/verify-hardware.sh --step 1   # 只读：acpi_call 读状态/曲线（最安全）
+sudo scripts/verify-hardware.sh --step 2   # 只读：驱动 hwmon 转速/温度 + sysfs 曲线
+sudo scripts/verify-hardware.sh --step 3   # 可逆：风扇模式 auto→max→auto
+sudo scripts/verify-hardware.sh             # 全部（含曲线写入往返，会先备份再还原）
+```
+
+曲线写入的压力测试（多轮写→读回→校验，结尾做内核健康检查）：
+
+```bash
+sudo scripts/curve-test.sh 10    # 10 轮；每轮写 cpu+gpu1 各一次并校验
+```
+
+它每行单独写、单独校验，所以失败能指名通道；结尾会检查
+`usercopy_abort` / `kernel BUG` / `Oops` / `ACPI Error`，**四项都应为 0**。
+
+脚本每步都会先打印将要做什么并征求确认；第 4 步会**先保存当前曲线**，写入
+测试曲线后读回比对，最后还原，并把风扇模式留在 `auto`（即使还原被跳过，固件
+也始终保有控制权）。
+
+真机上需要重点确认的三件事（**均已在 COLORFUL P15 23 上验证通过**）：
+
+| 检查点 | 位置 | 期望 | 实测结果 |
+|---|---|---|---|
+| 温度是否可信 | step 1/2 的温度 | 与 `sensors` 一致 | ✅ 负载时 87 = 87 °C |
+| 温度通道 | `temp1_input` | GPU 温度（m°C） | ✅ `n/a` 表示 EC 未上报 |
+| 曲线写入是否被接受 | 读回比对 | 读回的点与写入一致 | ✅ 10 轮压测全过 |
+
+> CPU 温度由 `clevod` 换算（见上文），驱动的 `temp*_input` 只暴露 GPU；
+> 若读数明显偏离 `sensors`，检查 `cpu_tdp_class` 配置。
+
+### 10.4 排障
+
+| 现象 | 排查 |
+|---|---|
+| D-Bus 测试被跳过 | 用 `dbus-run-session -- cargo test`；直接 `cargo test` 时会自动跳过 |
+| 内核模块编译失败 | 装内核 headers（`linux-headers` / `kernel-devel`）；CachyOS 这类 Clang+ThinLTO 内核由 Makefile 自动加 `LLVM=1` |
+| `_DSM` 返回 `0x80000002` | 该命令在本机固件不支持；查 `dmesg`  |
+| 曲线写入后无效果 | 确认已切到 `custom` 模式（CLI/UI 自动；直接写 sysfs 需手动 `echo custom > fan_mode`） |

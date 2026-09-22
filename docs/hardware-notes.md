@@ -148,6 +148,106 @@ Receives `BUFF = DerefOf(Arg2[0])` and writes:
 
 Returns `0x14` (20). T1/D1 and T4/D4 are not sent in the write payload.
 
+### 7.2 Four behaviours that only showed up on hardware
+
+The layout above was known from the DSDT from the start; what took four attempts
+to get right were the *semantics* around it. All four are now implemented and
+stress-tested (10 rounds, 40 read-back checks, `scripts/curve-test.sh`).
+
+**a) The success code is `0x14`, not the command number.**
+
+`SCMD`/`GCMD` (e.g. `121`) answer with the command number itself, so the first
+driver revision treated "returned != function" as failure. Command `14` answers
+`20`, exactly as recorded above — so a *successful* write was reported as
+`-EIO`. Each command family needs its own success mapping (see
+`clevo_proto::is_success_status`).
+
+**b) Command 14 replaces the whole table.**
+
+Sending a payload whose other channels are zero **wipes those channels**. The
+driver therefore does a **read-modify-write**: it fetches the current curve
+(command 13), merges only the named channels, and sends the whole thing back.
+A caller changing one fan does not have to resend the others.
+
+**c) The read and write payloads do not share a layout.**
+
+This is the trap that cost the most time:
+
+| | command 13 (read) | command 14 (write) |
+|---|---|---|
+| `[2..3]` | CPU **fan period** | `F1T2`/`F1D2` |
+| `[6..7]` | GPU2 **fan period** | `F2T2`/`F2D2` |
+| curve data | `[0x10..0x27]` | `[2..0x0D]` |
+
+Copying the command-13 reply straight into a command-14 payload therefore feeds
+**fan rotation periods in as curve points**. The merge must decode by offset and
+re-emit in the write layout; a raw buffer copy is wrong even though the two look
+similar.
+
+**d) A channel that cannot be encoded is skipped only if it is unchanged.**
+
+Validation exists to stop a user writing a broken curve, but it must not make a
+broken table unrepairable: a restore necessarily echoes back whatever the EC
+holds. The rule implemented is: a named channel whose values differ from the
+EC's own and cannot be encoded is rejected (`-EINVAL`); one that is identical to
+what the EC already has is skipped, so a corrupt table can still be overwritten
+with good values.
+
+### 7.3 Writing from a shell
+
+`fan_curve_store` handles one *write()* at a time, and a multi-line
+`printf ... > fan_curve` is split by the shell into several writes — each
+performing its own read-modify-write. That is functionally fine (every pass
+starts from the EC's latest state) but means the shell's exit status reflects
+only the last line. Write one channel per call and check the read-back:
+
+```bash
+echo "cpu: 0,0 50,100 70,170 0,0" | sudo tee /sys/devices/platform/CLV0001:00/fan_curve
+```
+
+### 7.4 What the write actually does, confirmed on hardware
+
+§7.2 covers semantics discovered while writing the driver. This section records
+what a full write/read cycle proves about the *firmware's* behaviour, verified
+by writing a chosen curve and reading the EC back.
+
+**Only the middle two points are stored.** Write `cpu: … 55,102 75,179 …` and
+the EC keeps its own T1/T4:
+
+```text
+before:  cpu: 40,63 60,91 80,135 100,255
+write:   cpu: 40,20 55,40 75,70 95,100      (duty as percentages)
+after:   cpu: 40,63 55,102 75,179 100,255
+              ↑ EC's      ↑ ours      ↑ EC's
+```
+
+T1/D1 and T4/D4 are unchanged, which matches the payload layout: command 14
+never carries them.
+
+**Slopes follow the same rule.** Only R2 — the slope of the segment the write
+fully specifies — is meaningful. R1 and R3 are derived from T1/T4, which are not
+sent, so a caller must leave them alone and let the EC keep what it has. The
+kernel driver's encoder writes only R2, and the userspace encoder was aligned
+with it; sending our own R1/R3 would have overwritten the EC's with a slope
+computed from points it never received.
+
+**The percentage round-trips.** Duty is given as `0..100` and stored as the
+EC's raw `0..255`; `40% → 102`, `70% → 179`, `100% → 255`, and reading back
+converts the other way with at most one unit of rounding error. Note this
+conversion lives in `clevo-proto` only. It is *not* applied at the D-Bus
+boundary or in the UI: `GetCurve` already emits percentages
+(`[[40,25],[55,40],[75,70],[100,100]]`), while `cat fan_curve` shows raw bytes
+(`40,63 55,102 75,179 100,255`). Converting again at either of those layers
+turns 100% into 255 and the daemon rejects it as out of range.
+
+**A channel the write does not carry is not validated.** Command 14 only
+concerns the middle pair. A two-fan machine can still hold leftovers in GPU2 —
+the live EC reports `gpu2: 0,0 50,100 70,170 0,0`, so T1 and T4 are zero while
+T2/T3 are not — and demanding that all four points increase made a curve just
+read from the EC impossible to send back. Validation and encoding now both key
+on the middle points, the same rule the driver and the kernel use:
+`T2 == 0 && T3 == 0` means "leave this channel alone".
+
 ## 8. Command 121 (`0x79`) — sub-commands (verified)
 
 In `GCMD`/`SCMD`, `Arg1` is the command and `ARGS = Arg2` (an Integer here):
@@ -228,13 +328,11 @@ buffer. Key values:
   gives ~450–470 rpm, which changes with load. This matches the reference docs.
 - `[6..7] = 0` on every sample → only two fans, consistent with command 13's
   `fan_count = 2`.
-- The reply is **42 bytes**, not the 0x100 the DSDT builds. The remaining
-  offsets do **not** line up with `PK0C`'s field list, so duty/temperature
-  offsets are treated as **unverified** and are not exposed yet.
+- The reply is **42 bytes**, not the 0x100 the DSDT builds.
 
-**Action for `fan_status.rs`**: keep `cpu_rpm`/`gpu1_rpm` as big-endian,
-`gpu2_rpm` will read 0 on this machine; mark duty/temp as unverified rather than
-claiming them.
+The duty/temperature layout was left unverified in an earlier revision because
+the 42-byte reply did not match `PK0C`'s declared field list. It has since been
+resolved — see §10.4.
 
 ### 10.3 Command 12 reports a rotation PERIOD, not rpm (resolved)
 
@@ -253,8 +351,14 @@ Implemented as `clevo_proto::fan_status::period_raw_to_rpm`.
 
 Temperature is also converted in the CC source (`RWReg.cs::CalCPUTemp`) using a
 TDP-class-dependent piecewise formula; the TDP class is looked up from
-`cpu.ini` by CPU model. Not reproduced yet — `temp_raw` is displayed as-is and
-labelled unverified.
+`cpu.ini` by CPU model. **This is now reproduced**: see §10.4 for the verified
+offset (`[18]`) and the five TDP classes. The GPU temperatures need no
+conversion.
+
+The conversion is implemented but **off by default**: this machine's CPU has no
+`cpu.ini` entry, so the raw byte is already Celsius and a curve would make the
+reading 15-30 °C worse. §10.4 records all three wrong answers this took, so they
+are not repeated.
 
 ## 11. Resolved and still-open items
 
@@ -264,6 +368,27 @@ Resolved since the original list:
 - [x] Fan-mode value semantics — `121/1` buttons (auto/max/silent/maxq/custom/quiet).
 - [x] `_DSM` Arg3 shape — Package{Buffer} for reads, Package{Integer} for 121.
 - [x] Command 12/13 live reads and command 121 writes.
+- [x] **Command 12 temperature offsets** — §10.4. CPU at `[18]` (raw), GPU at
+      `[21]`/`[24]` (Celsius). There are no duty fields in this reply; an
+      earlier revision invented a `[16..18]` duty triple that does not exist.
+- [x] **`CalCPUTemp` temperature conversion** — implemented with all five
+      vendor classes, but the *default is no conversion*: this machine's CPU is
+      not in the vendor `cpu.ini`, so the raw byte is already Celsius (§10.4).
+      Two earlier revisions got this wrong in opposite directions.
+- [x] **Custom curve write (command 14)** — byte layout in §7, implemented in
+      `clevo_proto::fan_curve::encode_curve`, the kernel driver and `clevod`.
+      Slope formula corrected; see §7.1. A slope-equivalence test pins it.
+- [x] **What the write stores** — only the middle two points; T1/T4 and the
+      slopes R1/R3 stay the EC's (§7.4). Confirmed by write-then-read-back.
+- [x] **Duty units across the layers** — percent in `clevo-proto` and on
+      D-Bus, raw `0..255` only at the EC and in sysfs. Converting anywhere else
+      breaks the round trip (§7.4).
+- [x] **Partly populated channels are writable** — a leftover GPU2 with
+      `T1 = T4 = 0` is valid; validation and encoding key on the middle points,
+      matching the driver and the kernel (§7.4).
+- [x] **The `fan_curve` text protocol** — the read side emits
+      `fan_count=` / `kb_type=` lines, the write side requires a `:` in every
+      line; the mismatch made every daemon-driven write fail (§13.4).
 
 Still open:
 
@@ -272,11 +397,159 @@ Still open:
 - [ ] The AppSettings channel (`0x32240C`) — no equivalent `_DSM` accessor
       found in the DSDT yet; needed for `page 0..7` persistence and capability
       probing.
-- [ ] Duty/temperature offsets of command 12 — the 42-byte reply does not match
-      `PK0C`'s declared layout, so these remain unverified and are labelled as
-      such in the CLI.
-- [ ] `CalCPUTemp` temperature conversion — needs the machine's TDP class.
-- [ ] Custom curve write (command 14) — byte layout known, not yet tested.
+- [ ] TurboFan (`121/25` bit 6) / DTT (bit 7) — reserved, not exposed.
+- [x] **Custom curve write (command 14) — verified on hardware.** 10 rounds of
+      write/read-back via `scripts/curve-test.sh`, 40 checks, all passing; no
+      kernel BUG/Oops/usercopy. See §7.2 for the three behaviours that only
+      surfaced on the machine (success code `0x14`, whole-table replace, and the
+      read/write payload layout mismatch).
+
+## 10.4 Command 12 duty and temperature offsets — resolved on hardware
+
+This took three attempts. The layout below is from the vendor's own code
+(`RWReg.cs::UpdateWMI12`) and was then **confirmed against live bytes**, which
+is what the two earlier attempts lacked.
+
+### The vendor's field map
+
+```csharp
+cpu_temp  = CalCPUTemp(GetTDP(), array[18]);  // raw, TDP-class dependent
+gpu1_temp = array[21];                        // already Celsius
+gpu2_temp = array[24];                        // already Celsius
+```
+
+So on the wire:
+
+| Offset | Content |
+|---|---|
+| `[2..3]` | CPU fan period, big-endian |
+| `[4..5]` | GPU1 fan period, big-endian |
+| `[6..7]` | GPU2 fan period (always 0 here) |
+| `[18]` | CPU temperature, raw (see below) |
+| `[21]` | GPU1 temperature, direct Celsius |
+| `[24]` | GPU2 temperature, direct Celsius |
+
+There are **no duty-cycle fields** in this reply.
+
+### What `CalCPUTemp` actually does on this machine: nothing
+
+`CalCPUTemp` selects a piecewise curve by TDP class, and `GetTDP` looks that
+class up from `cpu.ini` **by CPU model string**. When nothing matches, `TDP`
+stays empty and the `switch` falls through to `default => set_remote`: the raw
+byte is returned **unchanged**.
+
+Measured on the P15 23, the unmatched case is the one that applies:
+
+| | `[18]` raw | `sensors` Package |
+|---|---|---|
+| idle | 52 | 54 °C |
+| load | 88 | 87 °C |
+
+The raw byte is Celsius within 1-2 °C. Forcing the 47 W curve turns 54 into 39
+and 87 into 57 - an error of 15-30 °C in the *wrong* direction. **The correct
+default is therefore no conversion**, and a TDP class should only be set when
+the CPU genuinely matches one of the vendor's `cpu.ini` sections.
+
+### Live confirmation (idle vs. 4x `yes` for 20 s)
+
+| | `[2..3]` BE | `[4..5]` BE | `[18]` | `[21]` |
+|---|---|---|---|---|
+| idle | 0 | 0 | 37-52 | 33-35 |
+| load | 639 | 683 | 87-88 | 35-36 |
+
+- **Fan periods check out exactly.** At load the kernel driver's hwmon reported
+  `fan1_input = 3374`, `fan2_input = 3157`; `2156250 / 639 = 3374` and
+  `2156250 / 683 = 3157`. Big-endian confirmed again, and the two independent
+  paths agree.
+- **`[18]` tracks `sensors` directly** (see the table above).
+- `[21]` stays in the mid-30s, consistent with an idle discrete GPU.
+
+### `[18]` vs `sensors`: why they agree at load but not at idle
+
+Final verification on the P15 23, with the default (no conversion):
+
+| | CLI `[18]` | `sensors` Package | delta |
+|---|---|---|---|
+| idle | 45 °C | 53 °C | 8 |
+| load (4x `yes`, 20 s) | 87 °C | 87 °C | **0** |
+
+This asymmetry is expected, not a bug: `sensors`' `Package id 0` is the CPU's
+**internal core DTS**, while offset `[18]` is the EC's **package thermistor**.
+At idle the cores leak enough heat that the DTS reads a few degrees above the
+board sensor; under sustained load the two reach thermal equilibrium and
+converge. The exact match at 87 °C is the decisive evidence: a conversion error
+would not disappear at the high end.
+
+**Expected agreement is therefore a few degrees at idle and near-exact under
+load; do not "correct" the idle gap.**
+
+### Three wrong answers before this one (worth recording)
+
+1. **"Temperatures are at `[19..21]`, already Celsius."** Inferred from the
+   reference doc's prose, never measured. `[19]` is 0 idle / 115 load - not a
+   temperature.
+2. **"Duty is at `[16..18]`."** Invented to explain the bytes around the first
+   guess. No duty values appear in this reply at all.
+3. **"The CPU byte needs `CalCPUTemp`, so apply the 47 W curve."** The offset
+   `[18]` was right, but the conversion was not: it was applied without checking
+   whether this CPU's `cpu.ini` entry actually matches. It does not, and the
+   curve made the reading 15-30 °C worse.
+
+Each was corrected by dumping the raw reply (`raw_status`) and comparing against
+`sensors` **at two different temperatures**. The first two were caught by the
+1 °C "GPU temperature" that never moved; the third by the idle and load readings
+diverging in opposite directions.
+
+**The lesson this section exists to record: offsets and conversions are separate
+questions.** Getting `[18]` right said nothing about whether a curve belongs
+there.
+
+### What the implementation does now
+
+- `FanStatus` exposes `cpu_temp_raw` plus `cpu_temp_c(tdp_class)`; the CPU byte
+  is never presented as Celsius without naming the conversion.
+- `TdpClass` carries the five vendor classes plus `Raw` (no conversion), which
+  is the **default**.
+- `clevod` reads `cpu_tdp_class` from its config; absent or unrecognised means no
+  conversion, matching the vendor's unmatched-CPU behaviour.
+- The CLI honours `CLEVO_TDP_CLASS` the same way.
+- The kernel driver exposes `temp1_input` for the **GPU** only (direct Celsius)
+  and returns `-EOPNOTSUPP` for the CPU channel; userspace applies any curve.
+- A 0 temperature means "not reported" and is carried as `None`/`null` end to
+  end, never as 0 °C.
+
+## 7.1 Command 14 slope formula — corrected
+
+The reference gave `Rnn = round((D(n+1) - Dn) / (T(n+1) - Tn) * 2.55 * 16)`
+without saying whether `D` was a percentage or the raw `0..255` byte. Working it
+through in the EC's units:
+
+```
+raw(p)  = p / 100 * 255                       (percentage -> wire byte)
+Rnn     = round((raw(D(n+1)) - raw(Dn)) / (T(n+1) - Tn) * 16)
+        = round((D(n+1) - Dn) / (T(n+1) - Tn) / 100 * 255 * 16)
+```
+
+Algebraically this is identical to the reference expression
+(`/100 * 255 * 16 == * 2.55 * 16`), so the earlier concern that one or the other
+was wrong by a factor of `100/d` was unfounded — they are the same formula. The
+implementation now writes it in the raw-duty form so the units are explicit, and
+a test pins it against an independently computed raw-space slope. The slope is
+stored big-endian at `[14..31]` (`R1/R2/R3` for CPU, then GPU1, then GPU2).
+
+**Only R2 is written, not all three.** R2 is the slope of the segment the write
+fully specifies (`T2->T3`); R1 and R3 are derived from T1/T4, which command 14
+does not carry and the EC owns. Sending our own values there would overwrite the
+EC's with a slope computed from points it never received. The kernel driver's
+encoder writes only R2, and the userspace encoder now matches it — it used to
+write all three, which also blew up on a partly populated channel where
+`T4 = 0` made `compute_slope` fail.
+
+A fan whose middle two points are zero is "channel absent": its points and
+slopes are left zero and the EC keeps its own curve, so a two-fan machine never
+has to invent points for a fan it does not have. Note the test is on the
+**middle** points, not all four — see §7.4 for why the first and last point can
+legitimately be zero on a channel the EC only partly populates.
 
 ## 12. S5.6 read-only `acpi_call` backend
 
@@ -386,7 +659,7 @@ auto:  fan1_input = 3428
 `fan_mode` sysfs reflects only what the driver has written this session; the
 firmware does not expose the current mode reliably.
 
-### 13.3 Performance mode (`121` sub 25) — verified
+### 13.1 Performance mode (`121` sub 25) — verified
 
 `perf_mode` accepts the four logical values; the firmware applies its internal
 `APPM = {2,3,1,0}` mapping to the EC:
@@ -403,46 +676,90 @@ requests TurboFan and bit 7 requests DTT. All four plain modes were accepted
 live (idle rpm varied 1817–2093), invalid input returned EINVAL, and no ACPI
 errors were logged. TurboFan/DTT are reserved.
 
-### 13.1 Driver surface (implemented vs. reserved)
+### 13.2 Driver surface (implemented vs. reserved)
 
 `clevo-cc` exposes:
 
 | Interface | Kind | Status |
 |---|---|---|
 | `hwmon fan1_input` / `fan2_input` | read | implemented (CPU, GPU1) |
-| `sysfs fan_mode` | rw | implemented: `auto`(0) / `quiet`(8) / `max`(1) / `maxq`(5) |
-| `sysfs fan_curve` | read | implemented read-only (command 13) |
+| `hwmon temp1_input` | read | implemented (GPU1 °C); CPU `-EOPNOTSUPP` |
+| `sysfs fan_mode` | rw | implemented: `auto`(0) / `quiet`(8) / `max`(1) / `maxq`(5) / `custom`(6) |
+| `sysfs fan_curve` | rw | implemented: read (command 13) and write (command 14) |
+| `sysfs raw_status` / `raw_curve` | read | diagnostic hex dumps of commands 12/13 |
 | `sysfs perf_mode` | rw | implemented: `quiet`(0) / `pwrsaving`(1) / `performance`(2) / `entertainment`(3) |
+
+`temp1_input` is the **GPU** and returns `-ENODATA` when the EC reports 0. The
+CPU temperature channel is deliberately not registered: the raw byte at `[18]`
+needs the vendor's `CalCPUTemp` curve, which is selected by the CPU's TDP class
+and therefore belongs in userspace, where `clevod` applies it (see §10.4).
+
+`raw_status`/`raw_curve` exist so a future firmware revision can be re-checked
+byte by byte without rebuilding a debug module.
+
+**Custom curve write (command 14) is implemented.** The `fan_curve` attribute
+accepts the same per-fan point lines it emits:
+
+```bash
+echo "cpu: 0,0 55,102 75,178 0,0" | sudo tee /sys/devices/platform/CLV0001:00/fan_curve
+echo custom | sudo tee /sys/devices/platform/CLV0001:00/fan_mode
+```
+
+It sends `Arg3 = Package { Buffer(256) }` (the `PK*` shape, same as command 13),
+encodes `[2]=CPU.T2 [3]=CPU.D2 [4]=CPU.T3 [5]=CPU.D3`, then GPU1 at `[6..9]`,
+GPU2 at `[10..13]`, and the big-endian slopes `R12/R23/R34` at `[14..31]`. The
+duty written is the raw `0..255` byte. Writing does not itself select the custom
+mode; `fan_mode` must be set to `custom` afterwards.
 
 **Reserved, not implemented yet:**
 
 - `fan_mode` value `3` (silent) — the DSDT branch for `121/1 = 3` is empty, so
   it is intentionally not exposed; it would do nothing on this firmware.
-- `fan_mode` value `6` (custom) — selects "use the custom curve" but has no
-  effect until a curve is written with command 14. Reserved for the graphical
-  curve editor.
-- **Custom curve write (command 14)** — the writable side of `fan_curve`.
-  Deferred to the Tauri UI work so the four-point curve can be edited and
-  validated before being sent. When implemented it must:
-  - send `Arg3 = Package { Buffer(256) }` (the `PK*` shape, same as command 13);
-  - encode `[2]=CPU.T2 [3]=CPU.D2*255/100 [4]=CPU.T3 [5]=CPU.D3*255/100`,
-    then GPU1 at `[6..9]`, GPU2 at `[10..13]`, and the big-endian slopes
-    `R12/R23/R34` at `[14..31]`;
-  - validate strictly increasing temperatures and duty `0..100`;
-  - be tested against the machine because the EC may reject or reorder points.
 - **Fan offset (command 14 via `121/14`)** — verified ineffective under thermal
   protection; not exposed.
 - **TurboFan (`121/25` bit 6) / DTT (bit 7)** — modifiers of the performance
   mode; reserved, not exposed. The plain performance modes (0..3) are
-  implemented (see §13.3).
-- **Silent/MaxQ buttons parity** — `maxq` is exposed; silent is not (see above).
+  implemented (see §13.1).
+- **Mode persistence** — the driver only sends the EC command; persistence is
+  handled by `clevod` (local TOML), not the kernel.
 
-### 13.2 Persistence caveat
+### 13.3 Persistence caveat
 
 The original Control Center persists the fan mode to AppSettings (`SetAPPData`)
 in addition to sending `121/1`. The driver only sends the EC command; on reboot
 the EC returns to its own default. Persisting the mode is planned for `clevod`
 (local TOML + optional EC page), not the kernel driver.
+
+### 13.4 The `fan_curve` text protocol, read vs. write
+
+The `fan_curve` attribute is a small text format, and the read and write sides
+do **not** accept the same lines. Two bugs came from assuming they did.
+
+**Read** (`fan_curve_show`) emits a metadata line plus one line per fan:
+
+```text
+fan_count=2 kb_type=6
+cpu: 40,63 55,102 75,179 100,255
+gpu1: 40,63 60,115 80,191 99,255
+gpu2: 0,0 50,100 70,170 0,0
+```
+
+Duty here is the EC's raw `0..255`, and all four points appear.
+
+**Write** (`fan_curve_store`) parses line by line, and for every line it
+**requires a `:` before it looks at the line's name**. That ordering matters:
+`fan_count=2` has no colon, so echoing a read straight back was rejected with
+`-EINVAL` before any channel was examined. Every daemon-driven curve write
+failed this way, while `scripts/curve-test.sh` passed because it writes sysfs
+directly and never goes through the userspace encoder that added the line.
+
+The store side now recognises `fan_count=` / `kb_type=` before demanding a
+separator, and the transport no longer emits a line the write does not need. A
+test checks every emitted line for the colon the kernel wants, so the two sides
+cannot drift apart unnoticed again.
+
+The write accepts one channel per call. Only the named channel changes; the rest
+keep the EC's values, which is why the driver reads before it writes (§7.2b).
 
 ## 14. PolicyKit authorization — verified on real hardware
 

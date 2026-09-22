@@ -80,7 +80,7 @@ mod tests {
         let state = service.state();
         let state = state.lock().unwrap();
         assert_eq!(state.fan.freshness, state::Freshness::Fresh);
-        assert_eq!(state.fan.cpu.rpm, 4770);
+        assert_eq!(state.fan.cpu.rpm, 4667);
         assert!(!state.fan.gpu2.available);
     }
 

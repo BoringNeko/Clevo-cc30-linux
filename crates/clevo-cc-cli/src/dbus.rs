@@ -66,14 +66,12 @@ pub struct DbusStatus {
     pub cpu_rpm: u32,
     /// GPU1 rpm.
     pub gpu_rpm: u32,
-    /// CPU duty raw.
-    pub cpu_duty: u8,
-    /// GPU1 duty raw.
-    pub gpu_duty: u8,
-    /// CPU temperature raw.
-    pub cpu_temp_raw: u8,
-    /// GPU1 temperature raw.
-    pub gpu_temp_raw: u8,
+    /// CPU temperature in °C (`0` = the EC reports none).
+    pub cpu_temp_c: u8,
+    /// GPU1 temperature in °C (`0` = the EC reports none).
+    pub gpu_temp_c: u8,
+    /// Whether a custom fan curve can be written.
+    pub curve_writable: bool,
 }
 
 /// Blocking client over `org.clevo.CC`.
@@ -178,6 +176,18 @@ impl DbusClient {
             .map_err(|e| DbusError::Decode(e.to_string()))
     }
 
+    /// Write a custom fan curve and select the `custom` fan mode.
+    ///
+    /// The daemon validates the curve and authorizes the write through
+    /// PolicyKit; a denial or a malformed curve comes back as a D-Bus error.
+    pub fn set_curve(&self, curve_json: &str) -> Result<(), DbusError> {
+        let proxy = self.proxy(DBUS_INTERFACE)?;
+        proxy
+            .call_method("SetCurve", &(curve_json,))
+            .map_err(|e| classify(&e))?;
+        Ok(())
+    }
+
     fn prop<T>(&self, name: &str) -> Result<T, DbusError>
     where
         T: TryFrom<zbus::zvariant::OwnedValue> + zbus::zvariant::Type,
@@ -199,10 +209,9 @@ impl DbusClient {
             fan_count: self.prop("FanCount")?,
             cpu_rpm: self.prop("CpuRpm")?,
             gpu_rpm: self.prop("GpuRpm")?,
-            cpu_duty: self.prop("CpuDuty")?,
-            gpu_duty: self.prop("GpuDuty")?,
-            cpu_temp_raw: self.prop("CpuTempRaw")?,
-            gpu_temp_raw: self.prop("GpuTempRaw")?,
+            cpu_temp_c: self.prop("CpuTempC")?,
+            gpu_temp_c: self.prop("GpuTempC")?,
+            curve_writable: self.prop("CurveWritable")?,
         })
     }
 }

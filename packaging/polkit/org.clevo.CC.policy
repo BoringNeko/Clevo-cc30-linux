@@ -33,4 +33,14 @@
       <allow_active>auth_admin_keep</allow_active>
     </defaults>
   </action>
+
+  <action id="org.clevo.CC.set-fan-curve">
+    <description>Write a custom fan curve</description>
+    <message>Authentication is required to write a custom fan curve</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+  </action>
 </policyconfig>

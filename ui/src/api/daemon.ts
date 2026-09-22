@@ -12,10 +12,8 @@ export type Freshness = "fresh" | "stale" | "unknown";
 export interface FanReading {
   /** Speed in rpm. */
   rpm: number;
-  /** Raw duty byte (conversion unverified). */
-  duty: number;
-  /** Raw temperature byte (conversion unverified). */
-  temp_raw: number;
+  /** Temperature in °C, or `null` when the EC reports none. */
+  temp_c: number | null;
   /** Whether the channel exists on this machine. */
   available: boolean;
 }
@@ -36,6 +34,8 @@ export interface FanSnapshot {
   fan_mode: number;
   perf_mode: number;
   writable: boolean;
+  /** Whether a custom fan curve can be written. */
+  curve_writable: boolean;
 }
 
 /** Parsed fan curve. */
@@ -53,8 +53,23 @@ export const FAN_MODE_NAMES: Record<number, string> = {
   0: "auto",
   1: "max",
   5: "maxq",
+  6: "custom",
   8: "quiet",
 };
+
+/**
+ * The fan mode whose value selects the curve stored in the EC.
+ *
+ * The firmware calls this value 6 and the daemon/CLI name it `custom`; the UI
+ * presents it as `customize`, because it is the mode the user picks to edit and
+ * apply their own curve.
+ */
+export const CUSTOMIZE_FAN_MODE = 6;
+
+/** Whether a fan mode is the one that uses the custom curve. */
+export function isCustomizeMode(value: number): boolean {
+  return value === CUSTOMIZE_FAN_MODE;
+}
 
 /** Canonical names for `121/25` values; `255` means "unset". */
 export const PERF_MODE_NAMES: Record<number, string> = {
@@ -94,12 +109,33 @@ export async function getFanCurve(): Promise<FanCurve> {
   return invoke<FanCurve>("get_fan_curve");
 }
 
-/** Fan modes the UI offers, in display order. */
-export const FAN_MODE_CHOICES: Array<{ value: number; label: string }> = [
-  { value: 0, label: "auto" },
-  { value: 8, label: "quiet" },
-  { value: 5, label: "maxq" },
-  { value: 1, label: "max" },
+/**
+ * Write a custom fan curve and select the `custom` fan mode.
+ *
+ * The daemon validates the curve and authorizes the write through PolicyKit;
+ * a denial or an unsupported request rejects with a message the UI must show.
+ */
+export async function setFanCurve(curve: FanCurve): Promise<void> {
+  return invoke<void>("set_fan_curve", { curve });
+}
+
+/**
+ * Fan modes the UI offers, in display order.
+ *
+ * `label` is what the button shows; `mode` is the name the daemon accepts for a
+ * write. They differ only for the curve mode, which the firmware and the daemon
+ * call `custom` but the UI presents as `customize`.
+ */
+export const FAN_MODE_CHOICES: Array<{
+  value: number;
+  label: string;
+  mode: string;
+}> = [
+  { value: 0, label: "auto", mode: "auto" },
+  { value: 8, label: "quiet", mode: "quiet" },
+  { value: 5, label: "maxq", mode: "maxq" },
+  { value: 1, label: "max", mode: "max" },
+  { value: CUSTOMIZE_FAN_MODE, label: "customize", mode: "custom" },
 ];
 
 /** Performance modes the UI offers, in display order. */

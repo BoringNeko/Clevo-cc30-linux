@@ -20,6 +20,7 @@ pub fn run() {
             commands::get_fan_snapshot,
             commands::poll_fan,
             commands::get_fan_curve,
+            commands::set_fan_curve,
             commands::set_fan_mode,
             commands::set_perf_mode,
             commands::get_launch_prefs,

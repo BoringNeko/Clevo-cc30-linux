@@ -26,6 +26,8 @@ use std::collections::HashMap;
 pub const ACTION_FAN_MODE: &str = "org.clevo.CC.set-fan-mode";
 /// PolicyKit action for performance-mode changes.
 pub const ACTION_PERF_MODE: &str = "org.clevo.CC.set-perf-mode";
+/// PolicyKit action for custom fan-curve writes.
+pub const ACTION_FAN_CURVE: &str = "org.clevo.CC.set-fan-curve";
 
 /// Identity of the process requesting a write.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

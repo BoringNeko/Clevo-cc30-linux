@@ -103,8 +103,26 @@ pub enum FanCommand {
     },
     /// Set the fan mode (`121/1`).
     SetMode {
-        /// `auto` or `quiet`.
+        /// `auto`, `quiet`, `maxq`, `max` or `custom`.
         mode: String,
+        /// Actually perform the write (otherwise dry run).
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Write a custom four-point fan curve (command `14`) and select `custom`.
+    ///
+    /// The curve is given as four `temp,duty` pairs per fan. Fans may be
+    /// omitted; `gpu2` defaults to a flat zero curve on two-fan machines.
+    SetCurve {
+        /// CPU curve, e.g. `40,25 60,36 80,53 100,100`.
+        #[arg(long)]
+        cpu: String,
+        /// GPU1 curve; defaults to the CPU curve.
+        #[arg(long)]
+        gpu1: Option<String>,
+        /// GPU2 curve; defaults to a flat zero curve.
+        #[arg(long)]
+        gpu2: Option<String>,
         /// Actually perform the write (otherwise dry run).
         #[arg(long)]
         apply: bool,

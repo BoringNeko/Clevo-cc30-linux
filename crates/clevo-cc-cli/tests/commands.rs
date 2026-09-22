@@ -82,6 +82,80 @@ fn unknown_fan_mode_is_invalid() {
 }
 
 #[test]
+fn custom_fan_mode_is_accepted() {
+    let command = FanCommand::SetMode {
+        mode: "custom".to_string(),
+        apply: false,
+    };
+    let (result, out) = run(|t, out| commands::run_fan(t, &command, out));
+    result.unwrap();
+    assert!(out.contains("would set fan mode to 6"), "out: {out}");
+}
+
+#[test]
+fn set_curve_without_apply_prints_the_payload() {
+    let command = FanCommand::SetCurve {
+        cpu: "40,20 55,40 75,70 95,100".to_string(),
+        gpu1: None,
+        gpu2: None,
+        apply: false,
+    };
+    let (result, out) = run(|t, out| commands::run_fan(t, &command, out));
+    result.unwrap();
+    assert!(out.contains("dry run"), "out: {out}");
+    // T2/D2 and T3/D3 land in slots 2..6; duty is raw 0..255.
+    assert!(out.contains("[2]=55 [3]=102 [4]=75 [5]=179"), "out: {out}");
+}
+
+#[test]
+fn set_curve_rejects_non_increasing_temperatures() {
+    let command = FanCommand::SetCurve {
+        cpu: "40,20 60,40 60,70 95,100".to_string(),
+        gpu1: None,
+        gpu2: None,
+        apply: false,
+    };
+    let (result, _) = run(|t, out| commands::run_fan(t, &command, out));
+    assert!(matches!(result, Err(CliError::Invalid(_))));
+}
+
+#[test]
+fn set_curve_rejects_wrong_point_count() {
+    let command = FanCommand::SetCurve {
+        cpu: "40,20 60,40".to_string(),
+        gpu1: None,
+        gpu2: None,
+        apply: false,
+    };
+    let (result, _) = run(|t, out| commands::run_fan(t, &command, out));
+    assert!(matches!(result, Err(CliError::Invalid(_))));
+}
+
+#[test]
+fn set_curve_rejects_duty_above_100() {
+    let command = FanCommand::SetCurve {
+        cpu: "40,20 55,40 75,101 95,100".to_string(),
+        gpu1: None,
+        gpu2: None,
+        apply: false,
+    };
+    let (result, _) = run(|t, out| commands::run_fan(t, &command, out));
+    assert!(matches!(result, Err(CliError::Invalid(_))));
+}
+
+#[test]
+fn set_curve_with_apply_is_refused_by_mock() {
+    let command = FanCommand::SetCurve {
+        cpu: "40,20 55,40 75,70 95,100".to_string(),
+        gpu1: None,
+        gpu2: None,
+        apply: true,
+    };
+    let (result, _) = run(|t, out| commands::run_fan(t, &command, out));
+    assert!(matches!(result, Err(CliError::Transport(_))));
+}
+
+#[test]
 fn profile_list_shows_supported_modes() {
     let (result, out) = run(|t, out| commands::run_profile(t, &ProfileCommand::List, out));
     result.unwrap();

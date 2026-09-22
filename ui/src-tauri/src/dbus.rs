@@ -51,8 +51,10 @@ impl From<serde_json::Error> for UiError {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct FanReading {
     pub rpm: u32,
-    pub duty: u8,
-    pub temp_raw: u8,
+    /// Temperature in °C, or `null` when the EC reports none.
+    ///
+    /// The CPU value has already been converted with the configured TDP curve.
+    pub temp_c: Option<u8>,
     pub available: bool,
 }
 
@@ -67,17 +69,19 @@ pub struct FanSnapshot {
     pub fan_mode: u8,
     pub perf_mode: u8,
     pub writable: bool,
+    /// Whether a custom fan curve can be written.
+    pub curve_writable: bool,
 }
 
 /// A single curve point, as sent to the frontend.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CurvePoint {
     pub temp: u8,
     pub duty_pct: u8,
 }
 
-/// The parsed fan curve, as sent to the frontend.
-#[derive(Debug, Clone, serde::Serialize)]
+/// The parsed fan curve, as sent to the frontend (and accepted back for writes).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FanCurve {
     pub fan_count: u8,
     pub init_mode: u8,
@@ -179,6 +183,16 @@ impl DaemonClient {
         })
     }
 
+    /// Write a custom fan curve and select the `custom` fan mode.
+    ///
+    /// The curve is sent as the daemon's JSON wire shape. The daemon validates
+    /// it and authorizes the write through PolicyKit; a denial or a malformed
+    /// curve comes back as a D-Bus error.
+    pub fn set_curve(&self, curve_json: &str) -> Result<(), UiError> {
+        self.proxy()?.call_method("SetCurve", &(curve_json,))?;
+        Ok(())
+    }
+
     /// Read the full cached snapshot.
     ///
     /// The daemon's `FanCount` property is only populated after a curve read, so
@@ -191,29 +205,17 @@ impl DaemonClient {
                 fan_count = curve.fan_count;
             }
         }
-        let reading = |rpm: u32, duty: u8, temp_raw: u8, index: u8| FanReading {
+        let reading = |rpm: u32, temp_c: u8, index: u8| FanReading {
             rpm,
-            duty,
-            temp_raw,
+            temp_c: (temp_c != 0).then_some(temp_c),
             available: fan_count == 0 || index <= fan_count,
         };
         Ok(FanSnapshot {
-            cpu: reading(
-                self.prop("CpuRpm")?,
-                self.prop("CpuDuty")?,
-                self.prop("CpuTempRaw")?,
-                1,
-            ),
-            gpu1: reading(
-                self.prop("GpuRpm")?,
-                self.prop("GpuDuty")?,
-                self.prop("GpuTempRaw")?,
-                2,
-            ),
+            cpu: reading(self.prop("CpuRpm")?, self.prop("CpuTempC")?, 1),
+            gpu1: reading(self.prop("GpuRpm")?, self.prop("GpuTempC")?, 2),
             gpu2: FanReading {
                 rpm: 0,
-                duty: 0,
-                temp_raw: 0,
+                temp_c: None,
                 available: fan_count >= 3,
             },
             freshness: self.prop("FanFreshness")?,
@@ -221,6 +223,7 @@ impl DaemonClient {
             fan_mode: self.prop("FanMode")?,
             perf_mode: self.prop("PerfMode")?,
             writable: self.prop("Writable")?,
+            curve_writable: self.prop("CurveWritable")?,
         })
     }
 
@@ -241,6 +244,12 @@ impl DaemonClient {
 /// Parse the daemon's `GetCurve` JSON string into a [`FanCurve`].
 ///
 /// Split out from the bus call so it can be unit tested without a daemon.
+///
+/// Duty arrives as a **percentage** and is passed through unchanged: the
+/// daemon's D-Bus interface speaks percent, and `clevo-proto` is where that is
+/// converted to and from the EC's raw 0..255. Converting here as well applied
+/// it twice - a 100% point went out as 255 and the daemon rejected it with
+/// "duty 255% out of range".
 pub fn parse_curve_json(json: &str) -> Result<FanCurve, UiError> {
     let parsed: CurveJson = serde_json::from_str(json)?;
     let conv = |v: Vec<[u8; 2]>| {
@@ -264,17 +273,20 @@ mod tests {
 
     #[test]
     fn parses_curve_json_from_the_daemon() {
-        // The exact shape clevod emits (verified live).
+        // The exact shape clevod emits over D-Bus (verified live). Duty is a
+        // percentage here - the raw 0..255 form only exists at the EC.
         let json = r#"{"fan_count":2,"init_mode":0,"kb_type":6,
-            "cpu":[[40,25],[60,36],[80,53],[100,100]],
-            "gpu1":[[40,25],[60,36],[80,53],[99,100]],
-            "gpu2":[[0,0],[0,1],[0,2],[0,0]]}"#;
+            "cpu":[[40,25],[55,40],[75,70],[100,100]],
+            "gpu1":[[40,25],[60,45],[80,75],[99,100]],
+            "gpu2":[[0,0],[50,39],[70,67],[0,0]]}"#;
         let curve = parse_curve_json(json).expect("valid curve json");
         assert_eq!(curve.fan_count, 2);
         assert_eq!(curve.kb_type, 6);
         assert_eq!(curve.cpu.len(), 4);
         assert_eq!(curve.cpu[0].temp, 40);
+        // Percent passes through untouched; 0..100 is the whole range.
         assert_eq!(curve.cpu[0].duty_pct, 25);
+        assert_eq!(curve.cpu[3].duty_pct, 100);
         assert_eq!(curve.gpu1[3].temp, 99);
     }
 

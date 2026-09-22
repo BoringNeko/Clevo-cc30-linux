@@ -55,4 +55,11 @@ describe("design-surface layout", () => {
       'gridTemplateRows: "minmax(0, 1fr) minmax(0, 1fr)"',
     );
   });
+
+  it("only shows the curve editor in the customize fan mode", () => {
+    // The curve card is gated on the mode: the firmware ignores a custom curve
+    // unless the fan mode selects it, so the editor must not appear otherwise.
+    expect(AppSource).toContain("isCustomizeMode(snapshot.fan_mode)");
+    expect(AppSource).toContain("CurveHintCard");
+  });
 });

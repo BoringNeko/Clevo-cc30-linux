@@ -34,8 +34,8 @@ fn fan_status_round_trip() {
         .expect("command 12");
     let payload = clevo_proto::response::response_first_record(&raw).expect("record");
     let status = parse_fan_status(payload).expect("parse");
-    assert_eq!(status.cpu_rpm, 462);
-    assert_eq!(status.gpu1_rpm, 473);
+    assert_eq!(status.cpu_period, 462);
+    assert_eq!(status.gpu1_period, 473);
 }
 
 #[test]

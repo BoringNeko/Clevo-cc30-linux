@@ -38,7 +38,38 @@ clevo\-cc \-\-fixture fixtures/example.fixture fan status
 sudo clevo\-cc \-\-transport acpi\-call fan watch \-\-interval\-ms 1000
 clevo\-cc \-\-transport dbus fan status
 clevo\-cc \-\-transport dbus fan set\-mode max \-\-apply
+clevo\-cc \-\-transport dbus fan set\-curve \-\-cpu "40,20 60,40 80,70 100,100" \-\-apply
 .fi
+.SH FAN CURVES
+.B fan set\-curve
+writes a four\-point curve (command 14) and selects the
+.B custom
+fan mode, which is what makes the firmware use it.
+Points are given as
+.IR "temp,duty" ,
+with duty in percent; temperatures must strictly increase.
+.B \-\-gpu1
+defaults to the CPU curve and
+.B \-\-gpu2
+to an all\-zero curve, which leaves that channel alone.
+.PP
+Command 14 replaces the whole table, so the stack reads the current curve first
+and merges only the channels you name; channels you omit keep their values.
+.PP
+Selecting the custom curve is a separate step in the driver interface, but
+.B set\-curve
+does it for you: writing a curve without selecting
+.B custom
+would leave the firmware on its auto curve.
+.PP
+Only the middle two points of each fan reach the EC; it keeps its own first and
+last point. All four are still required so the curve you send is a complete
+description, and the two that are not written are accepted as given.
+.SH SAFETY
+Writes need
+.B \-\-apply
+and, over D\-Bus, a PolicyKit authorization; without an authentication agent
+the daemon denies non\-root callers rather than silently allowing them.
 .SH SEE ALSO
 .BR clevod (8)
 .SH LICENSE

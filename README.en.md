@@ -16,25 +16,35 @@ UI added.
 
 ## Features
 
-- **Monitoring**: fan speed (CPU / GPU1), raw temperature and duty, and the fan
-  curve.
-- **Control**: fan mode (`auto` / `quiet` / `max` / `maxq`) and performance mode
-  (`quiet` / `pwrsaving` / `performance` / `entertainment`), through the kernel
-  driver and PolicyKit, fully reversible.
+- **Monitoring**: fan speed (CPU / GPU1), CPU/GPU temperature in Celsius, and the
+  fan curve.
+- **Control**: fan mode (`auto` / `quiet` / `max` / `maxq` / `customize` — the UI
+  label for the firmware's `custom`), a **custom four-point fan curve**
+  (command 14, which selects that mode when written; the curve card is only
+  shown while it is active, with both lines draggable and save / restore /
+  factory-default buttons) and performance mode (`quiet` / `pwrsaving` /
+  `performance` / `entertainment`), through the kernel driver and PolicyKit,
+  fully reversible.
 - **Daemon**: `clevod` is the only long-lived process that touches the hardware.
   It serves `org.clevo.CC` on the system D-Bus, caches readings and persists
   choices.
 - **Desktop UI**: a Tauri 2 app that talks only over D-Bus; glass dashboard,
-  custom title bar, light/dark themes, custom accent colour/logo/wallpaper, a
-  built-in colour picker, display settings (aspect ratio / resolution / zoom, all
-  remembered across restarts) and compatibility options.
+  custom title bar, an editable fan curve, light/dark themes, custom accent
+  colour/logo/wallpaper, a built-in colour picker, display settings (aspect
+  ratio / resolution / zoom, all remembered across restarts) and compatibility
+  options.
 - **System tray**: a native menu that switches the performance mode (`▶` marks
   the active one), opens the control center and quits; closing the window hides
   it to the tray and keeps the process running.
 - **Safe by default**: writes are off by default; the `acpi_call` transport is
   read-only; unverified firmware constants are clearly marked.
 - **Offline-testable**: no hardware required, everything is tested against
-  hand-written fixtures (129 Rust + 113 frontend tests).
+  hand-written fixtures (166 Rust + 28 UI-backend + 182 frontend tests).
+
+> Fan control (speed, temperature, curve read/write, fan and performance modes)
+> has been verified item by item on real hardware; the record is in
+> [`docs/hardware-notes.md`](docs/hardware-notes.md), with the write-path
+> details in §7.2 and §10.4.
 
 ## Architecture
 

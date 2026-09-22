@@ -84,7 +84,7 @@ async fn daemon_serves_properties_and_methods() {
     let freshness: String = proxy.get_property("FanFreshness").await.unwrap();
     assert_eq!(freshness, "fresh");
     let cpu_rpm: u32 = proxy.get_property("CpuRpm").await.unwrap();
-    assert_eq!(cpu_rpm, 4770);
+    assert_eq!(cpu_rpm, 4667);
 
     // Writes go through the service's validation.
     let applied: u8 = proxy
@@ -122,6 +122,72 @@ async fn daemon_serves_properties_and_methods() {
         curve.contains("\"fan_count\":2"),
         "unexpected curve json: {curve}"
     );
+
+    // Curve writability is advertised alongside the general write flag.
+    let curve_writable: bool = proxy.get_property("CurveWritable").await.unwrap();
+    assert!(curve_writable);
+}
+
+#[tokio::test]
+async fn set_curve_writes_and_selects_custom() {
+    if no_session_bus() {
+        return;
+    }
+    let _server = host("org.clevo.CC.curve", Arc::new(AllowAll)).await;
+    let proxy = proxy("org.clevo.CC.curve").await;
+
+    let curve = r#"{"cpu":[[40,20],[55,40],[75,70],[95,100]],
+                    "gpu1":[[45,25],[60,45],[80,75],[99,100]],
+                    "gpu2":[[0,0],[0,0],[0,0],[0,0]]}"#;
+    proxy
+        .call_method("SetCurve", &(curve,))
+        .await
+        .expect("set curve");
+
+    // Writing a curve selects the custom fan mode.
+    let fan_mode: u8 = proxy.get_property("FanMode").await.unwrap();
+    assert_eq!(fan_mode, 6, "custom");
+
+    // The daemon does not fake a read-back from a write: until `GetCurve` runs,
+    // `FanCurve` is empty.
+    let cached: String = proxy.get_property("FanCurve").await.unwrap();
+    assert!(cached.is_empty(), "cached before read: {cached}");
+
+    // After a real read it reflects the EC, not the payload we sent.
+    let read_back: String = proxy
+        .call_method("GetCurve", &())
+        .await
+        .expect("get curve")
+        .body()
+        .deserialize()
+        .unwrap();
+    assert!(
+        read_back.contains("\"fan_count\":2"),
+        "read back: {read_back}"
+    );
+    let cached: String = proxy.get_property("FanCurve").await.unwrap();
+    assert_eq!(cached, read_back);
+}
+
+#[tokio::test]
+async fn set_curve_rejects_malformed_curves() {
+    if no_session_bus() {
+        return;
+    }
+    let _server = host("org.clevo.CC.curvebad", Arc::new(AllowAll)).await;
+    let proxy = proxy("org.clevo.CC.curvebad").await;
+
+    // Not JSON at all.
+    assert!(proxy.call_method("SetCurve", &("nope",)).await.is_err());
+    // Wrong number of points.
+    let bad = r#"{"cpu":[[40,20],[55,40]],"gpu1":[[45,25],[60,45],[80,75],[99,100]],"gpu2":[[0,0],[0,0],[0,0],[0,0]]}"#;
+    assert!(proxy.call_method("SetCurve", &(bad,)).await.is_err());
+    // Duty out of range.
+    let bad = r#"{"cpu":[[40,20],[55,40],[75,101],[95,100]],"gpu1":[[45,25],[60,45],[80,75],[99,100]],"gpu2":[[0,0],[0,0],[0,0],[0,0]]}"#;
+    assert!(proxy.call_method("SetCurve", &(bad,)).await.is_err());
+    // Temperatures not strictly increasing.
+    let bad = r#"{"cpu":[[40,20],[55,40],[55,70],[95,100]],"gpu1":[[45,25],[60,45],[80,75],[99,100]],"gpu2":[[0,0],[0,0],[0,0],[0,0]]}"#;
+    assert!(proxy.call_method("SetCurve", &(bad,)).await.is_err());
 }
 
 #[tokio::test]
@@ -179,8 +245,8 @@ async fn fan_changed_signal_is_emitted() {
         .expect("a signal");
 
     let (cpu, gpu): (u32, u32) = signal.body().deserialize().expect("decode body");
-    assert_eq!(cpu, 4770);
-    assert_eq!(gpu, 0);
+    assert_eq!(cpu, 4667);
+    assert_eq!(gpu, 4559);
 }
 
 #[tokio::test]

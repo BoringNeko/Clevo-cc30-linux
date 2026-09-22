@@ -7,6 +7,7 @@ import { ThemeProvider } from "@mui/material/styles";
 import {
   getFanCurve,
   getFanSnapshot,
+  isCustomizeMode,
   pollFan,
   type FanCurve,
   type FanSnapshot,
@@ -17,6 +18,7 @@ import { WindowControls } from "./components/WindowControls";
 import { FansCard } from "./components/FansCard";
 import { PerformanceCard } from "./components/PerformanceCard";
 import { CurveCard } from "./components/CurveCard";
+import { CurveHintCard } from "./components/CurveHintCard";
 import { TelemetryCard } from "./components/TelemetryCard";
 import { useWallpaper } from "./hooks/useWallpaper";
 import { useLogo } from "./hooks/useLogo";
@@ -150,6 +152,20 @@ export default function App() {
       cancelled = true;
     };
   }, [applySnapshot]);
+
+  /**
+   * Re-read the curve from the EC.
+   *
+   * Called after a curve write so the card shows what the firmware actually
+   * stored rather than echoing back what was sent.
+   */
+  const refreshCurve = useCallback(async () => {
+    try {
+      setCurve(await getFanCurve());
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
 
   // Periodic refresh.
   useEffect(() => {
@@ -338,8 +354,19 @@ export default function App() {
                   />
                 </Box>
                 <Box id="curve" sx={{ scrollMarginTop: 16, minHeight: 0 }}>
-                  {curve ? (
-                    <CurveCard palette={accentPalette} curve={curve} />
+                  {!isCustomizeMode(snapshot.fan_mode) ? (
+                    <CurveHintCard palette={accentPalette} />
+                  ) : curve ? (
+                    <CurveCard
+                      palette={accentPalette}
+                      curve={curve}
+                      writable={snapshot?.curve_writable ?? false}
+                      onApplied={refreshCurve}
+                      temps={{
+                        cpu: snapshot.cpu.temp_c ?? undefined,
+                        gpu1: snapshot.gpu1.temp_c ?? undefined,
+                      }}
+                    />
                   ) : (
                     <Typography sx={{ color: "text.disabled", fontSize: "0.75rem" }}>
                       风扇曲线不可用

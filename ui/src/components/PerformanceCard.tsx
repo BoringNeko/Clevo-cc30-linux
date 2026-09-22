@@ -6,6 +6,7 @@ import SpeedIcon from "@mui/icons-material/Speed";
 import CheckIcon from "@mui/icons-material/Check";
 import { CardHeader, GlassCard } from "./GlassCard";
 import {
+  CUSTOMIZE_FAN_MODE,
   FAN_MODE_CHOICES,
   PERF_MODE_CHOICES,
   setFanMode,
@@ -22,11 +23,25 @@ interface PerformanceCardProps {
 }
 
 /**
+ * Whether a fan mode should occupy the full width of the mode grid.
+ *
+ * The four presets fill a 2x2 grid; the curve mode spans it on its own row so
+ * it is not read as merely a fifth preset.
+ */
+export function isFullWidthMode(value: number): boolean {
+  return value === CUSTOMIZE_FAN_MODE;
+}
+
+/**
  * Fan and performance mode selection.
  *
  * Buttons reflect the daemon's reported mode (`255` = not reported, shown as
  * "unknown"). A click sends a write through the daemon; the result is always
  * followed by a refresh so a denied write does not appear to have taken effect.
+ *
+ * The curve mode is labelled `customize` here: picking it is what makes the
+ * dashboard reveal the fan-curve editor. The daemon still receives `custom`,
+ * the name it and the firmware use.
  */
 export function PerformanceCard({
   palette,
@@ -59,13 +74,13 @@ export function PerformanceCard({
     const isActive = current === value;
     return (
       <Button
-        key={value}
         onClick={onClick}
         disabled={disabled}
         variant="outlined"
         aria-pressed={isActive}
         startIcon={isActive ? <CheckIcon sx={{ fontSize: 15 }} /> : undefined}
         sx={{
+          width: "100%",
           py: 1.25,
           fontSize: "0.75rem",
           fontWeight: isActive ? 700 : 600,
@@ -112,11 +127,13 @@ export function PerformanceCard({
           风扇模式
         </Typography>
         <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1 }}>
-          {FAN_MODE_CHOICES.map((c) =>
-            modeButton(c.value, c.label, snapshot.fan_mode, () =>
-              void apply(() => setFanMode(c.label)),
-            ),
-          )}
+          {FAN_MODE_CHOICES.map((c) => (
+            <Box key={c.value} sx={isFullWidthMode(c.value) ? { gridColumn: "1 / -1" } : undefined}>
+              {modeButton(c.value, c.label, snapshot.fan_mode, () =>
+                void apply(() => setFanMode(c.mode)),
+              )}
+            </Box>
+          ))}
         </Box>
       </Box>
 
@@ -133,11 +150,13 @@ export function PerformanceCard({
           性能模式
         </Typography>
         <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1 }}>
-          {PERF_MODE_CHOICES.map((c) =>
-            modeButton(c.value, c.label, snapshot.perf_mode, () =>
-              void apply(() => setPerfMode(c.label)),
-            ),
-          )}
+          {PERF_MODE_CHOICES.map((c) => (
+            <Box key={c.value}>
+              {modeButton(c.value, c.label, snapshot.perf_mode, () =>
+                void apply(() => setPerfMode(c.label)),
+              )}
+            </Box>
+          ))}
         </Box>
       </Box>
 

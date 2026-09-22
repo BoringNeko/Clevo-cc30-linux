@@ -6,7 +6,11 @@
 
 # Editor / OS
 *.swp
+*.swo
+*~
 .DS_Store
+Thumbs.db
+.directory
 
 # Local fixtures with machine-identifying data
 /fixtures/local/
@@ -25,6 +29,12 @@
 
 # The UI is an application: keep its lockfile for reproducible builds.
 !/ui/src-tauri/Cargo.lock
+
+# Other package managers' lockfiles: this project pins pnpm, and a stray npm or
+# yarn tree would be resolved instead on a machine that has one of them.
+/ui/package-lock.json
+/ui/yarn.lock
+/ui/.pnpm-store/
 
 # Distribution build output and the appimagetool blob fetched into packaging/.
 /dist/

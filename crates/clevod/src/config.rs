@@ -32,9 +32,59 @@ pub struct Config {
     /// Last performance mode (`121/25` value) chosen by the user.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub perf_mode: Option<u8>,
+    /// TDP class override for the raw CPU temperature byte.
+    ///
+    /// One of `35W`, `47W`, `65W`, `84W` or `91W`, matching the vendor's
+    /// `cpu.ini` sections. Absent (the default) means **no conversion**, which
+    /// is both the vendor's behaviour for an unmatched CPU and the verified
+    /// behaviour on the reference machine - there the raw byte already tracks
+    /// `sensors` within 1-2 °C. Only set this if your CPU's entry in the
+    /// vendor `cpu.ini` matches one of those classes, otherwise it will make
+    /// the reading worse.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_tdp_class: Option<String>,
     /// Whether to re-apply the saved modes on daemon startup.
     #[serde(default = "default_true")]
     pub apply_on_start: bool,
+}
+
+/// Parse a configured TDP class string.
+///
+/// Absent or unrecognised values yield `TdpClass::Raw` (no conversion), which
+/// is the safe default: an unnecessary curve makes the reading worse, whereas
+/// no curve is correct on machines the vendor's `cpu.ini` does not list.
+pub fn parse_tdp_class(text: Option<&str>) -> clevo_proto::TdpClass {
+    use clevo_proto::TdpClass;
+    match text.map(str::trim).map(str::to_ascii_uppercase).as_deref() {
+        Some("35W") => TdpClass::W35,
+        Some("47W") | Some("45W") => TdpClass::W47,
+        Some("65W") => TdpClass::W65,
+        Some("84W") | Some("88W") => TdpClass::W84,
+        Some("91W") => TdpClass::W91,
+        _ => TdpClass::Raw,
+    }
+}
+
+#[cfg(test)]
+mod tdp_tests {
+    use super::parse_tdp_class;
+    use clevo_proto::TdpClass;
+
+    #[test]
+    fn absent_or_unknown_is_raw_not_a_guess() {
+        assert_eq!(parse_tdp_class(None), TdpClass::Raw);
+        assert_eq!(parse_tdp_class(Some("")), TdpClass::Raw);
+        assert_eq!(parse_tdp_class(Some("bogus")), TdpClass::Raw);
+    }
+
+    #[test]
+    fn recognises_the_vendor_classes() {
+        assert_eq!(parse_tdp_class(Some("35W")), TdpClass::W35);
+        assert_eq!(parse_tdp_class(Some("47w")), TdpClass::W47);
+        assert_eq!(parse_tdp_class(Some("65W")), TdpClass::W65);
+        assert_eq!(parse_tdp_class(Some("84W")), TdpClass::W84);
+        assert_eq!(parse_tdp_class(Some("91W")), TdpClass::W91);
+    }
 }
 
 fn default_true() -> bool {
@@ -51,6 +101,7 @@ impl Default for Config {
             schema_version: SCHEMA_VERSION,
             fan_mode: None,
             perf_mode: None,
+            cpu_tdp_class: None,
             apply_on_start: true,
         }
     }
@@ -141,6 +192,7 @@ mod tests {
             schema_version: SCHEMA_VERSION,
             fan_mode: Some(8),
             perf_mode: Some(2),
+            cpu_tdp_class: Some("47W".to_string()),
             apply_on_start: true,
         };
         let text = to_toml(&config).unwrap();

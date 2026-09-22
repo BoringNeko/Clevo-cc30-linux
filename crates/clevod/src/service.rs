@@ -15,12 +15,12 @@ use std::sync::{Arc, Mutex};
 
 use clevo_proto::capability::{parse_capabilities, Capabilities};
 use clevo_proto::command::{
-    CMD_FAN_CURVE_READ, CMD_FAN_STATUS, CMD_MAIN, SUB_FAN_MODE, SUB_POWER_MODE,
+    CMD_FAN_CURVE_READ, CMD_FAN_CURVE_WRITE, CMD_FAN_STATUS, CMD_MAIN, SUB_FAN_MODE, SUB_POWER_MODE,
 };
 use clevo_proto::constants::PAYLOAD_LEN;
-use clevo_proto::fan_curve::parse_curve;
+use clevo_proto::fan_curve::{encode_curve, parse_curve, FanCurve, FanPoint};
 use clevo_proto::fan_status::parse_fan_status;
-use clevo_proto::message::{build_subcommand_payload, empty_payload};
+use clevo_proto::message::{build_subcommand_payload, empty_payload, payload_from_slice};
 use clevo_proto::response::response_first_record;
 use clevo_transport::{Transport, TransportError};
 
@@ -28,7 +28,17 @@ use crate::config;
 use crate::state::{DaemonState, Freshness};
 
 /// Accepted fan-mode aliases and their `121/1` values.
-pub const FAN_MODES: &[(&str, u8)] = &[("auto", 0), ("max", 1), ("maxq", 5), ("quiet", 8)];
+///
+/// `custom` (6) is accepted but is only meaningful once a curve has been
+/// written; the firmware selects "use the curve stored in the EC", and until
+/// command `14` has run that curve is whatever the EC shipped with.
+pub const FAN_MODES: &[(&str, u8)] = &[
+    ("auto", 0),
+    ("max", 1),
+    ("custom", 6),
+    ("maxq", 5),
+    ("quiet", 8),
+];
 
 /// Accepted performance-mode names and their `121/25` values.
 pub const PERF_MODES: &[(&str, u8)] = &[
@@ -99,6 +109,8 @@ pub struct Service {
     last_fan_mode: AtomicU64,
     /// Last applied perf mode; `u64::MAX` means "unset".
     last_perf_mode: AtomicU64,
+    /// CPU TDP class used to convert the raw CPU temperature byte.
+    tdp_class: clevo_proto::TdpClass,
 }
 
 /// Sentinel for "no mode applied yet" in the atomics above.
@@ -158,6 +170,9 @@ impl Service {
             clock: Box::new(SystemClock::default()),
             last_fan_mode: AtomicU64::new(UNSET),
             last_perf_mode: AtomicU64::new(UNSET),
+            // No conversion by default: correct on the reference machine and
+            // the vendor's own behaviour for an unlisted CPU. Config overrides.
+            tdp_class: clevo_proto::TdpClass::Raw,
         }
     }
 
@@ -170,6 +185,19 @@ impl Service {
     /// A handle to the shared state.
     pub fn state(&self) -> Shared {
         Arc::clone(&self.state)
+    }
+
+    /// The CPU TDP class used to convert the raw CPU temperature.
+    ///
+    /// Starts as the COLORFUL P15 23's class and can be overridden with
+    /// [`Self::set_tdp_class`] (typically from the loaded config).
+    pub fn tdp_class(&self) -> clevo_proto::TdpClass {
+        self.tdp_class
+    }
+
+    /// Override the CPU TDP class used for temperature conversion.
+    pub fn set_tdp_class(&mut self, tdp: clevo_proto::TdpClass) {
+        self.tdp_class = tdp;
     }
 
     /// Whether the transport can write.
@@ -188,6 +216,7 @@ impl Service {
     /// read leaves the previous fan count in effect (best-effort).
     pub fn poll_fan(&self) -> Result<(), ServiceError> {
         let _ = self.clock.now_ms();
+        let tdp = self.tdp_class();
 
         match self.read_status() {
             Ok((status, fan_count)) => {
@@ -196,7 +225,7 @@ impl Service {
                 // cached values so the UI can highlight the active mode.
                 let modes = self.transport.current_modes().ok();
                 let mut guard = self.state.lock().unwrap();
-                guard.apply_status(&status, fan_count);
+                guard.apply_status(&status, fan_count, tdp);
                 if let Some((fan, perf)) = modes {
                     if fan.is_some() {
                         guard.fan_mode = fan;
@@ -243,6 +272,40 @@ impl Service {
         let info = parse_curve(payload)?;
         self.state.lock().unwrap().curve = Some(info);
         Ok(info)
+    }
+
+    /// Write a custom fan curve (command `14`) and switch to the `custom` mode.
+    ///
+    /// The curve is fully validated (strictly increasing temperatures, duty
+    /// `0..=100`) before anything is sent, and the hardware is only touched
+    /// when the transport reports `writable()`. Selecting `custom` afterwards is
+    /// what makes the firmware actually use the new table; without it the EC
+    /// keeps interpolating from its auto curve.
+    pub fn set_curve(&self, curve: &FanCurve) -> Result<(), ServiceError> {
+        if !self.transport.writable() {
+            return Err(ServiceError::NotWritable);
+        }
+        let payload = encode_curve(curve)?;
+        self.transport
+            .execute(CMD_FAN_CURVE_WRITE.get(), &payload_from_slice(&payload)?)?;
+        // Only select `custom` once the write itself succeeded: it is the mode
+        // that makes the firmware use the table just written.
+        const CUSTOM: u8 = 6;
+        self.apply(SUB_FAN_MODE, CUSTOM)?;
+        self.last_fan_mode
+            .store(u64::from(CUSTOM), Ordering::SeqCst);
+        self.state.lock().unwrap().fan_mode = Some(CUSTOM);
+        Ok(())
+    }
+
+    /// Write a custom fan curve from the daemon's JSON wire format.
+    ///
+    /// The JSON uses the same shape `GetCurve` emits, i.e. four `[temp, duty]`
+    /// pairs per fan. Anything malformed is rejected before the hardware is
+    /// touched.
+    pub fn set_curve_json(&self, json: &str) -> Result<(), ServiceError> {
+        let curve = curve_from_json(json)?;
+        self.set_curve(&curve)
     }
 
     /// Read the capability bitmap (`page 7`), if the channel is available.
@@ -335,4 +398,78 @@ impl DaemonState {
     pub fn fan_freshness(&self) -> Freshness {
         self.fan.freshness
     }
+}
+
+/// Parse the daemon's curve JSON into a [`FanCurve`].
+///
+/// Accepted shape (exactly what `GetCurve` emits), where each fan carries four
+/// `[temp, duty_pct]` pairs:
+///
+/// ```json
+/// {"cpu":[[40,25],[60,36],[80,53],[100,100]],
+///  "gpu1":[[40,25],[60,36],[80,53],[99,100]],
+///  "gpu2":[[0,0],[0,0],[0,0],[0,0]]}
+/// ```
+///
+/// `fan_count`, `init_mode` and `kb_type` are accepted and ignored so a curve
+/// round-tripped from `GetCurve` can be edited in place and sent back. Parsing
+/// is deliberately strict: a wrong number of points or an out-of-range value is
+/// an error rather than a silently truncated curve.
+pub fn curve_from_json(json: &str) -> Result<FanCurve, ServiceError> {
+    let value: serde_json::Value = serde_json::from_str(json)
+        .map_err(|e| ServiceError::Protocol(format!("curve json: {e}")))?;
+
+    fn fan(value: &serde_json::Value, name: &str) -> Result<[FanPoint; 4], ServiceError> {
+        let array = value
+            .get(name)
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| ServiceError::Protocol(format!("curve json: missing array {name:?}")))?;
+        if array.len() != 4 {
+            return Err(ServiceError::Protocol(format!(
+                "curve json: {name} must have exactly 4 points, got {}",
+                array.len()
+            )));
+        }
+        let mut points = [FanPoint {
+            temp: 0,
+            duty_pct: 0,
+        }; 4];
+        for (i, entry) in array.iter().enumerate() {
+            let pair = entry.as_array().ok_or_else(|| {
+                ServiceError::Protocol(format!("curve json: {name}[{i}] is not an array"))
+            })?;
+            if pair.len() != 2 {
+                return Err(ServiceError::Protocol(format!(
+                    "curve json: {name}[{i}] must be [temp, duty]"
+                )));
+            }
+            let temp = pair[0].as_u64().ok_or_else(|| {
+                ServiceError::Protocol(format!("curve json: {name}[{i}].temp is not an integer"))
+            })?;
+            let duty = pair[1].as_u64().ok_or_else(|| {
+                ServiceError::Protocol(format!("curve json: {name}[{i}].duty is not an integer"))
+            })?;
+            if temp > 255 {
+                return Err(ServiceError::Protocol(format!(
+                    "curve json: {name}[{i}].temp {temp} out of range"
+                )));
+            }
+            if duty > 100 {
+                return Err(ServiceError::Protocol(format!(
+                    "curve json: {name}[{i}].duty {duty}% out of range"
+                )));
+            }
+            points[i] = FanPoint {
+                temp: temp as u8,
+                duty_pct: duty as u8,
+            };
+        }
+        Ok(points)
+    }
+
+    Ok(FanCurve {
+        cpu: fan(&value, "cpu")?,
+        gpu1: fan(&value, "gpu1")?,
+        gpu2: fan(&value, "gpu2")?,
+    })
 }
