@@ -94,7 +94,7 @@ fn cli_reads_status_from_daemon() {
     let (result, out) = run(&client, &Commands::Fan(FanCommand::Status));
     result.expect("status");
     assert!(out.contains("CPU"), "output: {out}");
-    assert!(out.contains("rpm=4770"), "output: {out}");
+    assert!(out.contains("rpm=4667"), "output: {out}");
     assert!(out.contains("GPU2 n/a"), "output: {out}");
 }
 

@@ -235,14 +235,16 @@ pub fn compute_slope(from: FanPoint, to: FanPoint) -> Result<u16, ProtoError> {
     Ok(value.round().clamp(0.0, f64::from(u16::MAX)) as u16)
 }
 
-/// Convert a raw duty byte to a percentage, rounding to the nearest integer.
+/// Convert a raw duty byte (`0..255`) to a percentage, rounding to nearest.
+///
+/// Used by the fan-curve path, where duty genuinely is stored raw on the wire.
 pub fn raw_duty_to_pct(raw: u8) -> u8 {
-    crate::fan_status::raw_duty_to_pct(raw)
+    ((u32::from(raw) * 100 + 127) / 255) as u8
 }
 
-/// Convert a duty percentage to the on-wire byte.
+/// Convert a duty percentage to the on-wire raw byte.
 pub fn pct_to_raw_duty(pct: u8) -> u8 {
-    crate::fan_status::pct_to_raw_duty(pct)
+    ((u32::from(pct) * 255 + 50) / 100) as u8
 }
 
 impl FanCurve {

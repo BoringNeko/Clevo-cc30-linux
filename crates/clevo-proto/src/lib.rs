@@ -28,4 +28,4 @@ pub use capability::{Capabilities, Page7Version, PowerModeSupport};
 pub use command::Command;
 pub use error::ProtoError;
 pub use fan_curve::{FanCurve, FanCurveInfo, FanPoint};
-pub use fan_status::FanStatus;
+pub use fan_status::{FanStatus, TdpClass};

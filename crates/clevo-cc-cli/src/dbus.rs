@@ -66,10 +66,6 @@ pub struct DbusStatus {
     pub cpu_rpm: u32,
     /// GPU1 rpm.
     pub gpu_rpm: u32,
-    /// CPU duty raw.
-    pub cpu_duty: u8,
-    /// GPU1 duty raw.
-    pub gpu_duty: u8,
     /// CPU temperature in °C (`0` = the EC reports none).
     pub cpu_temp_c: u8,
     /// GPU1 temperature in °C (`0` = the EC reports none).
@@ -213,8 +209,6 @@ impl DbusClient {
             fan_count: self.prop("FanCount")?,
             cpu_rpm: self.prop("CpuRpm")?,
             gpu_rpm: self.prop("GpuRpm")?,
-            cpu_duty: self.prop("CpuDuty")?,
-            gpu_duty: self.prop("GpuDuty")?,
             cpu_temp_c: self.prop("CpuTempC")?,
             gpu_temp_c: self.prop("GpuTempC")?,
             curve_writable: self.prop("CurveWritable")?,

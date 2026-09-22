@@ -48,7 +48,33 @@ pub fn read_fan_snapshot(transport: &dyn Transport) -> Result<FanSnapshot, CliEr
     let fan_count = read_fan_curve(transport)
         .map(|info| info.fan_count)
         .unwrap_or(0);
-    Ok(FanSnapshot::from_status(&status, fan_count))
+    Ok(FanSnapshot::from_status(
+        &status,
+        fan_count,
+        cli_tdp_class(),
+    ))
+}
+
+/// The CPU TDP class the CLI uses to convert the raw CPU temperature.
+///
+/// Defaults to the reference machine's class (47 W). Override with
+/// `CLEVO_TDP_CLASS=35W|47W|65W|84W|91W` when running against another CPU; an
+/// unrecognised value falls back to "unknown", which reports the raw byte
+/// unconverted rather than inventing a conversion.
+pub fn cli_tdp_class() -> clevo_proto::TdpClass {
+    match std::env::var("CLEVO_TDP_CLASS")
+        .ok()
+        .map(|v| v.trim().to_ascii_uppercase())
+        .as_deref()
+    {
+        Some("35W") => clevo_proto::TdpClass::W35,
+        Some("47W") | Some("45W") => clevo_proto::TdpClass::W47,
+        Some("65W") => clevo_proto::TdpClass::W65,
+        Some("84W") | Some("88W") => clevo_proto::TdpClass::W84,
+        Some("91W") => clevo_proto::TdpClass::W91,
+        Some("UNKNOWN") | None => clevo_proto::TdpClass::W47,
+        Some(_) => clevo_proto::TdpClass::Unknown,
+    }
 }
 
 /// Read the capability bitmap (`page 7`) and parse it.
@@ -74,8 +100,8 @@ pub fn run_fan(
                     };
                     writeln!(
                         out,
-                        "{name:<4} rpm={:<5} period_raw={:<5} duty={:<4}% temp={}",
-                        reading.rpm, reading.period_raw, reading.duty_pct, temp
+                        "{name:<4} rpm={:<5} period_raw={:<5} temp={}",
+                        reading.rpm, reading.period_raw, temp
                     )?;
                 } else {
                     writeln!(out, "{name:<4} n/a (channel not present)")?;
@@ -581,17 +607,15 @@ fn print_dbus_status(
     };
     writeln!(
         out,
-        "CPU  rpm={:<5} duty={:<4}% temp={}",
+        "CPU  rpm={:<5} temp={}",
         status.cpu_rpm,
-        crate::duty_pct(status.cpu_duty),
         temp(status.cpu_temp_c)
     )?;
     if status.fan_count == 0 || status.fan_count >= 2 {
         writeln!(
             out,
-            "GPU1 rpm={:<5} duty={:<4}% temp={}",
+            "GPU1 rpm={:<5} temp={}",
             status.gpu_rpm,
-            crate::duty_pct(status.gpu_duty),
             temp(status.gpu_temp_c)
         )?;
     } else {
@@ -618,18 +642,16 @@ fn dbus_json(status: &crate::dbus::DbusStatus) -> String {
     };
     let gpu1 = if status.fan_count == 0 || status.fan_count >= 2 {
         format!(
-            "{{\"rpm\":{},\"duty_pct\":{},\"temp_c\":{}}}",
+            "{{\"rpm\":{},\"temp_c\":{}}}",
             status.gpu_rpm,
-            crate::duty_pct(status.gpu_duty),
             temp(status.gpu_temp_c)
         )
     } else {
         "null".to_string()
     };
     format!(
-        "{{\"cpu\":{{\"rpm\":{},\"duty_pct\":{},\"temp_c\":{}}},\"gpu1\":{},\"freshness\":\"{}\",\"fan_mode\":{},\"perf_mode\":{}}}",
+        "{{\"cpu\":{{\"rpm\":{},\"temp_c\":{}}},\"gpu1\":{},\"freshness\":\"{}\",\"fan_mode\":{},\"perf_mode\":{}}}",
         status.cpu_rpm,
-        crate::duty_pct(status.cpu_duty),
         temp(status.cpu_temp_c),
         gpu1,
         status.freshness,

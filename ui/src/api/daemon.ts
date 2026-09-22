@@ -12,8 +12,6 @@ export type Freshness = "fresh" | "stale" | "unknown";
 export interface FanReading {
   /** Speed in rpm. */
   rpm: number;
-  /** Duty as a percentage (0–100). */
-  duty_pct: number;
   /** Temperature in °C, or `null` when the EC reports none. */
   temp_c: number | null;
   /** Whether the channel exists on this machine. */

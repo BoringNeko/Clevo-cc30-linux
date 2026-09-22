@@ -43,6 +43,23 @@ DSM_PATH='\_SB.DCHU._DSM'
 GUID='e424f293dcfbbf4badd6db71bdc0afad'
 CLI="$ROOT/target/release/clevo-cc"
 
+# Resolve this driver's hwmon directory once; steps 2-4 all need it and may be
+# run individually with --step.
+find_hwmon() {
+    local dir
+    for dir in /sys/class/hwmon/hwmon*; do
+        [ -e "$dir/fan1_input" ] || continue
+        case "$(cat "$dir/name" 2>/dev/null)" in
+            clevo_cc) printf '%s' "$dir"; return 0 ;;
+        esac
+    done
+    return 1
+}
+HWMON=""
+if [ -d "$PLATFORM" ]; then
+    HWMON="$(find_hwmon || true)"
+fi
+
 red()   { printf '\033[31m%s\033[0m\n' "$*"; }
 green() { printf '\033[32m%s\033[0m\n' "$*"; }
 bold()  { printf '\033[1m%s\033[0m\n' "$*"; }
@@ -65,6 +82,34 @@ step_header() {
 if [ "$(id -u)" -ne 0 ]; then
     die "run as root (acpi_call and sysfs need it):  sudo $0 $*"
 fi
+
+# Preflight: report what is actually loadable so the run is not a mystery.
+# `test -w` is useless here: root passes it for any file. Read the mode bits.
+attr_mode() {
+    local perms
+    [ -e "$1" ] || { echo '<absent>'; return; }
+    perms="$(stat -c '%A' "$1" 2>/dev/null)"   # e.g. -rw-r--r-- or -r--r--r--
+    # Characters 2-10 are the permission triplets; any 'w' means writable.
+    case "${perms:1}" in
+        *w*) echo writable ;;
+        *)   echo read-only ;;
+    esac
+}
+echo "preflight:"
+printf '  platform device : %s\n' "$([ -d "$PLATFORM" ] && echo "$PLATFORM" || echo '<absent>')"
+printf '  hwmon           : %s\n' "${HWMON:-<absent>}"
+printf '  acpi_call       : %s\n' "$([ -e /proc/acpi/call ] && echo loaded || echo '<not loaded>')"
+printf '  fan_mode        : %s\n' "$(attr_mode "$PLATFORM/fan_mode")"
+printf '  fan_curve       : %s\n' "$(attr_mode "$PLATFORM/fan_curve")"
+if [ -e "$PLATFORM/fan_curve" ]; then
+    case "$(attr_mode "$PLATFORM/fan_curve")" in
+        writable) : ;;
+        *) echo "  hint: fan_curve is read-only, so the loaded module predates the"
+           echo "        command-14 support. Load the freshly built module:"
+           echo "          sudo rmmod clevo_cc && sudo insmod kernel/clevo-cc/clevo-cc.ko" ;;
+    esac
+fi
+echo
 
 if [ ! -x "$CLI" ]; then
     echo "building the CLI..."
@@ -107,17 +152,28 @@ if [ "$STEP" -ge 2 ]; then
         echo "  load it with:  sudo modprobe clevo-cc"
     else
         for f in fan_mode perf_mode; do
-            [ -r "$PLATFORM/$f" ] && printf '%-12s %s\n' "$f" "$(cat "$PLATFORM/$f")"
+            if [ -r "$PLATFORM/$f" ]; then
+                printf '%-12s %s\n' "$f" "$(cat "$PLATFORM/$f")"
+            else
+                printf '%-12s %s\n' "$f" "<unreadable: $(
+                    [ -e "$PLATFORM/$f" ] && echo 'permission denied' || echo 'absent')>"
+            fi
         done
-        hwmon="$(dirname "$(ls -d /sys/class/hwmon/hwmon*/fan1_input 2>/dev/null | head -1)")"
-        if [ -n "${hwmon:-}" ] && [ "$hwmon" != "." ]; then
-            echo "-- hwmon in $hwmon"
+        if [ -n "$HWMON" ]; then
+            echo "-- hwmon in $HWMON"
             for f in fan1_input fan2_input temp1_input temp2_input; do
-                [ -e "$hwmon/$f" ] || continue
-                value="$(cat "$hwmon/$f" 2>/dev/null || echo "<unreadable>")"
+                [ -e "$HWMON/$f" ] || continue
+                value="$(cat "$HWMON/$f" 2>/dev/null || echo "<unreadable>")"
                 printf '  %-12s %s\n' "$f" "$value"
             done
-            echo "  (temp*_input is millidegrees; -ENODATA/unreadable = EC reports none)"
+            echo "  (temp*_input is millidegrees; unreadable = the EC reports none)"
+            if [ ! -e "$HWMON/temp1_input" ]; then
+                echo "  note: this module has no temperature channels - it predates"
+                echo "        the cmd-12 offset fix. Load the freshly built one to test"
+                echo "        temperatures:  sudo insmod kernel/clevo-cc/clevo-cc.ko"
+            fi
+        else
+            echo "-- no clevo_cc hwmon directory found"
         fi
         echo
         echo "-- current curve:"
@@ -140,13 +196,13 @@ if [ "$STEP" -ge 3 ]; then
         echo max > "$PLATFORM/fan_mode" || red "   write failed"
         sleep 4
         cat "$PLATFORM/fan_mode"
-        cat "$hwmon/fan1_input" 2>/dev/null | sed 's/^/   fan1_input = /'
+        [ -n "$HWMON" ] && cat "$HWMON/fan1_input" 2>/dev/null | sed 's/^/   fan1_input = /'
 
         echo "-> auto (restore)"
         echo auto > "$PLATFORM/fan_mode" || red "   write failed"
         sleep 3
         cat "$PLATFORM/fan_mode"
-        cat "$hwmon/fan1_input" 2>/dev/null | sed 's/^/   fan1_input = /'
+        [ -n "$HWMON" ] && cat "$HWMON/fan1_input" 2>/dev/null | sed 's/^/   fan1_input = /'
         green "Expected: max is clearly faster than auto, and the mode returns to auto."
     else
         echo "skipped"

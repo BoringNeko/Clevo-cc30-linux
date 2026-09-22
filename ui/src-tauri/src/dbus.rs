@@ -51,9 +51,9 @@ impl From<serde_json::Error> for UiError {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct FanReading {
     pub rpm: u32,
-    /// Duty as a percentage (`0..=100`).
-    pub duty_pct: u8,
     /// Temperature in °C, or `null` when the EC reports none.
+    ///
+    /// The CPU value has already been converted with the configured TDP curve.
     pub temp_c: Option<u8>,
     pub available: bool,
 }
@@ -205,28 +205,16 @@ impl DaemonClient {
                 fan_count = curve.fan_count;
             }
         }
-        let reading = |rpm: u32, duty: u8, temp_c: u8, index: u8| FanReading {
+        let reading = |rpm: u32, temp_c: u8, index: u8| FanReading {
             rpm,
-            duty_pct: clevo_duty_pct(duty),
             temp_c: (temp_c != 0).then_some(temp_c),
             available: fan_count == 0 || index <= fan_count,
         };
         Ok(FanSnapshot {
-            cpu: reading(
-                self.prop("CpuRpm")?,
-                self.prop("CpuDuty")?,
-                self.prop("CpuTempC")?,
-                1,
-            ),
-            gpu1: reading(
-                self.prop("GpuRpm")?,
-                self.prop("GpuDuty")?,
-                self.prop("GpuTempC")?,
-                2,
-            ),
+            cpu: reading(self.prop("CpuRpm")?, self.prop("CpuTempC")?, 1),
+            gpu1: reading(self.prop("GpuRpm")?, self.prop("GpuTempC")?, 2),
             gpu2: FanReading {
                 rpm: 0,
-                duty_pct: 0,
                 temp_c: None,
                 available: fan_count >= 3,
             },
@@ -251,11 +239,6 @@ impl DaemonClient {
             })?;
         parse_curve_json(&json)
     }
-}
-
-/// Convert a raw duty byte from the daemon into a percentage.
-fn clevo_duty_pct(raw: u8) -> u8 {
-    ((u32::from(raw) * 100 + 127) / 255) as u8
 }
 
 /// Parse the daemon's `GetCurve` JSON string into a [`FanCurve`].

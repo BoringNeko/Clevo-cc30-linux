@@ -84,7 +84,7 @@ async fn daemon_serves_properties_and_methods() {
     let freshness: String = proxy.get_property("FanFreshness").await.unwrap();
     assert_eq!(freshness, "fresh");
     let cpu_rpm: u32 = proxy.get_property("CpuRpm").await.unwrap();
-    assert_eq!(cpu_rpm, 4770);
+    assert_eq!(cpu_rpm, 4667);
 
     // Writes go through the service's validation.
     let applied: u8 = proxy
@@ -245,8 +245,8 @@ async fn fan_changed_signal_is_emitted() {
         .expect("a signal");
 
     let (cpu, gpu): (u32, u32) = signal.body().deserialize().expect("decode body");
-    assert_eq!(cpu, 4770);
-    assert_eq!(gpu, 4647);
+    assert_eq!(cpu, 4667);
+    assert_eq!(gpu, 4559);
 }
 
 #[tokio::test]

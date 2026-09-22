@@ -279,6 +279,8 @@ impl CcDaemon {
     }
 
     /// CPU temperature in degrees Celsius (`0` = the EC reports none).
+    ///
+    /// The value has already been converted with the configured TDP curve.
     #[zbus(property)]
     fn cpu_temp_c(&self) -> u8 {
         self.service
@@ -302,18 +304,6 @@ impl CcDaemon {
             .gpu1
             .temp_c
             .unwrap_or(0)
-    }
-
-    /// CPU duty raw byte (255 = 100%).
-    #[zbus(property)]
-    fn cpu_duty(&self) -> u8 {
-        self.service.state().lock().unwrap().fan.cpu.duty
-    }
-
-    /// GPU1 duty raw byte (255 = 100%).
-    #[zbus(property)]
-    fn gpu_duty(&self) -> u8 {
-        self.service.state().lock().unwrap().fan.gpu1.duty
     }
 
     /// Number of fans reported by the firmware (`0` = unknown).

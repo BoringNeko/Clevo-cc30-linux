@@ -109,6 +109,8 @@ pub struct Service {
     last_fan_mode: AtomicU64,
     /// Last applied perf mode; `u64::MAX` means "unset".
     last_perf_mode: AtomicU64,
+    /// CPU TDP class used to convert the raw CPU temperature byte.
+    tdp_class: clevo_proto::TdpClass,
 }
 
 /// Sentinel for "no mode applied yet" in the atomics above.
@@ -168,6 +170,8 @@ impl Service {
             clock: Box::new(SystemClock::default()),
             last_fan_mode: AtomicU64::new(UNSET),
             last_perf_mode: AtomicU64::new(UNSET),
+            // The reference machine's class; config overrides it.
+            tdp_class: clevo_proto::TdpClass::W47,
         }
     }
 
@@ -180,6 +184,19 @@ impl Service {
     /// A handle to the shared state.
     pub fn state(&self) -> Shared {
         Arc::clone(&self.state)
+    }
+
+    /// The CPU TDP class used to convert the raw CPU temperature.
+    ///
+    /// Starts as the COLORFUL P15 23's class and can be overridden with
+    /// [`Self::set_tdp_class`] (typically from the loaded config).
+    pub fn tdp_class(&self) -> clevo_proto::TdpClass {
+        self.tdp_class
+    }
+
+    /// Override the CPU TDP class used for temperature conversion.
+    pub fn set_tdp_class(&mut self, tdp: clevo_proto::TdpClass) {
+        self.tdp_class = tdp;
     }
 
     /// Whether the transport can write.
@@ -198,6 +215,7 @@ impl Service {
     /// read leaves the previous fan count in effect (best-effort).
     pub fn poll_fan(&self) -> Result<(), ServiceError> {
         let _ = self.clock.now_ms();
+        let tdp = self.tdp_class();
 
         match self.read_status() {
             Ok((status, fan_count)) => {
@@ -206,7 +224,7 @@ impl Service {
                 // cached values so the UI can highlight the active mode.
                 let modes = self.transport.current_modes().ok();
                 let mut guard = self.state.lock().unwrap();
-                guard.apply_status(&status, fan_count);
+                guard.apply_status(&status, fan_count, tdp);
                 if let Some((fan, perf)) = modes {
                     if fan.is_some() {
                         guard.fan_mode = fan;

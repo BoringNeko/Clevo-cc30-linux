@@ -72,7 +72,7 @@ fn snapshot_from_real_daemon() {
     let client = DaemonClient::session().expect("client");
     client.poll().expect("poll");
     let snap = client.snapshot().expect("snapshot");
-    assert_eq!(snap.cpu.rpm, 4770);
+    assert_eq!(snap.cpu.rpm, 4667);
     assert_eq!(snap.freshness, "fresh");
     assert_eq!(snap.fan_count, 2);
     assert!(snap.cpu.available);

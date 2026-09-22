@@ -76,8 +76,23 @@ systemctl status clevod
 clevo-cc --transport dbus fan status
 ```
 
-### 自定义风扇曲线
+### CPU 温度换算（重要）
 
+命令 12 返回的 CPU 温度是**原始字节**，必须按 CPU 的 TDP 档位换算成摄氏度
+（原厂 `CalCPUTemp` 分段公式）。档位写在 `/etc/clevo-cc/clevod.toml`：
+
+```toml
+cpu_tdp_class = "47W"   # 35W / 47W / 65W / 84W / 91W
+```
+
+默认 `47W`（COLORFUL P15 23 的档位）。**档位写错会得到错误的 CPU 温度**；
+写 `"unknown"` 或不填则原样显示原始值。GPU 温度无需换算。
+
+CLI 可临时覆盖：`CLEVO_TDP_CLASS=65W clevo-cc --transport dbus fan status`。
+
+用 `sensors` 对照验证：换算后的 CPU 温度应与 `coretemp` 的封装温度接近。
+
+### 自定义风扇曲线
 ```bash
 # 先看当前曲线（只读）
 clevo-cc --transport dbus fan curve
@@ -308,6 +323,8 @@ sudo packaging/uninstall.sh --purge
 | 自定义曲线不生效 | 写曲线后**必须**再切到 `custom` 模式（CLI/UI 会自动切换；直接写 sysfs 时需 `echo custom > fan_mode`） |
 | 曲线被 EC 拒绝 | 温度必须严格递增、占空比 0–100；`dmesg` 会记录 `_DSM` 的失败原因 |
 | 温度显示 `n/a` | 该通道 EC 未上报（原始值为 0）；不代表 0°C，属正常 |
+| CPU 温度不对/偏高 | 配置里 `cpu_tdp_class` 必须是本机 CPU 的 TDP 档（`35W`/`47W`/`65W`/`84W`/`91W`）。默认 `47W`（P15 23）；写错档位会得到错误的 CPU 温度 |
+| 想核对原始字节 | `cat /sys/devices/platform/CLV0001:00/raw_status`（命令 12 的原始 hex） |
 | DKMS 未随内核重编 | `dkms status`；确认 `linux-headers` 与 DKMS 服务已启用 |
 
 ---

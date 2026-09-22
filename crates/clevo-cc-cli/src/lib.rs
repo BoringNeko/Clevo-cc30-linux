@@ -203,11 +203,6 @@ impl From<crate::dbus::DbusError> for CliError {
     }
 }
 
-/// Convert a raw duty byte from the daemon into a percentage for display.
-pub fn duty_pct(raw: u8) -> u8 {
-    clevo_proto::fan_status::raw_duty_to_pct(raw)
-}
-
 /// Build the transport selected by `cli`, or fail for unimplemented backends.
 pub fn build_transport(cli: &Cli) -> Result<Box<dyn Transport>, CliError> {
     match cli.transport {

@@ -18,9 +18,10 @@ exposes fan monitoring and fan-mode control through `hwmon` and sysfs.
 | Interface | Kind | Status |
 |---|---|---|
 | `hwmon fan1_input` / `fan2_input` | read | implemented (CPU, GPU1 rpm) |
-| `hwmon temp1_input` / `temp2_input` | read | implemented (CPU, GPU1 °C; absent when the EC reports 0) |
+| `hwmon temp1_input` | read | implemented (GPU1 °C; `-ENODATA` when the EC reports none) |
 | `sysfs fan_mode` | rw | `auto` / `quiet` / `max` / `maxq` / `custom` |
 | `sysfs fan_curve` | rw | read (command 13) and write (command 14) |
+| `sysfs raw_status` / `raw_curve` | read | diagnostic hex dumps (for re-verifying offsets) |
 | `sysfs perf_mode` | rw | `quiet` / `pwrsaving` / `performance` / `entertainment` |
 
 `fan_mode` values map to `121/1`: `auto`=0, `max`=1, `maxq`=5, `custom`=6,
@@ -30,6 +31,15 @@ performance=2, entertainment=3.
 `fan_mode`/`perf_mode` report the last value written this session (fan_mode
 defaults to `auto`, perf_mode to `unknown`); the firmware does not report the
 current mode reliably.
+
+### Temperatures
+
+`temp1_input` is the **GPU** and is already degrees Celsius. The CPU
+temperature is **not** exposed: its raw byte (offset `[18]`) has to go through
+the vendor's `CalCPUTemp` piecewise curve, which is selected by the CPU's TDP
+class. The kernel cannot learn that reliably, so `clevod` applies it in
+userspace. Read `raw_status` (or command 12) and use
+`clevo_proto::cal_cpu_temp` if you need it from a script.
 
 ### Writing a curve
 
@@ -78,7 +88,8 @@ cat /sys/devices/platform/CLV0001:00/fan_mode       # auto/quiet/max/maxq/custom
 cat /sys/devices/platform/CLV0001:00/fan_curve      # current curve
 cat /sys/class/hwmon/hwmon*/fan1_input              # CPU rpm
 cat /sys/class/hwmon/hwmon*/fan2_input              # GPU1 rpm
-cat /sys/class/hwmon/hwmon*/temp1_input             # CPU temperature (m°C)
+cat /sys/class/hwmon/hwmon*/temp1_input             # GPU temperature (m°C)
+cat /sys/devices/platform/CLV0001:00/raw_status     # raw cmd-12 bytes
 echo max | sudo tee /sys/devices/platform/CLV0001:00/fan_mode
 sudo rmmod clevo_cc
 ```

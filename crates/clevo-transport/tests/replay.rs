@@ -22,8 +22,7 @@ fn example_fixture_replays_fan_status() {
     let status = parse_fan_status(payload).expect("fan status parses");
     assert_eq!(status.cpu_period, 462);
     assert_eq!(status.gpu1_period, 473);
-    assert_eq!(status.cpu_duty, 200);
-    assert_eq!(status.cpu_temp_c, Some(55));
+    assert_eq!(status.gpu1_temp_c, Some(60));
 }
 
 #[test]

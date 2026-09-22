@@ -102,16 +102,32 @@ impl DriverTransport {
     /// rpm, so we invert that formula here; writing the rpm directly into the
     /// period field would apply the conversion twice and under-report the speed.
     ///
-    /// hwmon does not expose fan duty or temperatures, so those bytes stay zero.
-    /// `parse_fan_status` reads a zero temperature as "not reported", so the UI
-    /// shows no temperature rather than a false 0 °C.
+    /// hwmon exposes temperatures (millidegrees) but not the raw CPU byte, and
+    /// the protocol layer expects a raw byte it converts itself. Since the
+    /// conversion is not invertible for every TDP class, we report no CPU
+    /// temperature here rather than a value that would be converted twice.
+    /// GPU temperatures are direct Celsius and are passed through.
     fn fan_status_reply(&self) -> TransportResult<Vec<u8>> {
         let cpu_rpm = self.read_rpm("fan1_input")?;
         let gpu_rpm = self.read_rpm("fan2_input").unwrap_or(0);
         let mut payload = vec![0u8; 42];
         payload[2..4].copy_from_slice(&rpm_to_period(cpu_rpm).to_be_bytes());
         payload[4..6].copy_from_slice(&rpm_to_period(gpu_rpm).to_be_bytes());
+        // [18] stays 0: the raw CPU byte is not recoverable from millidegrees.
+        if let Some(c) = self.read_temp_c("temp2_input") {
+            payload[21] = c;
+        }
         Ok(wrap_payload(&payload))
+    }
+
+    /// Read a hwmon temperature channel as whole degrees Celsius.
+    ///
+    /// A missing or unreadable channel (the EC reported nothing) yields `None`.
+    fn read_temp_c(&self, which: &str) -> Option<u8> {
+        let dir = self.hwmon_dir().ok()?;
+        let text = std::fs::read_to_string(dir.join(which)).ok()?;
+        let milli: i64 = text.trim().parse().ok()?;
+        (milli > 0).then(|| (milli / 1000).clamp(0, 255) as u8)
     }
 
     /// Write a command `14` payload to the sysfs `fan_curve` attribute.
@@ -469,8 +485,10 @@ mod tests {
         assert!((cpu as i64 - 3718).abs() < 50, "cpu back = {cpu}");
         assert!((gpu as i64 - 1788).abs() < 50, "gpu back = {gpu}");
         assert_eq!(period_raw_to_rpm(status.cpu_period), cpu);
-        // hwmon has no temperature source, so the driver reports none.
-        assert_eq!(status.cpu_temp_c, None);
+        // The raw CPU byte is not recoverable from millidegrees, so the
+        // driver reports none rather than a double-converted value.
+        assert_eq!(status.cpu_temp_raw, 0);
+        assert_eq!(status.cpu_temp_c(clevo_proto::TdpClass::W47), None);
     }
 
     #[test]

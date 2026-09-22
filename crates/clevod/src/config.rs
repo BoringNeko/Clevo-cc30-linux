@@ -32,9 +32,32 @@ pub struct Config {
     /// Last performance mode (`121/25` value) chosen by the user.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub perf_mode: Option<u8>,
+    /// TDP class of the installed CPU, used to convert the raw CPU temperature.
+    ///
+    /// One of `35W`, `47W`, `65W`, `84W`, `91W`, or absent for "unknown"
+    /// (which reports the raw byte unconverted). The default is the COLORFUL
+    /// P15 23's class; set it to your own CPU's TDP for correct readings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_tdp_class: Option<String>,
     /// Whether to re-apply the saved modes on daemon startup.
     #[serde(default = "default_true")]
     pub apply_on_start: bool,
+}
+
+/// Parse a configured TDP class string.
+///
+/// Unknown or absent values fall back to `TdpClass::Unknown`, which reports the
+/// raw CPU temperature byte unconverted rather than inventing a conversion.
+pub fn parse_tdp_class(text: Option<&str>) -> clevo_proto::TdpClass {
+    use clevo_proto::TdpClass;
+    match text.map(str::trim).map(str::to_ascii_uppercase).as_deref() {
+        Some("35W") => TdpClass::W35,
+        Some("47W") | Some("45W") => TdpClass::W47,
+        Some("65W") => TdpClass::W65,
+        Some("84W") | Some("88W") => TdpClass::W84,
+        Some("91W") => TdpClass::W91,
+        _ => TdpClass::Unknown,
+    }
 }
 
 fn default_true() -> bool {
@@ -51,6 +74,7 @@ impl Default for Config {
             schema_version: SCHEMA_VERSION,
             fan_mode: None,
             perf_mode: None,
+            cpu_tdp_class: None,
             apply_on_start: true,
         }
     }
@@ -141,6 +165,7 @@ mod tests {
             schema_version: SCHEMA_VERSION,
             fan_mode: Some(8),
             perf_mode: Some(2),
+            cpu_tdp_class: Some("47W".to_string()),
             apply_on_start: true,
         };
         let text = to_toml(&config).unwrap();

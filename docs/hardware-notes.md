@@ -251,8 +251,14 @@ Implemented as `clevo_proto::fan_status::period_raw_to_rpm`.
 
 Temperature is also converted in the CC source (`RWReg.cs::CalCPUTemp`) using a
 TDP-class-dependent piecewise formula; the TDP class is looked up from
-`cpu.ini` by CPU model. Not reproduced yet — `temp_raw` is displayed as-is and
-labelled unverified.
+`cpu.ini` by CPU model. **This is now reproduced**: see §10.4 for the verified
+offset (`[18]`) and the five TDP classes. The GPU temperatures need no
+conversion.
+
+An earlier revision of this document claimed the conversion was unnecessary and
+that the byte was already Celsius. That was wrong, and the 1 °C "GPU
+temperature" it produced is what exposed it; §10.4 records both wrong answers so
+they are not repeated.
 
 ## 11. Resolved and still-open items
 
@@ -262,13 +268,15 @@ Resolved since the original list:
 - [x] Fan-mode value semantics — `121/1` buttons (auto/max/silent/maxq/custom/quiet).
 - [x] `_DSM` Arg3 shape — Package{Buffer} for reads, Package{Integer} for 121.
 - [x] Command 12/13 live reads and command 121 writes.
-- [x] **Command 12 duty/temperature layout** — resolved in §10.4; the reference's
-      interleaved offsets were wrong for this firmware.
-- [x] **`CalCPUTemp` temperature conversion** — not needed: the byte is already
-      degrees Celsius, so the TDP-class lookup in `cpu.ini` was a red herring.
+- [x] **Command 12 temperature offsets** — §10.4. CPU at `[18]` (raw), GPU at
+      `[21]`/`[24]` (Celsius). There are no duty fields in this reply; an
+      earlier revision invented a `[16..18]` duty triple that does not exist.
+- [x] **`CalCPUTemp` temperature conversion** — reproduced, with the TDP class
+      configurable. This was wrongly declared unnecessary in a previous
+      revision.
 - [x] **Custom curve write (command 14)** — byte layout in §7, implemented in
       `clevo_proto::fan_curve::encode_curve`, the kernel driver and `clevod`.
-      Slope formula corrected; see §7.1.
+      Slope formula corrected; see §7.1. A slope-equivalence test pins it.
 
 Still open:
 
@@ -281,45 +289,78 @@ Still open:
 - [ ] Custom curve write has not yet been exercised on hardware (the encoding is
       unit-tested and the Arg3 shape matches command 13, which does work live).
 
-## 10.4 Command 12 duty and temperature offsets — resolved
+## 10.4 Command 12 duty and temperature offsets — resolved on hardware
 
-The earlier revision treated duty/temperature as unverified because the 42-byte
-reply did not match `PK0C`'s declared field list. Dumping the full reply and
-correlating it with the original Control Center's own display (`RWReg.cs`,
-`Page_system_monitor.cs`, `CalCPUTemp`) shows the reply uses a **contiguous**
-layout, not the interleaved one the reference described:
+This took three attempts. The layout below is from the vendor's own code
+(`RWReg.cs::UpdateWMI12`) and was then **confirmed against live bytes**, which
+is what the two earlier attempts lacked.
+
+### The vendor's field map
+
+```csharp
+cpu_temp  = CalCPUTemp(GetTDP(), array[18]);  // raw, needs a TDP-class curve
+gpu1_temp = array[21];                        // already Celsius
+gpu2_temp = array[24];                        // already Celsius
+```
+
+So on the wire:
 
 | Offset | Content |
 |---|---|
-| `[0..1]` | zero |
 | `[2..3]` | CPU fan period, big-endian |
 | `[4..5]` | GPU1 fan period, big-endian |
 | `[6..7]` | GPU2 fan period (always 0 here) |
-| `[16]` | CPU duty, raw `0..255` |
-| `[17]` | GPU1 duty |
-| `[18]` | GPU2 duty |
-| `[19]` | CPU temperature, **degrees Celsius** |
-| `[20]` | GPU1 temperature |
-| `[21]` | GPU2 temperature |
+| `[18]` | CPU temperature, **raw** - run it through `CalCPUTemp` |
+| `[21]` | GPU1 temperature, direct Celsius |
+| `[24]` | GPU2 temperature, direct Celsius |
 
-Two corrections against `02-DCHU-WMI协议参考.md` §4.1:
+There are **no duty-cycle fields** in this reply.
 
-1. **The reference interleaved duties and temperatures** (`[16]` duty, `[18]`
-   temp, `[19]` duty, `[21]` temp, ...). The live reply is a duty triple
-   followed by a temperature triple. Reading it the reference way is what made
-   the 42-byte buffer look inconsistent.
-2. **No `CalCPUTemp` conversion is needed.** The byte already is degrees
-   Celsius. Observed idle at 37–45 °C and under load at 80–95 °C on a 45 W CPU
-   with a 100 °C limit; a raw (uncalibrated) EC register would not track a real
-   thermal curve like that. The TDP-class lookup read from `cpu.ini` therefore
-   has no counterpart here and was not implemented.
+### Live confirmation (idle vs. 4x `yes` for 20 s)
 
-A temperature byte of `0` means "not reported" (absent channel, or the EC has
-nothing to say) and is surfaced as `None` / `null` end to end rather than as a
-plausible-looking 0 °C.
+Three samples were captured on the P15 23, with `sensors` read alongside:
 
-This is what makes the curve editor usable: a user dragging a point to "60 °C"
-now gets a point that actually fires at 60 °C.
+| | `[2..3]` BE | `[4..5]` BE | `[18]` | `[21]` |
+|---|---|---|---|---|
+| idle | 0 | 0 | 37 | 33 |
+| load | 639 | 683 | 87 | 35 |
+| load (2nd) | 839 | 1038 | 37 | 34 |
+
+- **Fan periods check out exactly.** At load the kernel driver's hwmon reported
+  `fan1_input = 3374`, `fan2_input = 3157`; `2156250 / 639 = 3374` and
+  `2156250 / 683 = 3157`. Big-endian confirmed again.
+- **`[18]` is the CPU temperature before conversion.** Under a 47 W part,
+  `CalCPUTemp(47W, 37) = 32 °C` and `CalCPUTemp(47W, 87) = 57 °C`, against
+  `sensors` reporting 27-35 °C idle and 51-65 °C under load. The raw byte alone
+  (37/87) is not Celsius and would have looked like nonsense.
+- `[21]` tracks 33/35/34 °C, consistent with a light GPU load.
+
+### Two wrong answers before this one (worth recording)
+
+1. **"Temperatures are at `[19..21]`, already Celsius."** Inferred from the
+   reference doc's prose, never measured. The live bytes show `[19]` is 0 at
+   idle and 115 under load - a duty-like value, not a temperature.
+2. **"Duties are at `[16..18]`."** Invented to explain the bytes around the
+   guessed temperatures. No duty values appear anywhere in this reply.
+
+Both were corrected by dumping the raw 256-byte reply from the driver
+(`raw_status`) and comparing three samples with `sensors` running. **The lesson
+recorded here: a plausible-looking field map is not evidence. The 1 °C "GPU
+temperature" that never moved is what eventually exposed the first guess.**
+
+### What the implementation does now
+
+- `FanStatus` exposes `cpu_temp_raw` plus `cpu_temp_c(tdp_class)`; the CPU byte
+  is never presented as Celsius.
+- `TdpClass` carries the five vendor classes; an unknown class passes the raw
+  byte through unchanged rather than inventing a conversion.
+- `clevod` reads `cpu_tdp_class` from its config (default 47 W, the P15 23's
+  class) and applies it during the poll. The CLI honours `CLEVO_TDP_CLASS`.
+- The kernel driver exposes `temp1_input` for the **GPU** only and returns
+  `-EOPNOTSUPP` for the CPU channel: the TDP-class curve needs the CPU model,
+  which userspace knows and the kernel does not.
+- A 0 temperature means "not reported" and is carried as `None`/`null` end to
+  end, never as 0 °C.
 
 ## 7.1 Command 14 slope formula — corrected
 
@@ -476,13 +517,19 @@ errors were logged. TurboFan/DTT are reserved.
 | Interface | Kind | Status |
 |---|---|---|
 | `hwmon fan1_input` / `fan2_input` | read | implemented (CPU, GPU1) |
-| `hwmon temp1_input` / `temp2_input` | read | implemented (CPU, GPU1 °C) |
+| `hwmon temp1_input` | read | implemented (GPU1 °C); CPU `-EOPNOTSUPP` |
 | `sysfs fan_mode` | rw | implemented: `auto`(0) / `quiet`(8) / `max`(1) / `maxq`(5) / `custom`(6) |
 | `sysfs fan_curve` | rw | implemented: read (command 13) and write (command 14) |
+| `sysfs raw_status` / `raw_curve` | read | diagnostic hex dumps of commands 12/13 |
 | `sysfs perf_mode` | rw | implemented: `quiet`(0) / `pwrsaving`(1) / `performance`(2) / `entertainment`(3) |
 
-`tempN_input` reports millidegrees and returns `-ENODATA` when the EC reports
-`0`, so "no reading" is never shown as 0 °C.
+`temp1_input` is the **GPU** and returns `-ENODATA` when the EC reports 0. The
+CPU temperature channel is deliberately not registered: the raw byte at `[18]`
+needs the vendor's `CalCPUTemp` curve, which is selected by the CPU's TDP class
+and therefore belongs in userspace, where `clevod` applies it (see §10.4).
+
+`raw_status`/`raw_curve` exist so a future firmware revision can be re-checked
+byte by byte without rebuilding a debug module.
 
 **Custom curve write (command 14) is implemented.** The `fan_curve` attribute
 accepts the same per-fan point lines it emits:

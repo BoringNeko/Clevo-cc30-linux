@@ -287,12 +287,15 @@ static const char *clevo_cc_perf_name(enum clevo_perf_mode mode)
  * Read fan speeds (command 12).
  *
  * The reply carries a rotation period for each fan; rpm is derived with the
- * Control Center formula `2156250 / period`. RGB temperatures are returned in
- * `temps` when non-NULL (entry `i` is 0 when the EC reports nothing for that
- * channel).
+ * Control Center formula `2156250 / period`.
+ *
+ * Temperature is *not* returned here: the CPU byte at [18] needs the vendor's
+ * `CalCPUTemp` curve (a TDP-class-dependent piecewise function), which belongs
+ * in userspace where the CPU model is known, and the GPU bytes at [21]/[24] are
+ * direct Celsius. hwmon callers that want a temperature use
+ * clevo_cc_read_temp(), which reads those directly.
  */
-static int clevo_cc_read_fan(struct clevo_cc *cc, u32 *cpu_rpm, u32 *gpu_rpm,
-			     u8 *temps)
+static int clevo_cc_read_fan(struct clevo_cc *cc, u32 *cpu_rpm, u32 *gpu_rpm)
 {
 	u8 payload[CLEVO_PAYLOAD_LEN];
 	size_t len = 0;
@@ -314,17 +317,44 @@ static int clevo_cc_read_fan(struct clevo_cc *cc, u32 *cpu_rpm, u32 *gpu_rpm,
 	/* rpm = 60 / (5.565217391304348e-05 * period) * 2 = 2156250 / period */
 	*cpu_rpm = cpu_period ? DIV_ROUND_CLOSEST(2156250, cpu_period) : 0;
 	*gpu_rpm = gpu_period ? DIV_ROUND_CLOSEST(2156250, gpu_period) : 0;
+	return 0;
+}
 
-	if (temps) {
-		/*
-		 * Verified layout: duty triple at [16..18], then the temperature
-		 * triple at [19..21], in degrees Celsius. 0 means "not
-		 * reported".
-		 */
-		temps[0] = payload[19];
-		temps[1] = payload[20];
-		temps[2] = payload[21];
-	}
+/*
+ * Read a GPU temperature (command 12, offsets [21] and [24]).
+ *
+ * These are direct degrees Celsius. A 0 means the EC reports nothing, which
+ * becomes -ENODATA so hwmon shows the channel as absent rather than 0 °C.
+ *
+ * The CPU temperature is deliberately not exposed by this driver: its raw byte
+ * at [18] requires the `CalCPUTemp` TDP-class curve, and the kernel has no
+ * reliable way to learn the CPU's TDP class. Userspace (`clevod`) applies it.
+ */
+static int clevo_cc_read_gpu_temp(struct clevo_cc *cc, int channel, long *val)
+{
+	u8 payload[CLEVO_PAYLOAD_LEN];
+	size_t len = 0;
+	u8 offset;
+	int err;
+
+	if (channel == 0)
+		return -EOPNOTSUPP; /* CPU: needs a userspace conversion */
+	if (channel != 1)
+		return -EOPNOTSUPP;
+
+	offset = 21; /* GPU1; GPU2 lives at [24] and is absent on most machines */
+
+	err = clevo_cc_dsm_buffer(cc, CLEVO_CMD_FAN_STATUS, payload,
+				  sizeof(payload), &len);
+	if (err)
+		return err;
+	if (len < CLEVO_FAN_STATUS_MIN_LEN)
+		return -EPROTO;
+
+	if (payload[offset] == 0)
+		return -ENODATA;
+
+	*val = (long)payload[offset] * 1000; /* hwmon wants millidegrees */
 	return 0;
 }
 
@@ -355,32 +385,21 @@ static umode_t clevo_cc_is_visible(const void *data, enum hwmon_sensor_types typ
 }
 
 /*
- * hwmon temperature inputs. Channel 1 is the CPU, channel 2 the GPU.
- * A temperature of 0 means the EC reported nothing, which maps to -ENODATA so
- * the reading is absent rather than a plausible-looking 0 °C.
+ * hwmon temperature inputs. Channel 1 is the GPU.
+ *
+ * The CPU channel is intentionally not registered: its raw byte needs the
+ * vendor's TDP-class conversion, which belongs in userspace. Userspace reads
+ * `raw_status` (or command 12 directly) and applies `CalCPUTemp`.
  */
 static int clevo_cc_read_temp(struct device *dev, u32 attr, int channel,
 			      long *val)
 {
 	struct clevo_cc *cc = dev_get_drvdata(dev);
-	u8 temps[3] = { 0 };
-	u32 cpu_rpm, gpu_rpm;
-	int err;
 
 	if (attr != hwmon_temp_input)
 		return -EOPNOTSUPP;
-	if (channel < 0 || channel > 1)
-		return -EOPNOTSUPP;
 
-	err = clevo_cc_read_fan(cc, &cpu_rpm, &gpu_rpm, temps);
-	if (err)
-		return err;
-
-	if (temps[channel] == 0)
-		return -ENODATA;
-
-	*val = (long)temps[channel] * 1000; /* hwmon wants millidegrees */
-	return 0;
+	return clevo_cc_read_gpu_temp(cc, channel, val);
 }
 
 static int clevo_cc_read(struct device *dev, enum hwmon_sensor_types type,
@@ -396,7 +415,7 @@ static int clevo_cc_read(struct device *dev, enum hwmon_sensor_types type,
 	if (type != hwmon_fan || attr != hwmon_fan_input)
 		return -EOPNOTSUPP;
 
-	err = clevo_cc_read_fan(cc, &cpu_rpm, &gpu_rpm, NULL);
+	err = clevo_cc_read_fan(cc, &cpu_rpm, &gpu_rpm);
 	if (err)
 		return err;
 
@@ -415,7 +434,7 @@ static int clevo_cc_read(struct device *dev, enum hwmon_sensor_types type,
 
 static const struct hwmon_channel_info *clevo_cc_info[] = {
 	HWMON_CHANNEL_INFO(fan, HWMON_F_INPUT, HWMON_F_INPUT),
-	HWMON_CHANNEL_INFO(temp, HWMON_T_INPUT, HWMON_T_INPUT),
+	HWMON_CHANNEL_INFO(temp, 0, HWMON_T_INPUT),
 	NULL
 };
 
@@ -690,6 +709,58 @@ out:
 static DEVICE_ATTR_RW(fan_curve);
 
 /*
+ * sysfs: raw_status (diagnostic)
+ *
+ * Dumps the raw command-12 reply as hex so the duty/temperature offsets can be
+ * verified against the EC's actual bytes instead of inferred. Read-only.
+ */
+static ssize_t raw_status_show(struct device *dev, struct device_attribute *attr,
+			       char *buf)
+{
+	struct clevo_cc *cc = dev_get_drvdata(dev);
+	u8 payload[CLEVO_PAYLOAD_LEN];
+	size_t len = 0;
+	int err, i, n = 0;
+
+	err = clevo_cc_dsm_buffer(cc, CLEVO_CMD_FAN_STATUS, payload,
+				  sizeof(payload), &len);
+	if (err)
+		return err;
+
+	n += sysfs_emit_at(buf, n, "len=%zu\n", len);
+	for (i = 0; i < (int)len && n < PAGE_SIZE - 8; i++)
+		n += sysfs_emit_at(buf, n, "%02x", payload[i]);
+	n += sysfs_emit_at(buf, n, "\n");
+	return n;
+}
+static DEVICE_ATTR_RO(raw_status);
+
+/*
+ * sysfs: raw_curve (diagnostic)
+ *
+ * Dumps the raw command-13 reply as hex, for the same reason as raw_status.
+ */
+static ssize_t raw_curve_show(struct device *dev, struct device_attribute *attr,
+			      char *buf)
+{
+	struct clevo_cc *cc = dev_get_drvdata(dev);
+	u8 payload[CLEVO_PAYLOAD_LEN];
+	size_t len = 0;
+	int err, i, n = 0;
+
+	err = clevo_cc_read_curve(cc, payload, sizeof(payload), &len);
+	if (err)
+		return err;
+
+	n += sysfs_emit_at(buf, n, "len=%zu\n", len);
+	for (i = 0; i < (int)len && n < PAGE_SIZE - 8; i++)
+		n += sysfs_emit_at(buf, n, "%02x", payload[i]);
+	n += sysfs_emit_at(buf, n, "\n");
+	return n;
+}
+static DEVICE_ATTR_RO(raw_curve);
+
+/*
  * sysfs: perf_mode
  *
  * Read reports the last value written this session (or "unknown" if nothing
@@ -739,6 +810,8 @@ static struct attribute *clevo_cc_attrs[] = {
 	&dev_attr_fan_mode.attr,
 	&dev_attr_fan_curve.attr,
 	&dev_attr_perf_mode.attr,
+	&dev_attr_raw_status.attr,
+	&dev_attr_raw_curve.attr,
 	NULL
 };
 ATTRIBUTE_GROUPS(clevo_cc);

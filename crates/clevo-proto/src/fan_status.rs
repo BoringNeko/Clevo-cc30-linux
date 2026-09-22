@@ -1,75 +1,55 @@
 //! Fan status package parsing (command `12`).
 //!
-//! The reply layout on this firmware (COLORFUL P15 23, INSYDE BIOS) was
-//! **verified live** and is the authoritative source for this module; see
-//! `docs/hardware-notes.md` §10.2 and §10.4.
+//! Layout from the original Control Center (`RWReg.cs::UpdateWMI12`),
+//! **verified live on a COLORFUL P15 23** (see `docs/hardware-notes.md` §10.4):
 //!
 //! ```text
-//! [2..3]   CPU  rpm, big-endian: (a[2] << 8) | a[3]
-//! [4..5]   GPU1 rpm, big-endian
-//! [6..7]   GPU2 rpm, big-endian (always 0 on this two-fan machine)
-//! [16]     CPU  duty   (raw 0..255; 255 = 100%)
-//! [17]     GPU1 duty
-//! [18]     GPU2 duty
-//! [19]     CPU  temperature, degrees Celsius (direct, no conversion)
-//! [20]     GPU1 temperature
-//! [21]     GPU2 temperature
+//! [2..3]   CPU  fan period, big-endian
+//! [4..5]   GPU1 fan period, big-endian
+//! [6..7]   GPU2 fan period, big-endian (always 0 here)
+//! [18]     CPU  temperature, **raw** - run it through `cal_cpu_temp`
+//! [21]     GPU1 temperature, already degrees Celsius
+//! [24]     GPU2 temperature, already degrees Celsius
 //! ```
 //!
-//! Two corrections against the reverse-engineering reference
-//! (`ControlCenter-RE/docs/02-DCHU-WMI协议参考.md` §4.1), both measured:
+//! Two things an earlier revision got wrong, both corrected against the
+//! vendor's own code and the live reply:
 //!
-//! 1. The reference placed the three temperatures at `[18]`, `[21]` and `[24]`
-//!    with duties interleaved between them. The live reply is contiguous:
-//!    duty triple at `[16..18]`, temperature triple at `[19..21]`.
-//! 2. The reference's "raw temperature" needs no `CalCPUTemp` conversion on this
-//!    firmware — the value is already degrees Celsius. Observed while idle
-//!    (~37..45 °C) and under load (~80..95 °C on a 45 W part with a 100 °C
-//!    limit); a raw EC register would not track a real thermal curve.
+//! 1. The CPU temperature is at `[18]`, not `[19]`, and it is **not** a
+//!    Celsius reading: the vendor runs it through `CalCPUTemp`, a piecewise
+//!    linear curve selected by the CPU's TDP class. Verified live - raw 37/87
+//!    maps to ~32/57 °C under a 47 W curve, against `sensors` reporting
+//!    27-35 °C idle and 51-65 °C under load.
+//! 2. GPU1/GPU2 temperatures are at `[21]`/`[24]` and **are** direct Celsius.
 //!
-//! A raw temperature of `0` means "not reported" (the channel is absent or the
-//! EC has nothing to say); it is surfaced as [`Option::None`] rather than as a
-//! plausible-looking 0 °C.
+//! There are no duty-cycle fields in this reply. An earlier revision invented
+//! a duty triple at `[16..18]`; the live bytes show those offsets carry other
+//! values entirely (they are stable across load, so they are not duty either).
 //!
-//! Parsing requires only [`MIN_FAN_STATUS_LEN`] bytes so the real 42-byte reply
-//! is accepted.
+//! The EC stores a rotation **period**, not rpm; `period_raw_to_rpm` converts
+//! it with the Control Center formula. Parsing requires only
+//! [`MIN_FAN_STATUS_LEN`] bytes so the real 42-byte reply is accepted.
 
 use crate::error::ProtoError;
 
 /// Minimum command `12` reply length needed to read every field below.
-pub const MIN_FAN_STATUS_LEN: usize = 22;
+pub const MIN_FAN_STATUS_LEN: usize = 25;
 
-/// A fan speed as reported by command `12`.
-///
-/// The EC stores the **rotation period**, not rpm. The original Control Center
-/// converts it for display (`UpdateUI_CPUFan` in `Page_system_monitor.cs`):
-///
-/// ```text
-/// displayed_rpm = 60 / (5.565217391304348e-05 * raw) * 2
-///               = 2_159_999.9 / raw
-/// ```
-///
-/// A raw value of 452 therefore corresponds to roughly 4770 rpm. Raw 0 means
-/// the fan is stopped and is displayed as 0 (the UI guards the division).
+/// A fan status package as reported by command `12`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FanStatus {
-    /// CPU fan period raw value (see type docs for the rpm conversion).
+    /// CPU fan period raw value (see [`period_raw_to_rpm`]).
     pub cpu_period: u16,
     /// GPU1 fan period raw value.
     pub gpu1_period: u16,
     /// GPU2 fan period raw value.
     pub gpu2_period: u16,
-    /// CPU fan duty (`0..=255`, raw; 255 = 100%).
-    pub cpu_duty: u8,
-    /// GPU1 fan duty.
-    pub gpu1_duty: u8,
-    /// GPU2 fan duty.
-    pub gpu2_duty: u8,
-    /// CPU temperature in degrees Celsius (`None` when the EC reports 0).
-    pub cpu_temp_c: Option<u8>,
-    /// GPU1 temperature in degrees Celsius (`None` when the EC reports 0).
+    /// Raw CPU temperature byte (`[18]`); convert with [`cal_cpu_temp`].
+    pub cpu_temp_raw: u8,
+    /// GPU1 temperature in degrees Celsius (`[21]`); `None` when the EC
+    /// reports 0.
     pub gpu1_temp_c: Option<u8>,
-    /// GPU2 temperature in degrees Celsius (`None` when the EC reports 0).
+    /// GPU2 temperature in degrees Celsius (`[24]`); `None` when absent.
     pub gpu2_temp_c: Option<u8>,
 }
 
@@ -88,6 +68,85 @@ impl FanStatus {
     pub fn gpu2_rpm(&self) -> u32 {
         period_raw_to_rpm(self.gpu2_period)
     }
+
+    /// CPU temperature in degrees Celsius, converted from [`Self::cpu_temp_raw`].
+    ///
+    /// Uses [`cal_cpu_temp`]; pass the machine's TDP class. Returns `None` when
+    /// the raw byte is 0 (not reported).
+    pub fn cpu_temp_c(&self, tdp_class: TdpClass) -> Option<u8> {
+        (self.cpu_temp_raw != 0).then(|| cal_cpu_temp(tdp_class, self.cpu_temp_raw))
+    }
+}
+
+/// TDP class of the installed CPU, used by [`cal_cpu_temp`].
+///
+/// The vendor reads this from `cpu.ini` keyed by CPU model. Values not listed
+/// there fall back to [`TdpClass::Unknown`], which passes the raw byte through
+/// unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TdpClass {
+    /// 35 W part.
+    W35,
+    /// 45-47 W part (the COLORFUL P15 23's CPU class).
+    W47,
+    /// 65 W part.
+    W65,
+    /// 84 W or 88 W part.
+    W84,
+    /// 91 W part.
+    W91,
+    /// Unknown class: [`cal_cpu_temp`] returns the input unchanged.
+    #[default]
+    Unknown,
+}
+
+/// Convert a raw `[18]` byte to degrees Celsius, mirroring the vendor's
+/// `CalCPUTemp`.
+///
+/// The vendor applies a piecewise linear curve per TDP class; for a 47 W part
+/// `raw <= 26` is already Celsius and above it is `raw * 0.5 + 13`. A 35 W part
+/// uses `raw <= 32` / `raw * 0.5 + 16`.
+pub fn cal_cpu_temp(tdp: TdpClass, raw: u8) -> u8 {
+    let value = f64::from(raw);
+    let out = match tdp {
+        TdpClass::W84 => {
+            if raw <= 60 {
+                value - 1.0
+            } else {
+                (value - 12.0) * 0.33 + 44.0
+            }
+        }
+        TdpClass::W65 => {
+            if raw <= 50 {
+                value - 1.0
+            } else {
+                (value - 35.0) * 0.41 + 43.7
+            }
+        }
+        TdpClass::W91 => {
+            if raw <= 50 {
+                value - 5.0
+            } else {
+                (value - 9.0) * 0.22 + 43.7
+            }
+        }
+        TdpClass::W35 => {
+            if raw <= 32 {
+                value
+            } else {
+                value * 0.5 + 16.0
+            }
+        }
+        TdpClass::W47 => {
+            if raw <= 26 {
+                value
+            } else {
+                value * 0.5 + 13.0
+            }
+        }
+        TdpClass::Unknown => value,
+    };
+    out.round().clamp(0.0, 255.0) as u8
 }
 
 /// Interpret a raw temperature byte: `0` means "not reported".
@@ -112,12 +171,9 @@ pub fn parse_fan_status(payload: &[u8]) -> Result<FanStatus, ProtoError> {
         cpu_period: read_be_u16(payload, 2),
         gpu1_period: read_be_u16(payload, 4),
         gpu2_period: read_be_u16(payload, 6),
-        cpu_duty: payload[16],
-        gpu1_duty: payload[17],
-        gpu2_duty: payload[18],
-        cpu_temp_c: temp(payload[19]),
-        gpu1_temp_c: temp(payload[20]),
-        gpu2_temp_c: temp(payload[21]),
+        cpu_temp_raw: payload[18],
+        gpu1_temp_c: temp(payload[21]),
+        gpu2_temp_c: temp(payload[24]),
     })
 }
 
@@ -151,16 +207,6 @@ pub fn rpm_to_period_raw(rpm: u32) -> u16 {
     period.round().clamp(0.0, f64::from(u16::MAX)) as u16
 }
 
-/// Convert a raw duty byte to a percentage, rounding to the nearest integer.
-pub fn raw_duty_to_pct(raw: u8) -> u8 {
-    ((u32::from(raw) * 100 + 127) / 255) as u8
-}
-
-/// Convert a duty percentage to the on-wire byte.
-pub fn pct_to_raw_duty(pct: u8) -> u8 {
-    ((u32::from(pct) * 255 + 50) / 100) as u8
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,6 +219,13 @@ mod tests {
         assert_eq!(period_raw_to_rpm(1254), 1719);
         // zero is guarded
         assert_eq!(period_raw_to_rpm(0), 0);
+    }
+
+    #[test]
+    fn period_to_rpm_matches_the_live_samples() {
+        // Captured live: command 12 said 639/683 while hwmon said 3374/3157.
+        assert_eq!(period_raw_to_rpm(639), 3374);
+        assert_eq!(period_raw_to_rpm(683), 3157);
     }
 
     #[test]
@@ -191,40 +244,70 @@ mod tests {
         }
     }
 
-    fn sample() -> [u8; MIN_FAN_STATUS_LEN] {
+    /// The live idle command-12 sample (fans stopped).
+    fn live_idle() -> [u8; MIN_FAN_STATUS_LEN] {
         let mut p = [0u8; MIN_FAN_STATUS_LEN];
-        p[2] = 0x01;
-        p[3] = 0xCE; // 462 period raw, as observed live
-        p[4] = 0x01;
-        p[5] = 0xD9; // 473 period raw
-        p[6] = 0x00;
-        p[7] = 0x00;
-        p[16] = 200; // CPU duty
-        p[17] = 180; // GPU1 duty
-        p[18] = 0; // GPU2 duty (absent channel)
-        p[19] = 55; // CPU temp
-        p[20] = 60; // GPU1 temp
-        p[21] = 0; // GPU2 temp (absent channel)
+        p[18] = 37; // CPU temp raw
+        p[21] = 33; // GPU1 33 C
+                    // [24] stays 0: GPU2 absent
+        p
+    }
+
+    /// The live command-12 sample taken under load.
+    fn live_load() -> [u8; MIN_FAN_STATUS_LEN] {
+        let mut p = [0u8; MIN_FAN_STATUS_LEN];
+        p[2] = 0x02;
+        p[3] = 0x7f; // 639 -> 3374 rpm
+        p[4] = 0x02;
+        p[5] = 0xab; // 683 -> 3157 rpm
+        p[18] = 87;
+        p[21] = 35;
         p
     }
 
     #[test]
-    fn parses_all_fields() {
-        let status = parse_fan_status(&sample()).unwrap();
-        assert_eq!(
-            status,
-            FanStatus {
-                cpu_period: 462,
-                gpu1_period: 473,
-                gpu2_period: 0,
-                cpu_duty: 200,
-                gpu1_duty: 180,
-                gpu2_duty: 0,
-                cpu_temp_c: Some(55),
-                gpu1_temp_c: Some(60),
-                gpu2_temp_c: None,
-            }
-        );
+    fn parses_the_live_load_sample() {
+        let s = parse_fan_status(&live_load()).unwrap();
+        assert_eq!(s.cpu_period, 639);
+        assert_eq!(s.gpu1_period, 683);
+        assert_eq!(s.gpu2_period, 0);
+        assert_eq!(s.cpu_rpm(), 3374);
+        assert_eq!(s.gpu1_rpm(), 3157);
+        assert_eq!(s.cpu_temp_raw, 87);
+        assert_eq!(s.gpu1_temp_c, Some(35));
+        assert_eq!(s.gpu2_temp_c, None);
+    }
+
+    #[test]
+    fn parses_the_live_idle_sample() {
+        let s = parse_fan_status(&live_idle()).unwrap();
+        assert_eq!(s.cpu_rpm(), 0);
+        assert_eq!(s.cpu_temp_raw, 37);
+        assert_eq!(s.gpu1_temp_c, Some(33));
+    }
+
+    #[test]
+    fn cal_cpu_temp_matches_the_vendor_curve() {
+        // Live: raw 37/87 under a 47 W part must land in the range `sensors`
+        // reported (27-35 idle, 51-65 under load).
+        assert_eq!(cal_cpu_temp(TdpClass::W47, 37), 32);
+        assert_eq!(cal_cpu_temp(TdpClass::W47, 87), 57);
+        // Below the knee the raw value is already Celsius.
+        assert_eq!(cal_cpu_temp(TdpClass::W47, 26), 26);
+        assert_eq!(cal_cpu_temp(TdpClass::W47, 27), 27); // 27*0.5+13 = 26.5 -> 27
+                                                         // Unknown class passes through unchanged.
+        assert_eq!(cal_cpu_temp(TdpClass::Unknown, 87), 87);
+    }
+
+    #[test]
+    fn cpu_temp_uses_the_tdp_class_and_guards_zero() {
+        let s = parse_fan_status(&live_load()).unwrap();
+        assert_eq!(s.cpu_temp_c(TdpClass::W47), Some(57));
+        assert_eq!(s.cpu_temp_c(TdpClass::Unknown), Some(87));
+        let mut p = live_load();
+        p[18] = 0;
+        let s = parse_fan_status(&p).unwrap();
+        assert_eq!(s.cpu_temp_c(TdpClass::W47), None);
     }
 
     #[test]
@@ -238,42 +321,35 @@ mod tests {
     #[test]
     fn zero_temperature_is_reported_as_absent() {
         let mut p = [0u8; MIN_FAN_STATUS_LEN];
-        p[19] = 0; // CPU reports nothing
-        p[20] = 42; // GPU1 reports 42 °C
-        let status = parse_fan_status(&p).unwrap();
-        assert_eq!(status.cpu_temp_c, None);
-        assert_eq!(status.gpu1_temp_c, Some(42));
+        p[18] = 0;
+        p[21] = 42;
+        let s = parse_fan_status(&p).unwrap();
+        assert_eq!(s.cpu_temp_c(TdpClass::W47), None);
+        assert_eq!(s.gpu1_temp_c, Some(42));
     }
 
     #[test]
     fn live_42_byte_reply_is_accepted() {
         let mut p = [0u8; 42];
         p[2] = 0x01;
-        p[3] = 0xC4;
+        p[3] = 0xc4;
         p[4] = 0x01;
-        p[5] = 0xD0;
-        let status = parse_fan_status(&p).unwrap();
-        assert_eq!(status.cpu_period, 452);
-        assert_eq!(status.gpu1_period, 464);
-        assert_eq!(status.cpu_rpm(), 4770);
+        p[5] = 0xd0;
+        let s = parse_fan_status(&p).unwrap();
+        assert_eq!(s.cpu_period, 452);
+        assert_eq!(s.gpu1_period, 464);
+        assert_eq!(s.cpu_rpm(), 4770);
     }
 
     #[test]
     fn short_payload_is_rejected() {
-        let err = parse_fan_status(&[0u8; 21]).unwrap_err();
+        let err = parse_fan_status(&[0u8; 24]).unwrap_err();
         assert_eq!(
             err,
             ProtoError::BufferTooShort {
-                got: 21,
+                got: 24,
                 need: MIN_FAN_STATUS_LEN
             }
         );
-    }
-
-    #[test]
-    fn duty_conversion_roundtrips() {
-        for pct in 0..=100u8 {
-            assert!((raw_duty_to_pct(pct_to_raw_duty(pct)) as i32 - i32::from(pct)).abs() <= 1);
-        }
     }
 }
