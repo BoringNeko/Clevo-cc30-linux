@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, fireEvent, screen, waitFor } from "@testing-library/react";
-import { CurveCard, FACTORY_CURVE, curvePath, dutyAtTemp, isEditablePoint, sameCurve, shouldAdoptCurve } from "./CurveCard";
+import { CurveCard, FACTORY_CURVE, curvePath, dutyAtTemp, isEditablePoint, sameCurve, shouldAdoptCurve, tempRangeOf } from "./CurveCard";
 import { setFanCurve } from "../api/daemon";
 import type { CurvePoint, FanCurve } from "../api/daemon";
 
@@ -83,13 +83,34 @@ const asCurve = (cpu: CurvePoint[], gpu1: CurvePoint[] = BASE): FanCurve => ({
 });
 
 /**
- * The four points of a fan, read back from where its handles are drawn.
+ * The x-axis span the most recent `setup` produced.
+ *
+ * The card derives the axis from the curve it is given, and each test renders
+ * exactly one card, so the helpers can read the range back from here instead of
+ * making every call site thread it through.
+ */
+let currentRange: { lo: number; hi: number } = { lo: 0, hi: 100 };
+
+/** The x-axis span the card derives for a curve, mirroring `tempRangeOf`. */
+function rangeOf(curve: FanCurve): { lo: number; hi: number } {
+  const temps = [...curve.cpu, ...curve.gpu1].map((p) => p.temp);
+  const lo = Math.min(...temps);
+  return { lo, hi: Math.max(lo + 1, Math.max(...temps)) };
+}
+
+/** Map an absolute temperature to 0..100 across the plot's data area. */
+function tempPct(temp: number, range: { lo: number; hi: number }): number {
+  return ((temp - range.lo) / (range.hi - range.lo)) * 100;
+}
+
+/** The four points of a fan, read back from where its handles are drawn.
  *
  * The card no longer lists the values as text, so the geometry is the source of
  * truth: each handle is centred on its point, and the inverse of that mapping
  * recovers the (temp, duty) the curve holds.
  */
 function pointsOf(fan: "CPU" | "GPU1"): string[] {
+  const range = currentRange;
   const handles = Array.from(document.querySelectorAll<HTMLElement>('[data-testid="curve-handle"]'));
   const slice = fan === "CPU" ? handles.slice(0, 4) : handles.slice(4, 8);
   return slice.map((el) => {
@@ -97,7 +118,8 @@ function pointsOf(fan: "CPU" | "GPU1"): string[] {
     const xPct = parseFloat(style.left);
     const yPct = parseFloat(style.top);
     const span = 100 - 2 * PAD_PCT;
-    const temp = Math.round(((xPct - PAD_PCT) / span) * 100);
+    const across = ((xPct - PAD_PCT) / span) * 100;
+    const temp = Math.round(range.lo + (across / 100) * (range.hi - range.lo));
     const duty = Math.round(((100 - PAD_PCT - yPct) / span) * 100);
     return `${temp}°C${duty}%`;
   });
@@ -138,7 +160,8 @@ function setup(curve: FanCurve, rect: { left: number; top: number; width: number
       x: rect.left,
       y: rect.top,
     }) as DOMRect;
-  return { view, svg, chart, rect };
+  currentRange = rangeOf(curve);
+  return { view, svg, chart, rect, range: currentRange };
 }
 
 /**
@@ -153,9 +176,10 @@ function pointOnScreen(
   temp: number,
   duty: number,
   rect: { left: number; top: number; width: number; height: number },
+  range: { lo: number; hi: number },
 ) {
   const span = 100 - 2 * PAD_PCT;
-  const xPct = PAD_PCT + (temp / 100) * span;
+  const xPct = PAD_PCT + (tempPct(temp, range) / 100) * span;
   const yPct = PAD_PCT + ((100 - duty) / 100) * span;
   return {
     x: rect.left + (xPct / 100) * rect.width,
@@ -169,9 +193,10 @@ function drag(
   from: [number, number],
   to: [number, number],
   rect: { left: number; top: number; width: number; height: number } = DEFAULT_RECT,
+  range: { lo: number; hi: number } = currentRange,
 ) {
-  const a = pointOnScreen(from[0], from[1], rect);
-  const b = pointOnScreen(to[0], to[1], rect);
+  const a = pointOnScreen(from[0], from[1], rect, range);
+  const b = pointOnScreen(to[0], to[1], rect, range);
   fireEvent.pointerDown(svg, { clientX: a.x, clientY: a.y, pointerId: 1 });
   fireEvent.pointerMove(svg, { clientX: b.x, clientY: b.y, pointerId: 1 });
   fireEvent.pointerUp(svg, { clientX: b.x, clientY: b.y, pointerId: 1 });
@@ -332,6 +357,32 @@ describe("CurveCard coordinate mapping", () => {
   });
 });
 
+describe("tempRangeOf", () => {
+  it("spans the outermost temperatures of both fans", () => {
+    expect(tempRangeOf([BASE, GPU_OTHER])).toEqual({ lo: 40, hi: 100 });
+  });
+
+  it("takes the union, not just one fan", () => {
+    // CPU starts at 40, GPU1 ends at 95: the axis must cover both.
+    const cpu = [P(40, 20), P(50, 30), P(60, 40), P(70, 50)];
+    const gpu = [P(45, 20), P(60, 40), P(80, 60), P(95, 90)];
+    expect(tempRangeOf([cpu, gpu])).toEqual({ lo: 40, hi: 95 });
+  });
+
+  it("ignores an empty channel", () => {
+    expect(tempRangeOf([BASE, []])).toEqual({ lo: 40, hi: 100 });
+  });
+
+  it("falls back to a full scale when there is nothing to plot", () => {
+    expect(tempRangeOf([[], []])).toEqual({ lo: 0, hi: 100 });
+  });
+
+  it("keeps a non-zero span rather than dividing by zero", () => {
+    const flat = [P(50, 10), P(50, 20), P(50, 30), P(50, 40)];
+    expect(tempRangeOf([flat])).toEqual({ lo: 50, hi: 51 });
+  });
+});
+
 describe("curvePath", () => {
   it("starts at the first point's plotted position", () => {
     const d = curvePath([P(40, 25), P(60, 36), P(80, 53), P(100, 100)], 4);
@@ -431,10 +482,22 @@ describe("CurveCard handles", () => {
 
   it("places a handle at the percentage its point maps to", () => {
     setup(asCurve(BASE, GPU_OTHER));
-    // BASE point 2 is (60°C, 36%): x = 4 + 0.6*92 = 59.2, y = 4 + 0.64*92 = 62.88.
+    // The axis spans the curve's own 40..100 °C, so BASE point 2 (60°C, 36%)
+    // sits at (60-40)/60 = 33.3% across: x = 4 + 0.3333*92 = 34.67,
+    // y = 4 + 0.64*92 = 62.88.
     const second = getComputedStyle(handleBoxes()[1]);
-    expect(parseFloat(second.left)).toBeCloseTo(59.2, 6);
+    expect(parseFloat(second.left)).toBeCloseTo(34.666666, 5);
     expect(parseFloat(second.top)).toBeCloseTo(62.88, 6);
+  });
+
+  it("puts the first and last points on the axis ends", () => {
+    // The axis is derived from the curve, so its ends must coincide with the
+    // outermost points - the reported bug was the curve starting far to the
+    // right of the plot because the axis was a fixed 0..100 °C.
+    setup(asCurve(BASE, GPU_OTHER));
+    const cpu = handleBoxes().slice(0, 4).map((el) => parseFloat(getComputedStyle(el).left));
+    expect(cpu[0]).toBeCloseTo(PAD_PCT, 6);
+    expect(cpu[3]).toBeCloseTo(100 - PAD_PCT, 6);
   });
 
   it("marks the firmware-owned ends as inert and the middle as editable", () => {
@@ -484,9 +547,9 @@ describe("CurveCard readout", () => {
   it("shows the dragged point's own value while it is held", () => {
     const { svg } = setup(asCurve(BASE, GPU_OTHER));
     // Press and move but do not release, so the drag is still in progress.
-    const from = pointOnScreen(60, 36, DEFAULT_RECT);
+    const from = pointOnScreen(60, 36, DEFAULT_RECT, currentRange);
     fireEvent.pointerDown(svg, { clientX: from.x, clientY: from.y, pointerId: 1 });
-    const to = pointOnScreen(72, 80, DEFAULT_RECT);
+    const to = pointOnScreen(72, 80, DEFAULT_RECT, currentRange);
     fireEvent.pointerMove(svg, { clientX: to.x, clientY: to.y, pointerId: 1 });
 
     // The readout switches to that point's (temp, duty) rather than the live one.

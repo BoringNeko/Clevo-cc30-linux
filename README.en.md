@@ -39,7 +39,7 @@ UI added.
 - **Safe by default**: writes are off by default; the `acpi_call` transport is
   read-only; unverified firmware constants are clearly marked.
 - **Offline-testable**: no hardware required, everything is tested against
-  hand-written fixtures (166 Rust + 28 UI-backend + 172 frontend tests).
+  hand-written fixtures (166 Rust + 28 UI-backend + 178 frontend tests).
 
 > Fan control (speed, temperature, curve read/write, fan and performance modes)
 > has been verified item by item on real hardware; the record is in

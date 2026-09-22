@@ -161,19 +161,55 @@ function dutyToY(duty: number): number {
 }
 
 /**
+ * The span of temperatures the plot x-axis covers.
+ *
+ * The curve only exists between its first and last point (40..100 °C on this
+ * machine), so plotting it against a fixed 0..100 scale leaves the whole left
+ * side of the chart empty and squeezes the curve into the right third. The axis
+ * therefore follows the curve: `lo` and `hi` are the outermost temperatures the
+ * two fans actually use, shared so both lines land on the same two values.
+ */
+export interface TempRange {
+  lo: number;
+  hi: number;
+}
+
+/**
+ * The range covering `series`, widened to a minimum span so a degenerate curve
+ * cannot divide by zero.
+ */
+export function tempRangeOf(series: CurvePoint[][]): TempRange {
+  const temps = series.flat().map((p) => p.temp);
+  if (temps.length === 0) return { lo: 0, hi: 100 };
+  const lo = Math.min(...temps);
+  const hi = Math.max(lo + 1, Math.max(...temps));
+  return { lo, hi };
+}
+
+/** Map an absolute temperature to 0..100 across the plot's data area. */
+function tempToPct(temp: number, range: TempRange): number {
+  return ((temp - range.lo) / (range.hi - range.lo)) * 100;
+}
+
+/** The inverse of {@link tempToPct}. */
+function pctToTemp(pct: number, range: TempRange): number {
+  return range.lo + (pct / 100) * (range.hi - range.lo);
+}
+
+/**
  * The smooth cubic path through the points, in the chart's 0..100 space.
  *
  * The reference draws each segment as a curve whose control points sit
  * horizontally between the two endpoints, which removes the corners a straight
  * polyline leaves while still passing exactly through every point.
  */
-export function curvePath(points: CurvePoint[], inset = 0): string {
+export function curvePath(points: CurvePoint[], inset = 0, range: TempRange = { lo: 0, hi: 100 }): string {
   if (points.length === 0) return "";
   const lo = inset;
   const hi = 100 - inset;
   const span = hi - lo;
   const at = (p: CurvePoint) => ({
-    x: lo + (p.temp / 100) * span,
+    x: lo + (tempToPct(p.temp, range) / 100) * span,
     y: lo + (dutyToY(p.duty_pct) / 100) * span,
   });
   const first = at(points[0]);
@@ -253,6 +289,15 @@ export function CurveCard({
   }, [draft, curve.cpu, curve.gpu1]);
   const dirty = dirtyChannels.length > 0;
 
+  /**
+   * The temperatures the x-axis spans, shared by both fans.
+   *
+   * Derived from the *daemon* curve rather than the draft: it must not shift
+   * while a point is being dragged, or the point would slide out from under the
+   * pointer.
+   */
+  const range = useMemo(() => tempRangeOf([curve.cpu, curve.gpu1]), [curve.cpu, curve.gpu1]);
+
   const series: Series[] = [
     {
       key: "cpu",
@@ -268,19 +313,22 @@ export function CurveCard({
     },
   ];
 
-  /** Convert a pointer event into (temp, duty), both as percentages. */
-  const toCurveCoords = useCallback((event: { clientX: number; clientY: number }) => {
-    const chart = chartRef.current;
-    if (!chart) return null;
-    const rect = chart.getBoundingClientRect();
-    const span = 100 - 2 * PAD_PCT;
-    const xPct = ((event.clientX - rect.left) / rect.width) * 100;
-    const yPct = ((event.clientY - rect.top) / rect.height) * 100;
-    return {
-      temp: ((xPct - PAD_PCT) / span) * 100,
-      duty: ((100 - PAD_PCT - yPct) / span) * 100,
-    };
-  }, []);
+  /** Convert a pointer event into (temp, duty): temp absolute, duty a percent. */
+  const toCurveCoords = useCallback(
+    (event: { clientX: number; clientY: number }) => {
+      const chart = chartRef.current;
+      if (!chart) return null;
+      const rect = chart.getBoundingClientRect();
+      const span = 100 - 2 * PAD_PCT;
+      const xPct = ((event.clientX - rect.left) / rect.width) * 100;
+      const yPct = ((event.clientY - rect.top) / rect.height) * 100;
+      return {
+        temp: pctToTemp((xPct - PAD_PCT) / span * 100, range),
+        duty: ((100 - PAD_PCT - yPct) / span) * 100,
+      };
+    },
+    [range],
+  );
 
   /**
    * Find the point under the pointer, across *both* series.
@@ -299,18 +347,18 @@ export function CurveCard({
       const coords = toCurveCoords(event);
       if (!chart || !coords) return null;
       const rect = chart.getBoundingClientRect();
-      // The grab radius is a screen distance, converted to curve units, so the
-      // target feels the same whatever size the card is drawn at.
-      const perPctX = 100 / rect.width;
-      const perPctY = 100 / rect.height;
+      // The grab radius is a screen distance, converted to percent-of-plot, so
+      // the target feels the same whatever size the card is drawn at.
+      const perPxX = (100 - 2 * PAD_PCT) / rect.width;
+      const perPxY = (100 - 2 * PAD_PCT) / rect.height;
       let best: { channel: Channel; index: number } | null = null;
       let bestDist = HIT_RADIUS_PX;
       CHANNELS.forEach((channel) => {
         EDITABLE_INDICES.forEach((i) => {
           const p = draft[channel][i];
           if (!p) return;
-          const dx = (p.temp - coords.temp) * perPctX;
-          const dy = (p.duty_pct - coords.duty) * perPctY;
+          const dx = (tempToPct(p.temp, range) - tempToPct(coords.temp, range)) * perPxX;
+          const dy = (p.duty_pct - coords.duty) * perPxY;
           const dist = Math.hypot(dx, dy);
           // `<=` lets a later series take an exact tie.
           if (dist <= bestDist) {
@@ -321,7 +369,7 @@ export function CurveCard({
       });
       return best;
     },
-    [draft, toCurveCoords],
+    [draft, range, toCurveCoords],
   );
 
   const onPointerDown = (event: React.PointerEvent<SVGSVGElement>) => {
@@ -472,7 +520,7 @@ export function CurveCard({
               {series.map((s) => (
                 <path
                   key={`${s.key}-line`}
-                  d={curvePath(s.points, PAD_PCT)}
+                  d={curvePath(s.points, PAD_PCT, range)}
                   fill="none"
                   stroke={s.color}
                   strokeWidth={dragging?.channel === s.key ? 2.25 : 1.75}
@@ -493,7 +541,7 @@ export function CurveCard({
                 return (
                   <Handle
                     key={`${s.key}-${i}`}
-                    x={PAD_PCT + (p.temp / 100) * (100 - 2 * PAD_PCT)}
+                    x={PAD_PCT + (tempToPct(p.temp, range) / 100) * (100 - 2 * PAD_PCT)}
                     y={PAD_PCT + (dutyToY(p.duty_pct) / 100) * (100 - 2 * PAD_PCT)}
                     color={s.color}
                     active={active}
@@ -509,7 +557,7 @@ export function CurveCard({
           </Box>
         </Box>
 
-        <XAxis />
+        <XAxis range={range} />
       </Box>
 
       {writable && (
@@ -717,21 +765,29 @@ function YAxis() {
   );
 }
 
-/** The temperature scale, aligned to the plot's inner (data) area. */
-function XAxis() {
-  const labels = [0, 25, 50, 75, 100];
+/**
+ * The temperature scale, aligned to the plot's inner (data) area.
+ *
+ * The labels are the real temperatures the axis covers - the curve's own first
+ * and last point - not a fixed 0..100, so the ends of the curve sit exactly
+ * under the values they represent.
+ */
+function XAxis({ range }: { range: TempRange }) {
+  const ticks = 4;
   const span = 100 - 2 * PAD_PCT;
+  const step = (range.hi - range.lo) / ticks;
+  const labels = Array.from({ length: ticks + 1 }, (_, i) => Math.round(range.lo + i * step));
   return (
     <Box sx={{ display: "flex", ml: `${AXIS_W + AXIS_GAP}px`, mt: 1 }}>
       <Box sx={{ position: "relative", flex: 1, height: 15 }}>
-        {labels.map((t) => (
+        {labels.map((t, i) => (
           <Typography
             key={t}
             sx={{
               position: "absolute",
               // The label marks where the value sits in the data area, which is
               // inset from the box by PAD_PCT on each side - not the box edges.
-              left: `${PAD_PCT + (t / 100) * span}%`,
+              left: `${PAD_PCT + (i / ticks) * span}%`,
               transform: "translateX(-50%)",
               fontSize: "0.625rem",
               letterSpacing: "0.12em",
