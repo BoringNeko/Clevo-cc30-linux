@@ -155,9 +155,10 @@ export function dutyAtTemp(temp: number, points: CurvePoint[]): number {
   return points[points.length - 1].duty_pct;
 }
 
-/** Map a duty percentage to a chart y, in percent from the top of the chart. */
-function dutyToY(duty: number): number {
-  return 100 - duty;
+/** A closed span on one axis of the plot. */
+export interface Range {
+  lo: number;
+  hi: number;
 }
 
 /**
@@ -169,31 +170,42 @@ function dutyToY(duty: number): number {
  * therefore follows the curve: `lo` and `hi` are the outermost temperatures the
  * two fans actually use, shared so both lines land on the same two values.
  */
-export interface TempRange {
-  lo: number;
-  hi: number;
-}
+export type TempRange = Range;
 
 /**
- * The range covering `series`, widened to a minimum span so a degenerate curve
+ * The range covering `values`, widened to a minimum span so a degenerate curve
  * cannot divide by zero.
  */
-export function tempRangeOf(series: CurvePoint[][]): TempRange {
-  const temps = series.flat().map((p) => p.temp);
-  if (temps.length === 0) return { lo: 0, hi: 100 };
-  const lo = Math.min(...temps);
-  const hi = Math.max(lo + 1, Math.max(...temps));
+function rangeOf(values: number[], fallback: Range): Range {
+  if (values.length === 0) return fallback;
+  const lo = Math.min(...values);
+  const hi = Math.max(lo + 1, Math.max(...values));
   return { lo, hi };
 }
 
-/** Map an absolute temperature to 0..100 across the plot's data area. */
-function tempToPct(temp: number, range: TempRange): number {
-  return ((temp - range.lo) / (range.hi - range.lo)) * 100;
+/** The temperature span covered by `series`, over both fans. */
+export function tempRangeOf(series: CurvePoint[][]): TempRange {
+  return rangeOf(series.flat().map((p) => p.temp), { lo: 0, hi: 100 });
 }
 
-/** The inverse of {@link tempToPct}. */
-function pctToTemp(pct: number, range: TempRange): number {
+/** The duty span covered by `series`, over both fans. */
+export function dutyRangeOf(series: CurvePoint[][]): Range {
+  return rangeOf(series.flat().map((p) => p.duty_pct), { lo: 0, hi: 100 });
+}
+
+/** Map a value in `range` to 0..100 across the plot's data area. */
+function toPct(value: number, range: Range): number {
+  return ((value - range.lo) / (range.hi - range.lo)) * 100;
+}
+
+/** The inverse of {@link toPct}. */
+function fromPct(pct: number, range: Range): number {
   return range.lo + (pct / 100) * (range.hi - range.lo);
+}
+
+/** Map a duty percentage to a chart y, in percent from the top of the chart. */
+function dutyToY(duty: number, range: Range): number {
+  return 100 - toPct(duty, range);
 }
 
 /**
@@ -203,14 +215,19 @@ function pctToTemp(pct: number, range: TempRange): number {
  * horizontally between the two endpoints, which removes the corners a straight
  * polyline leaves while still passing exactly through every point.
  */
-export function curvePath(points: CurvePoint[], inset = 0, range: TempRange = { lo: 0, hi: 100 }): string {
+export function curvePath(
+  points: CurvePoint[],
+  inset = 0,
+  tempRange: Range = { lo: 0, hi: 100 },
+  dutyRange: Range = { lo: 0, hi: 100 },
+): string {
   if (points.length === 0) return "";
   const lo = inset;
   const hi = 100 - inset;
   const span = hi - lo;
   const at = (p: CurvePoint) => ({
-    x: lo + (tempToPct(p.temp, range) / 100) * span,
-    y: lo + (dutyToY(p.duty_pct) / 100) * span,
+    x: lo + (toPct(p.temp, tempRange) / 100) * span,
+    y: lo + (dutyToY(p.duty_pct, dutyRange) / 100) * span,
   });
   const first = at(points[0]);
   return points.slice(1).reduce((acc, curr, i) => {
@@ -296,7 +313,9 @@ export function CurveCard({
    * while a point is being dragged, or the point would slide out from under the
    * pointer.
    */
-  const range = useMemo(() => tempRangeOf([curve.cpu, curve.gpu1]), [curve.cpu, curve.gpu1]);
+  const tempRange = useMemo(() => tempRangeOf([curve.cpu, curve.gpu1]), [curve.cpu, curve.gpu1]);
+  /** The duty span the y-axis covers, derived the same way and for the same reason. */
+  const dutyRange = useMemo(() => dutyRangeOf([curve.cpu, curve.gpu1]), [curve.cpu, curve.gpu1]);
 
   const series: Series[] = [
     {
@@ -313,7 +332,7 @@ export function CurveCard({
     },
   ];
 
-  /** Convert a pointer event into (temp, duty): temp absolute, duty a percent. */
+  /** Convert a pointer event into (temp, duty), both in their own units. */
   const toCurveCoords = useCallback(
     (event: { clientX: number; clientY: number }) => {
       const chart = chartRef.current;
@@ -323,11 +342,11 @@ export function CurveCard({
       const xPct = ((event.clientX - rect.left) / rect.width) * 100;
       const yPct = ((event.clientY - rect.top) / rect.height) * 100;
       return {
-        temp: pctToTemp((xPct - PAD_PCT) / span * 100, range),
-        duty: ((100 - PAD_PCT - yPct) / span) * 100,
+        temp: fromPct(((xPct - PAD_PCT) / span) * 100, tempRange),
+        duty: fromPct(((100 - PAD_PCT - yPct) / span) * 100, dutyRange),
       };
     },
-    [range],
+    [tempRange, dutyRange],
   );
 
   /**
@@ -357,8 +376,8 @@ export function CurveCard({
         EDITABLE_INDICES.forEach((i) => {
           const p = draft[channel][i];
           if (!p) return;
-          const dx = (tempToPct(p.temp, range) - tempToPct(coords.temp, range)) * perPxX;
-          const dy = (p.duty_pct - coords.duty) * perPxY;
+          const dx = (toPct(p.temp, tempRange) - toPct(coords.temp, tempRange)) * perPxX;
+          const dy = (toPct(p.duty_pct, dutyRange) - toPct(coords.duty, dutyRange)) * perPxY;
           const dist = Math.hypot(dx, dy);
           // `<=` lets a later series take an exact tie.
           if (dist <= bestDist) {
@@ -369,7 +388,7 @@ export function CurveCard({
       });
       return best;
     },
-    [draft, range, toCurveCoords],
+    [draft, tempRange, dutyRange, toCurveCoords],
   );
 
   const onPointerDown = (event: React.PointerEvent<SVGSVGElement>) => {
@@ -461,7 +480,7 @@ export function CurveCard({
       {/* The chart: a duty gutter on the left, the plot on the right. */}
       <Box sx={{ display: "flex", flexDirection: "column" }}>
         <Box sx={{ display: "flex", height: CHART_H }}>
-          <YAxis />
+          <YAxis range={dutyRange} />
           <Box
             ref={chartRef}
             sx={{
@@ -520,7 +539,7 @@ export function CurveCard({
               {series.map((s) => (
                 <path
                   key={`${s.key}-line`}
-                  d={curvePath(s.points, PAD_PCT, range)}
+                  d={curvePath(s.points, PAD_PCT, tempRange, dutyRange)}
                   fill="none"
                   stroke={s.color}
                   strokeWidth={dragging?.channel === s.key ? 2.25 : 1.75}
@@ -541,8 +560,8 @@ export function CurveCard({
                 return (
                   <Handle
                     key={`${s.key}-${i}`}
-                    x={PAD_PCT + (tempToPct(p.temp, range) / 100) * (100 - 2 * PAD_PCT)}
-                    y={PAD_PCT + (dutyToY(p.duty_pct) / 100) * (100 - 2 * PAD_PCT)}
+                    x={PAD_PCT + (toPct(p.temp, tempRange) / 100) * (100 - 2 * PAD_PCT)}
+                    y={PAD_PCT + (dutyToY(p.duty_pct, dutyRange) / 100) * (100 - 2 * PAD_PCT)}
                     color={s.color}
                     active={active}
                     movable={movable}
@@ -557,7 +576,7 @@ export function CurveCard({
           </Box>
         </Box>
 
-        <XAxis range={range} />
+        <XAxis range={tempRange} />
       </Box>
 
       {writable && (
@@ -740,16 +759,26 @@ function Readout({
   );
 }
 
-/** The duty scale, in its own gutter to the left of the plot. */
-function YAxis() {
+/**
+ * The duty scale, in its own gutter to the left of the plot.
+ *
+ * Like the temperature scale, the labels are the real values the axis covers
+ * rather than a fixed 0..100, so the curve's own ends sit against the labels
+ * they belong to.
+ */
+function YAxis({ range }: { range: Range }) {
+  const ticks = 4;
+  const step = (range.hi - range.lo) / ticks;
+  // Top-down, so the highest duty is the topmost label.
+  const labels = Array.from({ length: ticks + 1 }, (_, i) => Math.round(range.hi - i * step));
   return (
     <Box sx={{ width: AXIS_W, position: "relative", mr: 1, flexShrink: 0 }}>
-      {[100, 75, 50, 25, 0].map((val) => (
+      {labels.map((val) => (
         <Typography
           key={val}
           sx={{
             position: "absolute",
-            top: `${PAD_PCT + (dutyToY(val) / 100) * (100 - 2 * PAD_PCT)}%`,
+            top: `${PAD_PCT + (dutyToY(val, range) / 100) * (100 - 2 * PAD_PCT)}%`,
             right: 0,
             transform: "translateY(-50%)",
             fontSize: "0.625rem",
