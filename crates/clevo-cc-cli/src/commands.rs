@@ -57,10 +57,11 @@ pub fn read_fan_snapshot(transport: &dyn Transport) -> Result<FanSnapshot, CliEr
 
 /// The CPU TDP class the CLI uses to convert the raw CPU temperature.
 ///
-/// Defaults to the reference machine's class (47 W). Override with
-/// `CLEVO_TDP_CLASS=35W|47W|65W|84W|91W` when running against another CPU; an
-/// unrecognised value falls back to "unknown", which reports the raw byte
-/// unconverted rather than inventing a conversion.
+/// Defaults to **no conversion**, which is correct on the reference machine
+/// (the raw byte tracks `sensors` within 1-2 °C) and is what the vendor itself
+/// does for a CPU its `cpu.ini` does not list. Override with
+/// `CLEVO_TDP_CLASS=35W|47W|65W|84W|91W` only when the CPU matches one of the
+/// vendor's classes; an unknown value falls back to no conversion.
 pub fn cli_tdp_class() -> clevo_proto::TdpClass {
     match std::env::var("CLEVO_TDP_CLASS")
         .ok()
@@ -72,8 +73,9 @@ pub fn cli_tdp_class() -> clevo_proto::TdpClass {
         Some("65W") => clevo_proto::TdpClass::W65,
         Some("84W") | Some("88W") => clevo_proto::TdpClass::W84,
         Some("91W") => clevo_proto::TdpClass::W91,
-        Some("UNKNOWN") | None => clevo_proto::TdpClass::W47,
-        Some(_) => clevo_proto::TdpClass::Unknown,
+        // No override, or an unrecognised one: report the raw byte, which is
+        // what the vendor does for a CPU its cpu.ini does not list.
+        _ => clevo_proto::TdpClass::Raw,
     }
 }
 

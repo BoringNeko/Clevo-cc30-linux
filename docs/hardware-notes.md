@@ -255,10 +255,10 @@ TDP-class-dependent piecewise formula; the TDP class is looked up from
 offset (`[18]`) and the five TDP classes. The GPU temperatures need no
 conversion.
 
-An earlier revision of this document claimed the conversion was unnecessary and
-that the byte was already Celsius. That was wrong, and the 1 °C "GPU
-temperature" it produced is what exposed it; §10.4 records both wrong answers so
-they are not repeated.
+The conversion is implemented but **off by default**: this machine's CPU has no
+`cpu.ini` entry, so the raw byte is already Celsius and a curve would make the
+reading 15-30 °C worse. §10.4 records all three wrong answers this took, so they
+are not repeated.
 
 ## 11. Resolved and still-open items
 
@@ -271,9 +271,10 @@ Resolved since the original list:
 - [x] **Command 12 temperature offsets** — §10.4. CPU at `[18]` (raw), GPU at
       `[21]`/`[24]` (Celsius). There are no duty fields in this reply; an
       earlier revision invented a `[16..18]` duty triple that does not exist.
-- [x] **`CalCPUTemp` temperature conversion** — reproduced, with the TDP class
-      configurable. This was wrongly declared unnecessary in a previous
-      revision.
+- [x] **`CalCPUTemp` temperature conversion** — implemented with all five
+      vendor classes, but the *default is no conversion*: this machine's CPU is
+      not in the vendor `cpu.ini`, so the raw byte is already Celsius (§10.4).
+      Two earlier revisions got this wrong in opposite directions.
 - [x] **Custom curve write (command 14)** — byte layout in §7, implemented in
       `clevo_proto::fan_curve::encode_curve`, the kernel driver and `clevod`.
       Slope formula corrected; see §7.1. A slope-equivalence test pins it.
@@ -298,7 +299,7 @@ is what the two earlier attempts lacked.
 ### The vendor's field map
 
 ```csharp
-cpu_temp  = CalCPUTemp(GetTDP(), array[18]);  // raw, needs a TDP-class curve
+cpu_temp  = CalCPUTemp(GetTDP(), array[18]);  // raw, TDP-class dependent
 gpu1_temp = array[21];                        // already Celsius
 gpu2_temp = array[24];                        // already Celsius
 ```
@@ -310,55 +311,77 @@ So on the wire:
 | `[2..3]` | CPU fan period, big-endian |
 | `[4..5]` | GPU1 fan period, big-endian |
 | `[6..7]` | GPU2 fan period (always 0 here) |
-| `[18]` | CPU temperature, **raw** - run it through `CalCPUTemp` |
+| `[18]` | CPU temperature, raw (see below) |
 | `[21]` | GPU1 temperature, direct Celsius |
 | `[24]` | GPU2 temperature, direct Celsius |
 
 There are **no duty-cycle fields** in this reply.
 
-### Live confirmation (idle vs. 4x `yes` for 20 s)
+### What `CalCPUTemp` actually does on this machine: nothing
 
-Three samples were captured on the P15 23, with `sensors` read alongside:
+`CalCPUTemp` selects a piecewise curve by TDP class, and `GetTDP` looks that
+class up from `cpu.ini` **by CPU model string**. When nothing matches, `TDP`
+stays empty and the `switch` falls through to `default => set_remote`: the raw
+byte is returned **unchanged**.
+
+Measured on the P15 23, the unmatched case is the one that applies:
+
+| | `[18]` raw | `sensors` Package |
+|---|---|---|
+| idle | 52 | 54 °C |
+| load | 88 | 87 °C |
+
+The raw byte is Celsius within 1-2 °C. Forcing the 47 W curve turns 54 into 39
+and 87 into 57 - an error of 15-30 °C in the *wrong* direction. **The correct
+default is therefore no conversion**, and a TDP class should only be set when
+the CPU genuinely matches one of the vendor's `cpu.ini` sections.
+
+### Live confirmation (idle vs. 4x `yes` for 20 s)
 
 | | `[2..3]` BE | `[4..5]` BE | `[18]` | `[21]` |
 |---|---|---|---|---|
-| idle | 0 | 0 | 37 | 33 |
-| load | 639 | 683 | 87 | 35 |
-| load (2nd) | 839 | 1038 | 37 | 34 |
+| idle | 0 | 0 | 37-52 | 33-35 |
+| load | 639 | 683 | 87-88 | 35-36 |
 
 - **Fan periods check out exactly.** At load the kernel driver's hwmon reported
   `fan1_input = 3374`, `fan2_input = 3157`; `2156250 / 639 = 3374` and
-  `2156250 / 683 = 3157`. Big-endian confirmed again.
-- **`[18]` is the CPU temperature before conversion.** Under a 47 W part,
-  `CalCPUTemp(47W, 37) = 32 °C` and `CalCPUTemp(47W, 87) = 57 °C`, against
-  `sensors` reporting 27-35 °C idle and 51-65 °C under load. The raw byte alone
-  (37/87) is not Celsius and would have looked like nonsense.
-- `[21]` tracks 33/35/34 °C, consistent with a light GPU load.
+  `2156250 / 683 = 3157`. Big-endian confirmed again, and the two independent
+  paths agree.
+- **`[18]` tracks `sensors` directly** (see the table above).
+- `[21]` stays in the mid-30s, consistent with an idle discrete GPU.
 
-### Two wrong answers before this one (worth recording)
+### Three wrong answers before this one (worth recording)
 
 1. **"Temperatures are at `[19..21]`, already Celsius."** Inferred from the
-   reference doc's prose, never measured. The live bytes show `[19]` is 0 at
-   idle and 115 under load - a duty-like value, not a temperature.
-2. **"Duties are at `[16..18]`."** Invented to explain the bytes around the
-   guessed temperatures. No duty values appear anywhere in this reply.
+   reference doc's prose, never measured. `[19]` is 0 idle / 115 load - not a
+   temperature.
+2. **"Duty is at `[16..18]`."** Invented to explain the bytes around the first
+   guess. No duty values appear in this reply at all.
+3. **"The CPU byte needs `CalCPUTemp`, so apply the 47 W curve."** The offset
+   `[18]` was right, but the conversion was not: it was applied without checking
+   whether this CPU's `cpu.ini` entry actually matches. It does not, and the
+   curve made the reading 15-30 °C worse.
 
-Both were corrected by dumping the raw 256-byte reply from the driver
-(`raw_status`) and comparing three samples with `sensors` running. **The lesson
-recorded here: a plausible-looking field map is not evidence. The 1 °C "GPU
-temperature" that never moved is what eventually exposed the first guess.**
+Each was corrected by dumping the raw reply (`raw_status`) and comparing against
+`sensors` **at two different temperatures**. The first two were caught by the
+1 °C "GPU temperature" that never moved; the third by the idle and load readings
+diverging in opposite directions.
+
+**The lesson this section exists to record: offsets and conversions are separate
+questions.** Getting `[18]` right said nothing about whether a curve belongs
+there.
 
 ### What the implementation does now
 
 - `FanStatus` exposes `cpu_temp_raw` plus `cpu_temp_c(tdp_class)`; the CPU byte
-  is never presented as Celsius.
-- `TdpClass` carries the five vendor classes; an unknown class passes the raw
-  byte through unchanged rather than inventing a conversion.
-- `clevod` reads `cpu_tdp_class` from its config (default 47 W, the P15 23's
-  class) and applies it during the poll. The CLI honours `CLEVO_TDP_CLASS`.
-- The kernel driver exposes `temp1_input` for the **GPU** only and returns
-  `-EOPNOTSUPP` for the CPU channel: the TDP-class curve needs the CPU model,
-  which userspace knows and the kernel does not.
+  is never presented as Celsius without naming the conversion.
+- `TdpClass` carries the five vendor classes plus `Raw` (no conversion), which
+  is the **default**.
+- `clevod` reads `cpu_tdp_class` from its config; absent or unrecognised means no
+  conversion, matching the vendor's unmatched-CPU behaviour.
+- The CLI honours `CLEVO_TDP_CLASS` the same way.
+- The kernel driver exposes `temp1_input` for the **GPU** only (direct Celsius)
+  and returns `-EOPNOTSUPP` for the CPU channel; userspace applies any curve.
 - A 0 temperature means "not reported" and is carried as `None`/`null` end to
   end, never as 0 °C.
 

@@ -76,21 +76,27 @@ systemctl status clevod
 clevo-cc --transport dbus fan status
 ```
 
-### CPU 温度换算（重要）
+### CPU 温度（默认不需要换算）
 
-命令 12 返回的 CPU 温度是**原始字节**，必须按 CPU 的 TDP 档位换算成摄氏度
-（原厂 `CalCPUTemp` 分段公式）。档位写在 `/etc/clevo-cc/clevod.toml`：
+命令 12 的 CPU 温度在偏移 `[18]`。原厂会用 CPU 型号去 `cpu.ini` 查 TDP 档位
+再做分段换算，**查不到就不换算**。
+
+实测 COLORFUL P15 23 属"查不到"那类：原始字节本身就是摄氏度（`raw 52` vs
+`sensors 54°C`，`raw 88` vs `87°C`）。**所以默认不做任何换算。**
+
+只有确认你的 CPU 确实属于原厂 `cpu.ini` 的某一档时，才在
+`/etc/clevo-cc/clevod.toml` 里设置：
 
 ```toml
-cpu_tdp_class = "47W"   # 35W / 47W / 65W / 84W / 91W
+cpu_tdp_class = "35W"   # 或 47W / 65W / 84W / 91W
 ```
 
-默认 `47W`（COLORFUL P15 23 的档位）。**档位写错会得到错误的 CPU 温度**；
-写 `"unknown"` 或不填则原样显示原始值。GPU 温度无需换算。
+**设错档位会让读数变差**（本机设成 47W 会把 54°C 变成 39°C、87°C 变成
+57°C）。不填即不换算，是安全默认。GPU 温度始终是直接摄氏度。
 
-CLI 可临时覆盖：`CLEVO_TDP_CLASS=65W clevo-cc --transport dbus fan status`。
+CLI 可临时覆盖：`CLEVO_TDP_CLASS=65W clevo-cc --transport driver fan status`。
 
-用 `sensors` 对照验证：换算后的 CPU 温度应与 `coretemp` 的封装温度接近。
+验证方式：与 `sensors` 的 `Package id 0` 对照，差距应在几度以内。
 
 ### 自定义风扇曲线
 ```bash

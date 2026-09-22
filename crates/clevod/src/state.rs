@@ -183,18 +183,18 @@ mod tests {
     fn fresh_after_success() {
         let mut st = DaemonState::default();
         assert_eq!(st.fan.freshness, Freshness::Unknown);
-        st.apply_status(&status(), 2, TdpClass::W47);
+        st.apply_status(&status(), 2, TdpClass::Raw);
         assert_eq!(st.fan.freshness, Freshness::Fresh);
         assert_eq!(st.fan.cpu.rpm, 4770);
         assert!(!st.fan.gpu2.available);
     }
 
     #[test]
-    fn cpu_temperature_is_converted_and_gpu_is_direct() {
+    fn cpu_temperature_defaults_to_no_conversion_and_gpu_is_direct() {
         let mut st = DaemonState::default();
-        // raw 37 through the 47 W curve (37 <= 26? no -> 37*0.5+13 = 31.5 -> 32)
-        st.apply_status(&status(), 2, TdpClass::W47);
-        assert_eq!(st.fan.cpu.temp_c, Some(32));
+        // Raw is the default: the byte is used as-is.
+        st.apply_status(&status(), 2, TdpClass::Raw);
+        assert_eq!(st.fan.cpu.temp_c, Some(37));
         // GPU1 is already Celsius.
         assert_eq!(st.fan.gpu1.temp_c, Some(33));
         // GPU2 absent.
@@ -202,9 +202,17 @@ mod tests {
     }
 
     #[test]
+    fn a_configured_tdp_class_is_applied() {
+        let mut st = DaemonState::default();
+        // 37 through the 47 W curve: 37*0.5 + 13 = 31.5 -> 32.
+        st.apply_status(&status(), 2, TdpClass::W47);
+        assert_eq!(st.fan.cpu.temp_c, Some(32));
+    }
+
+    #[test]
     fn failure_marks_stale_but_keeps_value() {
         let mut st = DaemonState::default();
-        st.apply_status(&status(), 2, TdpClass::W47);
+        st.apply_status(&status(), 2, TdpClass::Raw);
         st.mark_fan_stale();
         assert_eq!(st.fan.freshness, Freshness::Stale);
         assert_eq!(st.fan.cpu.rpm, 4770);

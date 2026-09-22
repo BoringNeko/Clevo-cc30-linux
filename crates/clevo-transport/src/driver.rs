@@ -95,39 +95,55 @@ impl DriverTransport {
             .map_err(|e| TransportError::MalformedResponse(format!("{}: {e}", path.display())))
     }
 
-    /// Build a synthetic command `12` reply from hwmon.
+    /// Build a synthetic command `12` reply.
     ///
-    /// The DCHU reply carries a rotation *period*, and `clevo-proto` converts it
-    /// back to rpm with `period = RPM_PERIOD_SCALE / rpm`. hwmon already reports
-    /// rpm, so we invert that formula here; writing the rpm directly into the
-    /// period field would apply the conversion twice and under-report the speed.
+    /// The reply carries rotation *periods*, not rpm, and `clevo-proto` converts
+    /// them with `period = RPM_PERIOD_SCALE / rpm`. hwmon already reports rpm,
+    /// so we invert that formula here; writing rpm straight into the period
+    /// field would convert twice and under-report the speed.
     ///
-    /// hwmon exposes temperatures (millidegrees) but not the raw CPU byte, and
-    /// the protocol layer expects a raw byte it converts itself. Since the
-    /// conversion is not invertible for every TDP class, we report no CPU
-    /// temperature here rather than a value that would be converted twice.
-    /// GPU temperatures are direct Celsius and are passed through.
+    /// Temperatures come from the driver's `raw_status` dump, which returns the
+    /// EC's bytes verbatim. That matters for the CPU: its byte at `[18]` is
+    /// **raw** and must be converted by the protocol layer using the CPU's TDP
+    /// class. Taking it from hwmon instead would be both lossy (millidegrees
+    /// cannot be inverted for every class) and a double conversion. The GPU
+    /// bytes are direct Celsius.
+    ///
+    /// If `raw_status` is unavailable (an older module), the reply still carries
+    /// the speeds and reports no temperatures rather than inventing any.
     fn fan_status_reply(&self) -> TransportResult<Vec<u8>> {
         let cpu_rpm = self.read_rpm("fan1_input")?;
         let gpu_rpm = self.read_rpm("fan2_input").unwrap_or(0);
         let mut payload = vec![0u8; 42];
         payload[2..4].copy_from_slice(&rpm_to_period(cpu_rpm).to_be_bytes());
         payload[4..6].copy_from_slice(&rpm_to_period(gpu_rpm).to_be_bytes());
-        // [18] stays 0: the raw CPU byte is not recoverable from millidegrees.
-        if let Some(c) = self.read_temp_c("temp2_input") {
-            payload[21] = c;
+
+        // Prefer the EC's own bytes so temperatures survive the round trip.
+        if let Some(raw) = self.read_raw_status() {
+            if raw.len() >= 25 {
+                payload[18] = raw[18];
+                payload[21] = raw[21];
+                payload[24] = raw[24];
+            }
         }
         Ok(wrap_payload(&payload))
     }
 
-    /// Read a hwmon temperature channel as whole degrees Celsius.
+    /// Read the driver's `raw_status` attribute and decode its hex dump.
     ///
-    /// A missing or unreadable channel (the EC reported nothing) yields `None`.
-    fn read_temp_c(&self, which: &str) -> Option<u8> {
-        let dir = self.hwmon_dir().ok()?;
-        let text = std::fs::read_to_string(dir.join(which)).ok()?;
-        let milli: i64 = text.trim().parse().ok()?;
-        (milli > 0).then(|| (milli / 1000).clamp(0, 255) as u8)
+    /// Returns `None` when the attribute is absent or unparsable, so callers can
+    /// fall back rather than fail the whole read.
+    fn read_raw_status(&self) -> Option<Vec<u8>> {
+        let text = self.read_attr("raw_status").ok()?;
+        // Format: "len=256\n<hex bytes>\n".
+        let hex = text.lines().find(|l| !l.starts_with("len="))?;
+        let hex = hex.trim();
+        if hex.len() % 2 != 0 {
+            return None;
+        }
+        (0..hex.len() / 2)
+            .map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok())
+            .collect()
     }
 
     /// Write a command `14` payload to the sysfs `fan_curve` attribute.
@@ -390,6 +406,12 @@ mod tests {
             std::fs::write(root.join("hwmon/hwmon0/fan2_input"), "1788\n").unwrap();
             std::fs::write(root.join("fan_mode"), "auto\n").unwrap();
             std::fs::write(root.join("perf_mode"), "unknown\n").unwrap();
+            // A raw_status dump shaped like the driver's: len line + hex.
+            let mut raw = [0u8; 42];
+            raw[18] = 87; // CPU temp raw
+            raw[21] = 35; // GPU1 temp, Celsius
+            let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+            std::fs::write(root.join("raw_status"), format!("len=42\n{hex}\n")).unwrap();
             std::fs::write(
                 root.join("fan_curve"),
                 "fan_count=2 kb_type=6\n\
@@ -469,6 +491,21 @@ mod tests {
     }
 
     #[test]
+    fn falls_back_when_raw_status_is_absent() {
+        // An older module has no raw_status; the reply must still carry the
+        // speeds, and report no temperatures rather than inventing any.
+        let fake = FakeSysfs::new("noraw");
+        std::fs::remove_file(fake.root.join("raw_status")).unwrap();
+        let t = fake.transport();
+        let reply = t.execute(CMD_FAN_STATUS.get(), &empty_payload()).unwrap();
+        let status = parse_fan_status(response_first_record(&reply).unwrap()).unwrap();
+        assert!(status.cpu_rpm() > 0);
+        assert_eq!(status.cpu_temp_raw, 0);
+        assert_eq!(status.cpu_temp_c(clevo_proto::TdpClass::Raw), None);
+        assert_eq!(status.gpu1_temp_c, None);
+    }
+
+    #[test]
     fn reads_fan_status_from_hwmon() {
         use clevo_proto::fan_status::period_raw_to_rpm;
 
@@ -485,10 +522,11 @@ mod tests {
         assert!((cpu as i64 - 3718).abs() < 50, "cpu back = {cpu}");
         assert!((gpu as i64 - 1788).abs() < 50, "gpu back = {gpu}");
         assert_eq!(period_raw_to_rpm(status.cpu_period), cpu);
-        // The raw CPU byte is not recoverable from millidegrees, so the
-        // driver reports none rather than a double-converted value.
-        assert_eq!(status.cpu_temp_raw, 0);
-        assert_eq!(status.cpu_temp_c(clevo_proto::TdpClass::W47), None);
+        // Temperatures come from raw_status, so they survive the round trip.
+        // The CPU byte is raw and is converted by the protocol layer.
+        assert_eq!(status.cpu_temp_raw, 87);
+        assert_eq!(status.cpu_temp_c(clevo_proto::TdpClass::Raw), Some(87));
+        assert_eq!(status.gpu1_temp_c, Some(35));
     }
 
     #[test]

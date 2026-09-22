@@ -170,8 +170,9 @@ impl Service {
             clock: Box::new(SystemClock::default()),
             last_fan_mode: AtomicU64::new(UNSET),
             last_perf_mode: AtomicU64::new(UNSET),
-            // The reference machine's class; config overrides it.
-            tdp_class: clevo_proto::TdpClass::W47,
+            // No conversion by default: correct on the reference machine and
+            // the vendor's own behaviour for an unlisted CPU. Config overrides.
+            tdp_class: clevo_proto::TdpClass::Raw,
         }
     }
 

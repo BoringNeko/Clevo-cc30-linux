@@ -32,11 +32,15 @@ pub struct Config {
     /// Last performance mode (`121/25` value) chosen by the user.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub perf_mode: Option<u8>,
-    /// TDP class of the installed CPU, used to convert the raw CPU temperature.
+    /// TDP class override for the raw CPU temperature byte.
     ///
-    /// One of `35W`, `47W`, `65W`, `84W`, `91W`, or absent for "unknown"
-    /// (which reports the raw byte unconverted). The default is the COLORFUL
-    /// P15 23's class; set it to your own CPU's TDP for correct readings.
+    /// One of `35W`, `47W`, `65W`, `84W` or `91W`, matching the vendor's
+    /// `cpu.ini` sections. Absent (the default) means **no conversion**, which
+    /// is both the vendor's behaviour for an unmatched CPU and the verified
+    /// behaviour on the reference machine - there the raw byte already tracks
+    /// `sensors` within 1-2 °C. Only set this if your CPU's entry in the
+    /// vendor `cpu.ini` matches one of those classes, otherwise it will make
+    /// the reading worse.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpu_tdp_class: Option<String>,
     /// Whether to re-apply the saved modes on daemon startup.
@@ -46,8 +50,9 @@ pub struct Config {
 
 /// Parse a configured TDP class string.
 ///
-/// Unknown or absent values fall back to `TdpClass::Unknown`, which reports the
-/// raw CPU temperature byte unconverted rather than inventing a conversion.
+/// Absent or unrecognised values yield `TdpClass::Raw` (no conversion), which
+/// is the safe default: an unnecessary curve makes the reading worse, whereas
+/// no curve is correct on machines the vendor's `cpu.ini` does not list.
 pub fn parse_tdp_class(text: Option<&str>) -> clevo_proto::TdpClass {
     use clevo_proto::TdpClass;
     match text.map(str::trim).map(str::to_ascii_uppercase).as_deref() {
@@ -56,7 +61,29 @@ pub fn parse_tdp_class(text: Option<&str>) -> clevo_proto::TdpClass {
         Some("65W") => TdpClass::W65,
         Some("84W") | Some("88W") => TdpClass::W84,
         Some("91W") => TdpClass::W91,
-        _ => TdpClass::Unknown,
+        _ => TdpClass::Raw,
+    }
+}
+
+#[cfg(test)]
+mod tdp_tests {
+    use super::parse_tdp_class;
+    use clevo_proto::TdpClass;
+
+    #[test]
+    fn absent_or_unknown_is_raw_not_a_guess() {
+        assert_eq!(parse_tdp_class(None), TdpClass::Raw);
+        assert_eq!(parse_tdp_class(Some("")), TdpClass::Raw);
+        assert_eq!(parse_tdp_class(Some("bogus")), TdpClass::Raw);
+    }
+
+    #[test]
+    fn recognises_the_vendor_classes() {
+        assert_eq!(parse_tdp_class(Some("35W")), TdpClass::W35);
+        assert_eq!(parse_tdp_class(Some("47w")), TdpClass::W47);
+        assert_eq!(parse_tdp_class(Some("65W")), TdpClass::W65);
+        assert_eq!(parse_tdp_class(Some("84W")), TdpClass::W84);
+        assert_eq!(parse_tdp_class(Some("91W")), TdpClass::W91);
     }
 }
 

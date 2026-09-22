@@ -127,7 +127,7 @@ mod tests {
             cpu_period: 452, // ~4770 rpm
             gpu1_period: 0,
             gpu2_period: 0,
-            cpu_temp_raw: 87, // converts to 57 C under the 47 W curve
+            cpu_temp_raw: 87, // rendered as-is under the default Raw class
             gpu1_temp_c: Some(33),
             gpu2_temp_c: None,
         }
@@ -135,7 +135,7 @@ mod tests {
 
     #[test]
     fn two_fan_machine_marks_gpu2_unavailable() {
-        let snap = FanSnapshot::from_status(&status(), 2, TdpClass::W47);
+        let snap = FanSnapshot::from_status(&status(), 2, TdpClass::Raw);
         assert!(snap.cpu.available);
         assert!(snap.gpu1.available);
         assert!(!snap.gpu2.available);
@@ -143,7 +143,7 @@ mod tests {
 
     #[test]
     fn rpm_is_derived_from_period() {
-        let snap = FanSnapshot::from_status(&status(), 2, TdpClass::W47);
+        let snap = FanSnapshot::from_status(&status(), 2, TdpClass::Raw);
         assert_eq!(snap.cpu.rpm, 4770);
         assert_eq!(snap.cpu.period_raw, 452);
         assert_eq!(snap.gpu1.rpm, 0);
@@ -151,8 +151,8 @@ mod tests {
 
     #[test]
     fn cpu_temperature_is_converted_gpu_is_direct() {
-        let snap = FanSnapshot::from_status(&status(), 2, TdpClass::W47);
-        assert_eq!(snap.cpu.temp_c, Some(57)); // 87 * 0.5 + 13
+        let snap = FanSnapshot::from_status(&status(), 2, TdpClass::Raw);
+        assert_eq!(snap.cpu.temp_c, Some(87)); // no conversion by default
         assert_eq!(snap.gpu1.temp_c, Some(33)); // already Celsius
         assert_eq!(snap.gpu2.temp_c, None);
     }
@@ -161,7 +161,7 @@ mod tests {
     fn absent_temperature_is_not_zero() {
         let mut status = status();
         status.gpu1_temp_c = None;
-        let snap = FanSnapshot::from_status(&status, 2, TdpClass::W47);
+        let snap = FanSnapshot::from_status(&status, 2, TdpClass::Raw);
         assert_eq!(snap.gpu1.temp_c, None);
         assert!(
             format_json(&snap).contains("\"gpu1\":{\"rpm\":0,\"period_raw\":0,\"temp_c\":null}"),
@@ -174,7 +174,7 @@ mod tests {
     fn absent_temperature_renders_as_na_in_rows() {
         let mut status = status();
         status.cpu_temp_raw = 0;
-        let snap = FanSnapshot::from_status(&status, 2, TdpClass::W47);
+        let snap = FanSnapshot::from_status(&status, 2, TdpClass::Raw);
         assert!(
             format_row(&snap).contains("CPU=4770rpm/n/a"),
             "row: {}",
@@ -184,22 +184,22 @@ mod tests {
 
     #[test]
     fn unknown_fan_count_keeps_all_available() {
-        let snap = FanSnapshot::from_status(&status(), 0, TdpClass::W47);
+        let snap = FanSnapshot::from_status(&status(), 0, TdpClass::Raw);
         assert!(snap.gpu2.available);
     }
 
     #[test]
     fn row_marks_unavailable_channel() {
-        let snap = FanSnapshot::from_status(&status(), 2, TdpClass::W47);
+        let snap = FanSnapshot::from_status(&status(), 2, TdpClass::Raw);
         let row = format_row(&snap);
-        assert!(row.contains("CPU=4770rpm/57C"), "row: {row}");
+        assert!(row.contains("CPU=4770rpm/87C"), "row: {row}");
         assert!(row.contains("GPU1=0rpm/33C"), "row: {row}");
         assert!(row.contains("GPU2=n/a"), "row: {row}");
     }
 
     #[test]
     fn json_uses_null_for_unavailable_channel() {
-        let snap = FanSnapshot::from_status(&status(), 2, TdpClass::W47);
+        let snap = FanSnapshot::from_status(&status(), 2, TdpClass::Raw);
         let json = format_json(&snap);
         assert!(json.contains("\"cpu\":{\"rpm\":4770,\"period_raw\":452"));
         assert!(json.contains("\"gpu2\":null"));
