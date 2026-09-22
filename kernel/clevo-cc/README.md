@@ -58,6 +58,13 @@ echo custom | sudo tee fan_mode      # make the EC actually use it
   read-modify-write: it reads the current curve first and merges only the
   channels you name. Writing `cpu` alone leaves `gpu1` untouched.
 - Write points in **raw duty** (`0..255`), the same unit the read side emits.
+- **Duty unit matters here and only here.** Above this attribute duty is a
+  percentage; the raw `0..255` form is the EC's. A converter that applies itself
+  twice turns 100% into 255 and the write is rejected.
+- The informational `fan_count=` / `kb_type=` line the read side emits may be
+  echoed back: the parser recognises it before requiring the `:` that every fan
+  line carries. It used to reject it, which made *every* write that went through
+  a read-modify-write fail with `-EINVAL`.
 - `temp` must strictly increase; a channel whose points cannot be encoded is
   rejected *unless* it already equals what the EC holds (so a corrupt table can
   still be repaired).

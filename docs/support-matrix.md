@@ -36,15 +36,18 @@
 | 风扇转速（CPU / GPU1） | ✅ 已验证 | 与 `sensors` 的 `fan1`/`fan2` 逐字吻合 |
 | CPU / GPU 温度 | ✅ 已验证 | 负载时与 `sensors` 一致（87 = 87 °C） |
 | 风扇曲线**读取** | ✅ 已验证 | 与出厂值一致 |
-| 风扇曲线**写入** | ✅ 已验证 | 10 轮压测、40 次读回校验全过（`scripts/curve-test.sh`） |
-| 风扇模式（auto/quiet/max/maxq/custom） | ✅ 已验证 | 转速随之变化，可逆 |
+| 风扇曲线**写入** | ✅ 已验证 | 写入后读回 EC，只改中间两点；10 轮压测全过（`scripts/curve-test.sh`） |
+| 曲线**经 daemon 写入**（含读回原样写回） | ✅ 已验证 | 端到端往返测试 + 真机写入（`curve_round_trips_through_the_daemon`） |
+| **GPU1 曲线生效** | ✅ 已验证 | 改 GPU1 曲线后转速随之变化 |
+| 风扇模式（auto/quiet/max/maxq/customize） | ✅ 已验证 | 转速随之变化，可逆 |
 | 性能模式（0–3） | ✅ 已验证 | 四种模式均被固件接受 |
 | PolicyKit 授权（含拒绝路径） | ✅ 已验证 | 无代理时正确拒绝，不误放行 |
 | 内核稳定性（写入路径） | ✅ 已验证 | 无 `BUG`/`Oops`/`usercopy_abort` |
 | 键盘 RGB / 充电阈值 / 超频 | ❌ 未实现 | 一期范围外 |
 
 > 写入相关的语义细节（整表替换、read-modify-write、成功码 `0x14`）见
-> `hardware-notes.md` §7.2；温度换算与偏移见 §10.4。
+> `hardware-notes.md` §7.2；**写入实际存了什么**（只写中间两点、duty 单位、
+> 部分通道）见 §7.4；sysfs 文本格式的读写差异见 §13.4；温度换算与偏移见 §10.4。
 
 ## 3. 系统依赖（按发行版）
 

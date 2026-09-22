@@ -121,19 +121,36 @@ clevo-cc --transport dbus fan set-curve --cpu "40,20 60,40 80,70 100,100" --appl
 > 直接写 sysfs 时请**每次只写一个通道**并读回校验：多行 `printf > fan_curve`
 > 会被 shell 拆成多次 `write()`，而退出码只反映最后一次。
 
-### 更新已装的内核驱动
+### 更新已装的内核驱动与守护进程
 
-改过 `kernel/` 之后，**必须重装**才能让重启后自动加载新版本 —— 否则加载的
-仍是 DKMS 里的旧模块（表现为新功能"消失"）：
+改过 `kernel/` 或 Rust 代码之后，**必须重装**才会生效：
 
 ```bash
-sudo packaging/install.sh            # 重新编译并安装 DKMS 模块 + 守护进程
+sudo packaging/install.sh            # DKMS 模块 + clevod/clevo-cc + UI
 sudo rmmod clevo_cc && sudo modprobe clevo_cc   # 立即换成新模块
 cat /sys/module/clevo_cc/srcversion  # 与内核目录下的 .ko 比对
 modinfo -F srcversion kernel/clevo-cc/clevo-cc.ko
 ```
 
 两个 `srcversion` 一致即表示加载的是最新构建。
+
+**`install.sh` 会自动重启正在运行的 `clevod`**（打印
+`restarting clevod to pick up the new binary`）。这一点很关键：`systemctl
+enable --now` 对已在运行的服务是空操作，换了二进制却不重启，内存里跑的还是
+旧代码，而症状是**报错指向源码而非旧进程** —— 例如新属性读成
+`Unknown property`、新支持的模式被拒。
+
+> 排查时先看进程启动时间，它比二进制旧就说明没重启：
+>
+> ```bash
+> systemctl show clevod -p ActiveEnterTimestamp --value
+> stat -c %y /usr/bin/clevod
+> ```
+>
+> 手动重启：`sudo systemctl restart clevod`。
+
+**内核模块与用户态是分开的**：只改 Rust（`clevod` / CLI / UI）时，重装即可，
+`.ko` 未变、`srcversion` 也不会变。
 
 ### 离线自测（不碰硬件、无需安装）
 

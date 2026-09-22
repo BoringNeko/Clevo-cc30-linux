@@ -205,6 +205,49 @@ only the last line. Write one channel per call and check the read-back:
 echo "cpu: 0,0 50,100 70,170 0,0" | sudo tee /sys/devices/platform/CLV0001:00/fan_curve
 ```
 
+### 7.4 What the write actually does, confirmed on hardware
+
+§7.2 covers semantics discovered while writing the driver. This section records
+what a full write/read cycle proves about the *firmware's* behaviour, verified
+by writing a chosen curve and reading the EC back.
+
+**Only the middle two points are stored.** Write `cpu: … 55,102 75,179 …` and
+the EC keeps its own T1/T4:
+
+```text
+before:  cpu: 40,63 60,91 80,135 100,255
+write:   cpu: 40,20 55,40 75,70 95,100      (duty as percentages)
+after:   cpu: 40,63 55,102 75,179 100,255
+              ↑ EC's      ↑ ours      ↑ EC's
+```
+
+T1/D1 and T4/D4 are unchanged, which matches the payload layout: command 14
+never carries them.
+
+**Slopes follow the same rule.** Only R2 — the slope of the segment the write
+fully specifies — is meaningful. R1 and R3 are derived from T1/T4, which are not
+sent, so a caller must leave them alone and let the EC keep what it has. The
+kernel driver's encoder writes only R2, and the userspace encoder was aligned
+with it; sending our own R1/R3 would have overwritten the EC's with a slope
+computed from points it never received.
+
+**The percentage round-trips.** Duty is given as `0..100` and stored as the
+EC's raw `0..255`; `40% → 102`, `70% → 179`, `100% → 255`, and reading back
+converts the other way with at most one unit of rounding error. Note this
+conversion lives in `clevo-proto` only. It is *not* applied at the D-Bus
+boundary or in the UI: `GetCurve` already emits percentages
+(`[[40,25],[55,40],[75,70],[100,100]]`), while `cat fan_curve` shows raw bytes
+(`40,63 55,102 75,179 100,255`). Converting again at either of those layers
+turns 100% into 255 and the daemon rejects it as out of range.
+
+**A channel the write does not carry is not validated.** Command 14 only
+concerns the middle pair. A two-fan machine can still hold leftovers in GPU2 —
+the live EC reports `gpu2: 0,0 50,100 70,170 0,0`, so T1 and T4 are zero while
+T2/T3 are not — and demanding that all four points increase made a curve just
+read from the EC impossible to send back. Validation and encoding now both key
+on the middle points, the same rule the driver and the kernel use:
+`T2 == 0 && T3 == 0` means "leave this channel alone".
+
 ## 8. Command 121 (`0x79`) — sub-commands (verified)
 
 In `GCMD`/`SCMD`, `Arg1` is the command and `ARGS = Arg2` (an Integer here):
@@ -335,6 +378,17 @@ Resolved since the original list:
 - [x] **Custom curve write (command 14)** — byte layout in §7, implemented in
       `clevo_proto::fan_curve::encode_curve`, the kernel driver and `clevod`.
       Slope formula corrected; see §7.1. A slope-equivalence test pins it.
+- [x] **What the write stores** — only the middle two points; T1/T4 and the
+      slopes R1/R3 stay the EC's (§7.4). Confirmed by write-then-read-back.
+- [x] **Duty units across the layers** — percent in `clevo-proto` and on
+      D-Bus, raw `0..255` only at the EC and in sysfs. Converting anywhere else
+      breaks the round trip (§7.4).
+- [x] **Partly populated channels are writable** — a leftover GPU2 with
+      `T1 = T4 = 0` is valid; validation and encoding key on the middle points,
+      matching the driver and the kernel (§7.4).
+- [x] **The `fan_curve` text protocol** — the read side emits
+      `fan_count=` / `kb_type=` lines, the write side requires a `:` in every
+      line; the mismatch made every daemon-driven write fail (§13.4).
 
 Still open:
 
@@ -481,11 +535,21 @@ Algebraically this is identical to the reference expression
 was wrong by a factor of `100/d` was unfounded — they are the same formula. The
 implementation now writes it in the raw-duty form so the units are explicit, and
 a test pins it against an independently computed raw-space slope. The slope is
-stored big-endian at `[14..31]` (CPU `R1..R3`, then GPU1, then GPU2).
+stored big-endian at `[14..31]` (`R1/R2/R3` for CPU, then GPU1, then GPU2).
 
-An all-zero fan is treated as "channel absent": its points and slopes are left
-zero and the EC keeps its own curve, so a two-fan machine never has to invent
-points for a fan it does not have.
+**Only R2 is written, not all three.** R2 is the slope of the segment the write
+fully specifies (`T2->T3`); R1 and R3 are derived from T1/T4, which command 14
+does not carry and the EC owns. Sending our own values there would overwrite the
+EC's with a slope computed from points it never received. The kernel driver's
+encoder writes only R2, and the userspace encoder now matches it — it used to
+write all three, which also blew up on a partly populated channel where
+`T4 = 0` made `compute_slope` fail.
+
+A fan whose middle two points are zero is "channel absent": its points and
+slopes are left zero and the EC keeps its own curve, so a two-fan machine never
+has to invent points for a fan it does not have. Note the test is on the
+**middle** points, not all four — see §7.4 for why the first and last point can
+legitimately be zero on a channel the EC only partly populates.
 
 ## 12. S5.6 read-only `acpi_call` backend
 
@@ -595,7 +659,7 @@ auto:  fan1_input = 3428
 `fan_mode` sysfs reflects only what the driver has written this session; the
 firmware does not expose the current mode reliably.
 
-### 13.3 Performance mode (`121` sub 25) — verified
+### 13.1 Performance mode (`121` sub 25) — verified
 
 `perf_mode` accepts the four logical values; the firmware applies its internal
 `APPM = {2,3,1,0}` mapping to the EC:
@@ -612,7 +676,7 @@ requests TurboFan and bit 7 requests DTT. All four plain modes were accepted
 live (idle rpm varied 1817–2093), invalid input returned EINVAL, and no ACPI
 errors were logged. TurboFan/DTT are reserved.
 
-### 13.1 Driver surface (implemented vs. reserved)
+### 13.2 Driver surface (implemented vs. reserved)
 
 `clevo-cc` exposes:
 
@@ -655,16 +719,47 @@ mode; `fan_mode` must be set to `custom` afterwards.
   protection; not exposed.
 - **TurboFan (`121/25` bit 6) / DTT (bit 7)** — modifiers of the performance
   mode; reserved, not exposed. The plain performance modes (0..3) are
-  implemented (see §13.3).
+  implemented (see §13.1).
 - **Mode persistence** — the driver only sends the EC command; persistence is
   handled by `clevod` (local TOML), not the kernel.
 
-### 13.2 Persistence caveat
+### 13.3 Persistence caveat
 
 The original Control Center persists the fan mode to AppSettings (`SetAPPData`)
 in addition to sending `121/1`. The driver only sends the EC command; on reboot
 the EC returns to its own default. Persisting the mode is planned for `clevod`
 (local TOML + optional EC page), not the kernel driver.
+
+### 13.4 The `fan_curve` text protocol, read vs. write
+
+The `fan_curve` attribute is a small text format, and the read and write sides
+do **not** accept the same lines. Two bugs came from assuming they did.
+
+**Read** (`fan_curve_show`) emits a metadata line plus one line per fan:
+
+```text
+fan_count=2 kb_type=6
+cpu: 40,63 55,102 75,179 100,255
+gpu1: 40,63 60,115 80,191 99,255
+gpu2: 0,0 50,100 70,170 0,0
+```
+
+Duty here is the EC's raw `0..255`, and all four points appear.
+
+**Write** (`fan_curve_store`) parses line by line, and for every line it
+**requires a `:` before it looks at the line's name**. That ordering matters:
+`fan_count=2` has no colon, so echoing a read straight back was rejected with
+`-EINVAL` before any channel was examined. Every daemon-driven curve write
+failed this way, while `scripts/curve-test.sh` passed because it writes sysfs
+directly and never goes through the userspace encoder that added the line.
+
+The store side now recognises `fan_count=` / `kb_type=` before demanding a
+separator, and the transport no longer emits a line the write does not need. A
+test checks every emitted line for the colon the kernel wants, so the two sides
+cannot drift apart unnoticed again.
+
+The write accepts one channel per call. Only the named channel changes; the rest
+keep the EC's values, which is why the driver reads before it writes (§7.2b).
 
 ## 14. PolicyKit authorization — verified on real hardware
 

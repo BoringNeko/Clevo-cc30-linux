@@ -61,6 +61,10 @@ Selecting the custom curve is a separate step in the driver interface, but
 does it for you: writing a curve without selecting
 .B custom
 would leave the firmware on its auto curve.
+.PP
+Only the middle two points of each fan reach the EC; it keeps its own first and
+last point. All four are still required so the curve you send is a complete
+description, and the two that are not written are accepted as given.
 .SH SAFETY
 Writes need
 .B \-\-apply
