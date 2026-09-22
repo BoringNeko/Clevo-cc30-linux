@@ -167,10 +167,12 @@ pub fn run_fan(
 
 /// Parse a `temp,duty` point list into a four-point curve.
 ///
-/// Exactly four pairs are required; temperatures must strictly increase and
-/// duty must be `0..=100`. Validation happens here as well as in
-/// `clevo_proto::fan_curve::encode_curve` so the CLI can print a precise
-/// message about which point was wrong.
+/// Exactly four pairs are required; duty must be `0..=100`. Temperatures are
+/// only required to increase across the middle pair (T2 < T3) - those are the
+/// two points command 14 carries, and the same rule `encode_curve` applies. The
+/// first and last points belong to the EC and may be zero on a channel it only
+/// partly populates, so checking all four here rejected curves the firmware
+/// accepts (see `clevo_proto::fan_curve::validate_curve`).
 pub fn parse_curve_arg(text: &str) -> Result<[FanPoint; 4], CliError> {
     let mut points = [FanPoint {
         temp: 0,
@@ -205,16 +207,14 @@ pub fn parse_curve_arg(text: &str) -> Result<[FanPoint; 4], CliError> {
             duty_pct: duty,
         };
     }
-    for i in 0..3 {
-        if points[i + 1].temp <= points[i].temp {
-            return Err(CliError::Invalid(format!(
-                "temperatures must strictly increase: T{}={} >= T{}={}",
-                i + 1,
-                points[i].temp,
-                i + 2,
-                points[i + 1].temp
-            )));
-        }
+    // Only the pair the write carries must increase. Zero middle points mean
+    // "leave this channel alone", which is also fine.
+    let carries_points = points[1].temp != 0 || points[2].temp != 0;
+    if carries_points && points[2].temp <= points[1].temp {
+        return Err(CliError::Invalid(format!(
+            "temperatures must strictly increase: T2={} >= T3={}",
+            points[1].temp, points[2].temp
+        )));
     }
     Ok(points)
 }

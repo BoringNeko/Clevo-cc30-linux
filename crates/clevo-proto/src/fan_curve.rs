@@ -122,25 +122,24 @@ pub fn encode_curve(curve: &FanCurve) -> Result<[u8; 256], ProtoError> {
     write_pair(&mut payload, 10, curve.gpu2[1]);
     write_pair(&mut payload, 12, curve.gpu2[2]);
 
-    // Slopes R1 (point1->2), R2 (2->3), R3 (3->4), big-endian u16.
-    // An all-zero fan is skipped: it has no meaningful slope and the EC keeps
-    // its own curve for that channel.
-    let absent =
-        |points: &[FanPoint; CURVE_POINTS]| points.iter().all(|p| p.temp == 0 && p.duty_pct == 0);
+    // Slopes, big-endian u16, three per fan. Only R2 (the T2->T3 segment) is
+    // written: the write fully specifies those two points, while R1 and R3
+    // depend on T1/T4, which command 14 does not carry and the EC owns. The
+    // kernel driver's encoder does the same, so sending our own idea of R1/R3
+    // would overwrite the EC's with a slope derived from points it never
+    // received.
+    //
+    // A channel whose middle points are zero is skipped entirely: it has no
+    // meaningful slope and the EC keeps its own curve for it.
+    let absent = |points: &[FanPoint; CURVE_POINTS]| points[1].temp == 0 && points[2].temp == 0;
     if !absent(&curve.cpu) {
-        write_slope(&mut payload, 14, curve.cpu[0], curve.cpu[1])?;
         write_slope(&mut payload, 16, curve.cpu[1], curve.cpu[2])?;
-        write_slope(&mut payload, 18, curve.cpu[2], curve.cpu[3])?;
     }
     if !absent(&curve.gpu1) {
-        write_slope(&mut payload, 20, curve.gpu1[0], curve.gpu1[1])?;
         write_slope(&mut payload, 22, curve.gpu1[1], curve.gpu1[2])?;
-        write_slope(&mut payload, 24, curve.gpu1[2], curve.gpu1[3])?;
     }
     if !absent(&curve.gpu2) {
-        write_slope(&mut payload, 26, curve.gpu2[0], curve.gpu2[1])?;
         write_slope(&mut payload, 28, curve.gpu2[1], curve.gpu2[2])?;
-        write_slope(&mut payload, 30, curve.gpu2[2], curve.gpu2[3])?;
     }
 
     Ok(payload)
@@ -152,10 +151,16 @@ fn validate_curve(curve: &FanCurve) -> Result<(), ProtoError> {
         ("gpu1", &curve.gpu1),
         ("gpu2", &curve.gpu2),
     ] {
-        // A wholly-zero fan means "this channel is absent or unused"; the EC
-        // keeps its own curve for it. Allowing it lets a two-fan machine send a
-        // curve without inventing points for a fan that does not exist.
-        if points.iter().all(|p| p.temp == 0 && p.duty_pct == 0) {
+        // A channel the write does not carry is not validated.
+        //
+        // Command 14 sends only points 2 and 3; the EC owns the first and last.
+        // A channel whose middle points are zero is therefore left alone, which
+        // is what the transport and the kernel both key on. Checking all four
+        // points here instead rejected curves that are perfectly writable: a
+        // machine with two fans can hold leftovers in GPU2 (say T2=50, T3=70,
+        // but T1=T4=0), and the strict increase rule then failed on T3 > T4 -
+        // making a curve read from the EC impossible to send back.
+        if points[1].temp == 0 && points[2].temp == 0 {
             continue;
         }
         for (i, point) in points.iter().enumerate() {
@@ -166,19 +171,16 @@ fn validate_curve(curve: &FanCurve) -> Result<(), ProtoError> {
                 });
             }
         }
-        for i in 0..CURVE_POINTS - 1 {
-            if points[i + 1].temp <= points[i].temp {
-                return Err(ProtoError::InvalidCurve {
-                    fan: fan.to_string(),
-                    reason: format!(
-                        "temperatures must strictly increase: T{}={} >= T{}={}",
-                        i + 1,
-                        points[i].temp,
-                        i + 2,
-                        points[i + 1].temp
-                    ),
-                });
-            }
+        // The pair the write actually carries must increase; T4 is the EC's and
+        // may be zero on a channel that is only partly populated.
+        if points[2].temp <= points[1].temp {
+            return Err(ProtoError::InvalidCurve {
+                fan: fan.to_string(),
+                reason: format!(
+                    "temperatures must strictly increase: T2={} >= T3={}",
+                    points[1].temp, points[2].temp
+                ),
+            });
         }
     }
     Ok(())
@@ -377,10 +379,19 @@ mod tests {
     }
 
     #[test]
-    fn encodes_slopes_big_endian() {
+    fn encodes_the_middle_slope_only() {
+        // Only R2 (T2->T3) is written: it is the one segment the write fully
+        // specifies. R1 and R3 depend on T1/T4, which command 14 does not
+        // carry, so sending our own values would overwrite the EC's.
         let payload = encode_curve(&default_curve()).unwrap();
-        let r1 = compute_slope(default_curve().cpu[0], default_curve().cpu[1]).unwrap();
-        assert_eq!(&payload[14..16], &r1.to_be_bytes());
+        let r2 = compute_slope(default_curve().cpu[1], default_curve().cpu[2]).unwrap();
+        assert_eq!(&payload[16..18], &r2.to_be_bytes());
+        // The neighbours stay zero for the EC to keep.
+        assert_eq!(&payload[14..16], &[0, 0], "R1 must not be sent");
+        assert_eq!(&payload[18..20], &[0, 0], "R3 must not be sent");
+
+        let gpu2_r2 = compute_slope(default_curve().gpu2[1], default_curve().gpu2[2]).unwrap();
+        assert_eq!(&payload[28..30], &gpu2_r2.to_be_bytes());
     }
 
     #[test]
@@ -517,13 +528,58 @@ mod tests {
     }
 
     #[test]
-    fn encode_rejects_non_increasing_temperature() {
+    fn encode_rejects_non_increasing_middle_temperatures() {
+        // T2 and T3 are the pair the write carries, so these must increase.
         let mut curve = default_curve();
-        curve.cpu[1].temp = 40;
+        curve.cpu[2].temp = curve.cpu[1].temp;
         assert!(matches!(
             encode_curve(&curve).unwrap_err(),
             ProtoError::InvalidCurve { .. }
         ));
+    }
+
+    #[test]
+    fn encode_accepts_a_partly_populated_channel() {
+        // A two-fan machine can hold leftovers in GPU2 whose first and last
+        // points are zero (T2=50, T3=70, T1=T4=0). The write does not carry
+        // T1/T4, so this is perfectly writable - and rejecting it made a curve
+        // read from the EC impossible to send back.
+        let mut curve = default_curve();
+        curve.gpu2 = [
+            FanPoint {
+                temp: 0,
+                duty_pct: 0,
+            },
+            FanPoint {
+                temp: 50,
+                duty_pct: 39,
+            },
+            FanPoint {
+                temp: 70,
+                duty_pct: 67,
+            },
+            FanPoint {
+                temp: 0,
+                duty_pct: 0,
+            },
+        ];
+        let payload = encode_curve(&curve).expect("a writable channel must encode");
+        assert_eq!(payload[10], 50);
+        assert_eq!(payload[12], 70);
+    }
+
+    #[test]
+    fn encode_skips_a_channel_with_no_middle_points() {
+        // Middle points zero means "leave this channel alone", matching what
+        // the driver and the kernel do.
+        let mut curve = default_curve();
+        curve.gpu2 = [FanPoint {
+            temp: 0,
+            duty_pct: 0,
+        }; 4];
+        let payload = encode_curve(&curve).unwrap();
+        assert_eq!(&payload[10..14], &[0, 0, 0, 0]);
+        assert_eq!(&payload[28..30], &[0, 0], "no slope without points");
     }
 
     #[test]
