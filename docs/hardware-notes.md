@@ -148,6 +148,63 @@ Receives `BUFF = DerefOf(Arg2[0])` and writes:
 
 Returns `0x14` (20). T1/D1 and T4/D4 are not sent in the write payload.
 
+### 7.2 Three behaviours that only showed up on hardware
+
+The layout above was known from the DSDT from the start; what took four attempts
+to get right were the *semantics* around it. All three are now implemented and
+stress-tested (10 rounds, 40 read-back checks, `scripts/curve-test.sh`).
+
+**a) The success code is `0x14`, not the command number.**
+
+`SCMD`/`GCMD` (e.g. `121`) answer with the command number itself, so the first
+driver revision treated "returned != function" as failure. Command `14` answers
+`20`, exactly as recorded above — so a *successful* write was reported as
+`-EIO`. Each command family needs its own success mapping (see
+`clevo_proto::is_success_status`).
+
+**b) Command 14 replaces the whole table.**
+
+Sending a payload whose other channels are zero **wipes those channels**. The
+driver therefore does a **read-modify-write**: it fetches the current curve
+(command 13), merges only the named channels, and sends the whole thing back.
+A caller changing one fan does not have to resend the others.
+
+**c) The read and write payloads do not share a layout.**
+
+This is the trap that cost the most time:
+
+| | command 13 (read) | command 14 (write) |
+|---|---|---|
+| `[2..3]` | CPU **fan period** | `F1T2`/`F1D2` |
+| `[6..7]` | GPU2 **fan period** | `F2T2`/`F2D2` |
+| curve data | `[0x10..0x27]` | `[2..0x0D]` |
+
+Copying the command-13 reply straight into a command-14 payload therefore feeds
+**fan rotation periods in as curve points**. The merge must decode by offset and
+re-emit in the write layout; a raw buffer copy is wrong even though the two look
+similar.
+
+**d) A channel that cannot be encoded is skipped only if it is unchanged.**
+
+Validation exists to stop a user writing a broken curve, but it must not make a
+broken table unrepairable: a restore necessarily echoes back whatever the EC
+holds. The rule implemented is: a named channel whose values differ from the
+EC's own and cannot be encoded is rejected (`-EINVAL`); one that is identical to
+what the EC already has is skipped, so a corrupt table can still be overwritten
+with good values.
+
+### 7.3 Writing from a shell
+
+`fan_curve_store` handles one *write()* at a time, and a multi-line
+`printf ... > fan_curve` is split by the shell into several writes — each
+performing its own read-modify-write. That is functionally fine (every pass
+starts from the EC's latest state) but means the shell's exit status reflects
+only the last line. Write one channel per call and check the read-back:
+
+```bash
+echo "cpu: 0,0 50,100 70,170 0,0" | sudo tee /sys/devices/platform/CLV0001:00/fan_curve
+```
+
 ## 8. Command 121 (`0x79`) — sub-commands (verified)
 
 In `GCMD`/`SCMD`, `Arg1` is the command and `ARGS = Arg2` (an Integer here):
@@ -287,11 +344,11 @@ Still open:
       found in the DSDT yet; needed for `page 0..7` persistence and capability
       probing.
 - [ ] TurboFan (`121/25` bit 6) / DTT (bit 7) — reserved, not exposed.
-- [ ] Custom curve write (command 14) has not yet been exercised on hardware:
-      the encoding is unit-tested, the Arg3 shape matches command 13 (which does
-      work live), the sysfs writer is implemented and `raw_curve` is available
-      to diff before/after. Awaiting a run of `scripts/verify-hardware.sh
-      --step 4`.
+- [x] **Custom curve write (command 14) — verified on hardware.** 10 rounds of
+      write/read-back via `scripts/curve-test.sh`, 40 checks, all passing; no
+      kernel BUG/Oops/usercopy. See §7.2 for the three behaviours that only
+      surfaced on the machine (success code `0x14`, whole-table replace, and the
+      read/write payload layout mismatch).
 
 ## 10.4 Command 12 duty and temperature offsets — resolved on hardware
 

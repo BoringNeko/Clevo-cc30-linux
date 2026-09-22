@@ -82,6 +82,35 @@ struct clevo_cc {
 };
 
 /*
+ * Interpret the integer a `_DSM` call returned.
+ *
+ * Success codes differ by command family, and both were verified live:
+ *
+ *   - SCMD/GCMD (e.g. 121) return the command number itself (`0x79`).
+ *   - The fan-curve write (14) returns `0x14` (20), documented in
+ *     docs/hardware-notes.md §7.
+ *   - `0x80000002` means "not supported".
+ *
+ * Treating only `ret == function` as success made a working curve write look
+ * like a failure: the EC accepted the curve and returned 20, which is exactly
+ * what §7 said it would.
+ */
+static int clevo_cc_dsm_status(u32 function, u64 value)
+{
+	if (value == function)
+		return 0;
+
+	/* Command 14 reports success as 20 (0x14). */
+	if (function == CLEVO_CMD_FAN_CURVE_WRITE && value == 20)
+		return 0;
+
+	if (value == 0x80000002)
+		return -EOPNOTSUPP;
+
+	return -EIO;
+}
+
+/*
  * Evaluate the firmware `_DSM` method:
  *   _DSM(GUID buffer, Revision=0, Function, Arg3)
  *
@@ -131,25 +160,15 @@ static int clevo_cc_dsm_call(struct clevo_cc *cc, u32 function,
 		memcpy(out, ret->buffer.pointer, n);
 		*out_len = n;
 	} else if (ret->type == ACPI_TYPE_INTEGER) {
-		/*
-		 * The SCMD/GCMD families return the command number itself on
-		 * success (e.g. 0x79 for 121); 0x80000002 means "not
-		 * supported" and anything else is unexpected. Treat a return
-		 * equal to the function as success.
-		 */
-		if (ret->integer.value == function) {
-			err = 0;
-		} else if (ret->integer.value == 0x80000002) {
+		err = clevo_cc_dsm_status(function, ret->integer.value);
+		if (err == -EOPNOTSUPP)
 			dev_warn(&cc->adev->dev,
 				 "_DSM function %u returned 0x80000002 (unsupported)\n",
 				 function);
-			err = -EOPNOTSUPP;
-		} else {
+		else if (err)
 			dev_warn(&cc->adev->dev,
 				 "_DSM function %u returned unexpected integer 0x%llx\n",
 				 function, ret->integer.value);
-			err = -EIO;
-		}
 	} else {
 		dev_warn(&cc->adev->dev, "_DSM function %u returned type %u\n",
 			 function, ret->type);
@@ -533,13 +552,29 @@ static DEVICE_ATTR_RW(fan_mode);
  *
  * Write format: the same per-fan point lists, e.g.
  *
- *   echo "cpu: 0,0 55,102 75,178 0,0" > fan_curve
+ *   echo "cpu: 0,0 45,76 70,204 0,0" > fan_curve
  *
  * Only points 2 and 3 are sent to the EC (command 14), matching the Windows
  * stack: T1/D1 and T4/D4 are not part of the write payload. A fan list whose
- * temperatures are all zero is skipped, so a two-fan machine never has to
- * invent points for a fan it does not have. Writing does *not* select "custom";
- * echo custom > fan_mode does that.
+ * middle two points are zero is skipped, so a two-fan machine never has to
+ * invent points for a fan it does not have.
+ *
+ * The write is a **read-modify-write**: the current curve is fetched first and
+ * the named channels are merged into it. This matters because command 14
+ * replaces the whole table - sending a payload with zeros for a channel would
+ * wipe that channel's curve. A caller who only wants to change the CPU curve
+ * therefore does not have to resend the GPU one.
+ *
+ * The read and write payloads do **not** share a layout, so the merge goes
+ * through the decoded curve, never through a raw buffer copy:
+ *
+ *   command 13 (read):  [2..3] = CPU *fan period*, curves at [0x10..0x27]
+ *   command 14 (write): [2..3] = F1T2/F1D2,      curves at [2..0x0d]
+ *
+ * Copying the read buffer into the write payload would feed fan periods in as
+ * curve points.
+ *
+ * Writing does *not* select "custom"; echo custom > fan_mode does that.
  */
 static ssize_t fan_curve_show(struct device *dev, struct device_attribute *attr,
 			      char *buf)
@@ -610,10 +645,12 @@ static int clevo_cc_parse_points(const char *text, u8 temps[4], u8 duties[4])
 /*
  * Encode one fan's two writable points (T2/D2, T3/D3) into `payload`.
  *
- * `slope_base` is the payload offset of that fan's first slope word. Only the
- * slopes the EC actually consumes are computed: R2 (T2->T3) is the segment the
- * write fully specifies. R1 and R3 would depend on T1/T4, which are not sent
- * and are owned by the EC, so they are left zero for the firmware to fill in.
+ * `slope_base` is the payload offset of that fan's first slope word. Only R2
+ * (the T2->T3 segment, the one the write fully specifies) is computed; R1 and
+ * R3 depend on T1/T4, which are not sent and are owned by the EC.
+ *
+ * Returns -EINVAL when the channel cannot be encoded (non-increasing
+ * temperatures). The caller decides whether that is fatal.
  */
 static int clevo_cc_encode_fan(u8 *payload, int base, int slope_base,
 			       const u8 temps[4], const u8 duties[4])
@@ -643,17 +680,118 @@ static int clevo_cc_encode_fan(u8 *payload, int base, int slope_base,
 	return 0;
 }
 
+/*
+ * Recompute every fan's R2 from the points already in `payload`.
+ *
+ * Used after seeding from a read: the read reply carries no write-form slopes,
+ * so they are derived from the points that were just copied. A channel whose
+ * T2/T3 are zero (absent) is skipped.
+ */
+static void clevo_cc_fill_slopes(u8 *payload)
+{
+	static const int base[3] = { 2, 6, 10 };
+	static const int slope_base[3] = { 14, 20, 26 };
+	int fan;
+
+	for (fan = 0; fan < 3; fan++) {
+		u8 t2 = payload[base[fan]];
+		u8 d2 = payload[base[fan] + 1];
+		u8 t3 = payload[base[fan] + 2];
+		u8 d3 = payload[base[fan] + 3];
+		int dt, dd, off;
+		long slope;
+
+		if (!t2 && !t3)
+			continue; /* absent channel */
+		dt = (int)t3 - (int)t2;
+		if (dt <= 0)
+			continue; /* leave the slopes zero */
+
+		dd = (int)d3 - (int)d2;
+		slope = clamp_t(long, DIV_ROUND_CLOSEST((long)dd * 16, dt), 0,
+				0xFFFF);
+		off = slope_base[fan] + 2;
+		payload[off] = (u8)(slope >> 8);
+		payload[off + 1] = (u8)(slope & 0xFF);
+	}
+}
+
+/*
+ * Convert a command-13 curve reply into a command-14 write payload.
+ *
+ * The two commands use different layouts, so the points are decoded by offset
+ * and re-emitted in the write form. Only the two points the write carries are
+ * copied; the write's slope words are left for the caller to fill (or zero,
+ * which the firmware recomputes).
+ *
+ *   read  (cmd 13): cpu at [0x10], gpu1 at [0x18], gpu2 at [0x20]; each point
+ *                   is (T, D) with D raw 0..255
+ *   write (cmd 14): cpu T2/D2/T3/D3 at [2..5], gpu1 at [6..9], gpu2 at [10..13]
+ */
+static void clevo_cc_curve_to_write_payload(const u8 *read_reply,
+					    u8 *payload)
+{
+	static const int read_off[3] = { 0x10, 0x18, 0x20 };
+	static const int write_off[3] = { 2, 6, 10 };
+	int fan, i;
+
+	for (fan = 0; fan < 3; fan++) {
+		const u8 *src = read_reply + read_off[fan];
+		u8 *dst = payload + write_off[fan];
+
+		/* Points 2 and 3 (index 1 and 2). */
+		for (i = 0; i < 2; i++) {
+			dst[i * 2] = src[(i + 1) * 2];     /* T(n+1) */
+			dst[i * 2 + 1] = src[(i + 1) * 2 + 1]; /* D(n+1) */
+		}
+	}
+}
+
+/*
+ * sysfs helper: read the EC curve and seed `payload` with it in write form.
+ *
+ * Returns 0 on success, or -errno. On failure `payload` must not be sent.
+ */
+static int clevo_cc_seed_write_payload(struct clevo_cc *cc, u8 *payload)
+{
+	u8 reply[CLEVO_PAYLOAD_LEN];
+	size_t len = 0;
+	int err;
+
+	err = clevo_cc_read_curve(cc, reply, sizeof(reply), &len);
+	if (err)
+		return err;
+	if (len < 0x28)
+		return -EPROTO;
+
+	memset(payload, 0, CLEVO_PAYLOAD_LEN);
+	clevo_cc_curve_to_write_payload(reply, payload);
+	clevo_cc_fill_slopes(payload);
+	return 0;
+}
+
 static ssize_t fan_curve_store(struct device *dev, struct device_attribute *attr,
 			       const char *buf, size_t count)
 {
 	struct clevo_cc *cc = dev_get_drvdata(dev);
 	u8 payload[CLEVO_PAYLOAD_LEN] = { 0 };
 	char *copy, *line;
-	int err = 0;
+	int err;
+
+	/*
+	 * Seed from the EC's current table, translated into the write layout:
+	 * command 14 replaces all of it, so a payload without a channel's
+	 * points would wipe that channel. If the read fails there is nothing
+	 * safe to merge into, so refuse rather than send a mostly-zero table.
+	 */
+	err = clevo_cc_seed_write_payload(cc, payload);
+	if (err)
+		return err;
 
 	copy = kstrdup(buf, GFP_KERNEL);
 	if (!copy)
 		return -ENOMEM;
+	err = 0;
 
 	for (line = strsep(&copy, "\n"); line; line = strsep(&copy, "\n")) {
 		u8 temps[4] = { 0 }, duties[4] = { 0 };
@@ -690,18 +828,46 @@ static ssize_t fan_curve_store(struct device *dev, struct device_attribute *attr
 
 		n = clevo_cc_parse_points(sep + 1, temps, duties);
 		if (n != 4) {
+			dev_warn(&cc->adev->dev,
+				 "fan_curve: line %.16s: parsed %d points, need 4\n",
+				 line, n);
 			err = -EINVAL;
 			break;
 		}
 
-		/* A wholly zero fan means "leave this channel alone". */
+		/*
+		 * A channel with no middle points is "leave this one alone":
+		 * its values stay as seeded above.
+		 */
 		if (!temps[1] && !temps[2] && !duties[1] && !duties[2])
 			continue;
 
-		err = clevo_cc_encode_fan(payload, base, slope_base, temps,
-					  duties);
-		if (err)
+		/*
+		 * The user named this channel, so bad values are an error - but
+		 * only if the values actually changed. A corrupt channel read
+		 * back from the EC and echoed unchanged (which is what a
+		 * restore does) must not block the write, or a bad table could
+		 * never be repaired.
+		 */
+		if (!clevo_cc_encode_fan(payload, base, slope_base, temps,
+					 duties)) {
+			/* Encoded fine. */
+			continue;
+		}
+
+		if (temps[1] != payload[base] || temps[2] != payload[base + 2] ||
+		    duties[1] != payload[base + 1] ||
+		    duties[2] != payload[base + 3]) {
+			dev_warn(&cc->adev->dev,
+				 "fan_curve: line %.16s: T2=%u T3=%u cannot encode; "
+				 "EC has T2=%u D2=%u T3=%u D3=%u\n",
+				 line, temps[1], temps[2], payload[base],
+				 payload[base + 1], payload[base + 2],
+				 payload[base + 3]);
+			err = -EINVAL;
 			break;
+		}
+		/* Unchanged and unusable: leave the channel as the EC had it. */
 	}
 	kfree(copy);
 	if (err)
@@ -833,6 +999,14 @@ ATTRIBUTE_GROUPS(clevo_cc);
 static int clevo_cc_probe(struct platform_device *pdev)
 {
 	struct acpi_device *adev = ACPI_COMPANION(&pdev->dev);
+	struct clevo_cc *cc;
+	struct device *hwmon;
+	acpi_handle h;
+	acpi_status status;
+
+	if (!adev)
+		return -ENODEV;
+v = ACPI_COMPANION(&pdev->dev);
 	struct clevo_cc *cc;
 	struct device *hwmon;
 	acpi_handle h;

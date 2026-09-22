@@ -107,6 +107,63 @@ fn read_le_u32(bytes: &[u8]) -> u32 {
     u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
 }
 
+/// Firmware status meaning "this command is not supported on this machine".
+pub const DSM_NOT_SUPPORTED: u32 = 0x8000_0002;
+
+/// Value command `14` (fan-curve write) returns on success.
+///
+/// Documented in `docs/hardware-notes.md` §7 and confirmed live: the EC accepts
+/// the curve and answers `0x14` (20), *not* the command number the `SCMD`
+/// family uses.
+pub const DSM_CURVE_WRITE_OK: u32 = 0x14;
+
+/// Whether `value` is a success status for `command`.
+///
+/// Success is family-dependent, both verified live:
+///
+/// | family | success value |
+/// |---|---|
+/// | `SCMD`/`GCMD` (e.g. `121`) | the command number itself |
+/// | fan-curve write (`14`) | `0x14` (20) |
+/// | any | [`DSM_NOT_SUPPORTED`] means unsupported |
+///
+/// Treating only `value == command` as success made a working curve write look
+/// like a failure: the EC accepted the curve and returned 20.
+pub fn is_success_status(command: u32, value: u32) -> bool {
+    value == command || (command == 14 && value == DSM_CURVE_WRITE_OK)
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+
+    #[test]
+    fn curve_write_accepts_20() {
+        // Verified live: command 14 answers 0x14.
+        assert!(is_success_status(14, 0x14));
+        assert!(is_success_status(14, 14));
+    }
+
+    #[test]
+    fn main_command_accepts_its_own_number() {
+        assert!(is_success_status(121, 121));
+        // 20 is not success for 121.
+        assert!(!is_success_status(121, 20));
+    }
+
+    #[test]
+    fn unsupported_is_never_success() {
+        assert!(!is_success_status(14, DSM_NOT_SUPPORTED));
+        assert!(!is_success_status(121, DSM_NOT_SUPPORTED));
+    }
+
+    #[test]
+    fn other_values_are_not_success() {
+        assert!(!is_success_status(14, 0));
+        assert!(!is_success_status(14, 21));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

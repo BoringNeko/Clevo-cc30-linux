@@ -402,6 +402,15 @@ sudo scripts/verify-hardware.sh --step 3   # 可逆：风扇模式 auto→max→
 sudo scripts/verify-hardware.sh             # 全部（含曲线写入往返，会先备份再还原）
 ```
 
+曲线写入的压力测试（多轮写→读回→校验，结尾做内核健康检查）：
+
+```bash
+sudo scripts/curve-test.sh 10    # 10 轮；每轮写 cpu+gpu1 各一次并校验
+```
+
+它每行单独写、单独校验，所以失败能指名通道；结尾会检查
+`usercopy_abort` / `kernel BUG` / `Oops` / `ACPI Error`，**四项都应为 0**。
+
 脚本每步都会先打印将要做什么并征求确认；第 4 步会**先保存当前曲线**，写入
 测试曲线后读回比对，最后还原，并把风扇模式留在 `auto`（即使还原被跳过，固件
 也始终保有控制权）。

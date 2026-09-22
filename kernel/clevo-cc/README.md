@@ -53,13 +53,22 @@ echo custom | sudo tee fan_mode      # make the EC actually use it
 ```
 
 - Only points 2 and 3 are sent (command 14), matching the Windows stack; the EC
-  keeps its own first and last point.
-- A fan line whose points are all zero is skipped, so a two-fan machine does
-  not have to invent points for a fan it does not have.
+  keeps its own first and last point, and they keep their read-back values.
+- **Command 14 replaces the whole table**, so the driver does a
+  read-modify-write: it reads the current curve first and merges only the
+  channels you name. Writing `cpu` alone leaves `gpu1` untouched.
 - Write points in **raw duty** (`0..255`), the same unit the read side emits.
+- `temp` must strictly increase; a channel whose points cannot be encoded is
+  rejected *unless* it already equals what the EC holds (so a corrupt table can
+  still be repaired).
+- Write one channel per sysfs call and check the read-back: a multi-line write
+  is split by the shell into several calls, and the exit status then only
+  reflects the last one.
 - Writing does not by itself select the custom curve: `echo custom > fan_mode`
   afterwards. Selecting custom without writing a curve makes the EC use
   whatever curve it already had.
+
+The write path is stress-tested on hardware by `scripts/curve-test.sh`.
 
 ## Reserved / not implemented
 
