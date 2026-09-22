@@ -40,6 +40,33 @@ function toPath(points: CurvePoint[]): string {
 const clamp = (value: number, lo: number, hi: number) =>
   Math.min(hi, Math.max(lo, value));
 
+/** Whether two curves hold the same points, in order. */
+export function sameCurve(a: CurvePoint[], b: CurvePoint[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((p, i) => p.temp === b[i]?.temp && p.duty_pct === b[i]?.duty_pct)
+  );
+}
+
+/**
+ * Whether a curve arriving from the daemon should replace the local draft.
+ *
+ * Two things must both hold: the curve is genuinely new (compared by content,
+ * not by object identity, because every poll re-serialises it), and the user
+ * has no unsaved edit that it would discard.
+ *
+ * "Unsaved edit" is measured against the curve the daemon last reported
+ * (`adopted`), not against the incoming one - otherwise a curve that merely
+ * arrived from elsewhere would look like a local edit and be wrongly held back.
+ */
+export function shouldAdoptCurve(
+  incoming: CurvePoint[],
+  adopted: CurvePoint[],
+  draft: CurvePoint[],
+): boolean {
+  return !sameCurve(incoming, adopted) && sameCurve(draft, adopted);
+}
+
 /**
  * Move point `index` of `points`, keeping temperatures strictly increasing.
  *
@@ -80,12 +107,30 @@ export function CurveCard({ palette, curve, writable = false, onApplied }: Curve
   const [notice, setNotice] = useState<string | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
 
-  // Adopt the daemon's curve whenever it changes and the user is not editing.
+  /**
+   * The daemon curve this component last agreed on, compared by *content*.
+   *
+   * The adopt effect used to depend on `dragging`, so releasing a point
+   * (`dragging` back to `null`) re-ran it and reset the draft to the EC's
+   * values - the edit vanished the moment the pointer came up. What matters is
+   * whether the daemon's curve actually changed, not whether a drag is in
+   * progress, so the comparison is against content.
+   */
+  const adopted = useRef(curve.cpu);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+
   useEffect(() => {
-    if (dragging === null && !busy) {
-      setDraft(curve.cpu);
+    const incoming = curve.cpu;
+    if (shouldAdoptCurve(incoming, adopted.current, draftRef.current)) {
+      setDraft(incoming);
+      // Advance the comparison point only when the curve was actually taken. If
+      // it was held back because of an unsaved edit, leaving `adopted` alone
+      // means it is still seen as new once that edit is gone (applied or
+      // discarded), instead of being silently forgotten.
+      adopted.current = incoming;
     }
-  }, [curve.cpu, dragging, busy]);
+  }, [curve.cpu]);
 
   const dirty = useMemo(
     () =>
@@ -274,6 +319,7 @@ export function CurveCard({ palette, curve, writable = false, onApplied }: Curve
             disabled={!dirty || busy}
             onClick={() => {
               setDraft(curve.cpu);
+              adopted.current = curve.cpu;
               setError(null);
               setNotice(null);
             }}

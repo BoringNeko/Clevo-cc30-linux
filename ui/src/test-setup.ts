@@ -16,3 +16,35 @@ if (typeof window !== "undefined" && !window.localStorage) {
   };
   Object.defineProperty(window, "localStorage", { value: localStorageMock, configurable: true });
 }
+
+// jsdom 25 implements no PointerEvent at all, so `fireEvent.pointerDown` never
+// reaches a React `onPointerDown` and the curve editor's drag cannot be tested.
+// The curve card only reads clientX/clientY and pointerId off the event, so a
+// class extending MouseEvent (which jsdom does implement) is enough. Also add
+// the pointer-capture methods the card calls on grab, which jsdom lacks.
+if (typeof window !== "undefined" && !("PointerEvent" in window)) {
+  class PointerEventPolyfill extends MouseEvent {
+    public readonly pointerId: number;
+    public readonly pointerType: string;
+    constructor(type: string, params: PointerEventInit = {}) {
+      super(type, params);
+      this.pointerId = params.pointerId ?? 0;
+      this.pointerType = params.pointerType ?? "mouse";
+    }
+  }
+  Object.defineProperty(window, "PointerEvent", {
+    value: PointerEventPolyfill,
+    configurable: true,
+  });
+}
+
+if (typeof Element !== "undefined") {
+  const proto = Element.prototype as Element & {
+    setPointerCapture?: (id: number) => void;
+    releasePointerCapture?: (id: number) => void;
+    hasPointerCapture?: (id: number) => boolean;
+  };
+  proto.setPointerCapture ??= () => {};
+  proto.releasePointerCapture ??= () => {};
+  proto.hasPointerCapture ??= () => false;
+}
