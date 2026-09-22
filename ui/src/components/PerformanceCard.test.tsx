@@ -1,10 +1,14 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { useState } from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { PerformanceCard } from "./PerformanceCard";
-import type { FanSnapshot } from "../api/daemon";
+import { CurveCard } from "./CurveCard";
+import { CurveHintCard } from "./CurveHintCard";
+import { isCustomizeMode, type FanSnapshot, type FanCurve } from "../api/daemon";
 
 const setFanMode = vi.fn();
 const setPerfMode = vi.fn();
+const setFanCurve = vi.fn();
 
 vi.mock("../api/daemon", async () => {
   // Keep the real constants/helpers (the mode table and the predicate) and stub
@@ -14,6 +18,7 @@ vi.mock("../api/daemon", async () => {
     ...actual,
     setFanMode: (mode: string) => setFanMode(mode),
     setPerfMode: (mode: string) => setPerfMode(mode),
+    setFanCurve: (curve: FanCurve) => setFanCurve(curve),
   };
 });
 
@@ -21,6 +26,30 @@ const palette = {
   primary: [120, 200, 255] as [number, number, number],
   secondary: [180, 120, 255] as [number, number, number],
   swatches: [] as Array<[number, number, number]>,
+};
+
+const CURVE: FanCurve = {
+  fan_count: 2,
+  init_mode: 0,
+  kb_type: 6,
+  cpu: [
+    { temp: 40, duty_pct: 25 },
+    { temp: 60, duty_pct: 36 },
+    { temp: 80, duty_pct: 53 },
+    { temp: 100, duty_pct: 100 },
+  ],
+  gpu1: [
+    { temp: 40, duty_pct: 25 },
+    { temp: 60, duty_pct: 36 },
+    { temp: 80, duty_pct: 53 },
+    { temp: 100, duty_pct: 100 },
+  ],
+  gpu2: [
+    { temp: 0, duty_pct: 0 },
+    { temp: 0, duty_pct: 0 },
+    { temp: 0, duty_pct: 0 },
+    { temp: 0, duty_pct: 0 },
+  ],
 };
 
 function snapshot(fanMode: number): FanSnapshot {
@@ -38,24 +67,53 @@ function snapshot(fanMode: number): FanSnapshot {
   };
 }
 
-function renderCard(fanMode: number) {
-  const onRefresh = vi.fn();
-  const onError = vi.fn();
-  render(
-    <PerformanceCard
-      palette={palette}
-      snapshot={snapshot(fanMode)}
-      onRefresh={onRefresh}
-      onError={onError}
-    />,
+/**
+ * The dashboard's wiring, reduced to what matters for the gate: the mode card
+ * drives `fanMode`, and the curve slot renders either the editor or the hint
+ * exactly as App.tsx does.
+ *
+ * The harness mirrors what App does after a write: the refresh re-reads the
+ * daemon, and here that is modelled by applying the same mode the card sent.
+ */
+function Dashboard({ initialMode }: { initialMode: number }) {
+  const [fanMode, applyMode] = useState(initialMode);
+  // What the "daemon" reports back after the last write: the mode the card
+  // sent. Reading the mock's own record avoids threading state through
+  // PerformanceCard, whose onRefresh takes no arguments (it just says "re-read").
+  const reported = (): number => {
+    const calls = setFanMode.mock.calls;
+    const sent = calls.length > 0 ? calls[calls.length - 1][0] : undefined;
+    return sent === "custom" ? 6 : fanMode;
+  };
+  return (
+    <>
+      <PerformanceCard
+        palette={palette}
+        snapshot={snapshot(fanMode)}
+        onRefresh={() => applyMode(reported)}
+        onError={() => {}}
+      />
+      <div data-testid="curve-slot">
+        {!isCustomizeMode(fanMode) ? (
+          <CurveHintCard palette={palette} />
+        ) : (
+          <CurveCard palette={palette} curve={CURVE} writable onApplied={() => {}} />
+        )}
+      </div>
+    </>
   );
-  return { onRefresh, onError };
+}
+
+/** Drive the harness the way a click on the mode button would. */
+function renderCard(fanMode: number) {
+  render(<Dashboard initialMode={fanMode} />);
 }
 
 describe("PerformanceCard", () => {
   beforeEach(() => {
     setFanMode.mockReset().mockResolvedValue(6);
     setPerfMode.mockReset().mockResolvedValue(2);
+    setFanCurve.mockReset().mockResolvedValue(undefined);
   });
 
   it("offers the curve mode under the label customize", () => {
@@ -64,13 +122,11 @@ describe("PerformanceCard", () => {
   });
 
   it("sends the daemon's name (custom) for the customize button", async () => {
-    const { onRefresh } = renderCard(0);
+    renderCard(0);
 
     fireEvent.click(screen.getByRole("button", { name: /customize/ }));
 
     await waitFor(() => expect(setFanMode).toHaveBeenCalledWith("custom"));
-    // The mode was applied, so the dashboard must re-read the state.
-    await waitFor(() => expect(onRefresh).toHaveBeenCalled());
   });
 
   it("marks customize as active when the daemon reports mode 6", () => {
@@ -83,5 +139,36 @@ describe("PerformanceCard", () => {
     renderCard(0);
     const button = screen.getByRole("button", { name: /customize/ });
     expect(button.getAttribute("aria-pressed")).toBe("false");
+  });
+});
+
+describe("curve editor gate", () => {
+  beforeEach(() => {
+    setFanMode.mockReset().mockResolvedValue(6);
+  });
+
+  it("hides the editor and shows the hint in a non-customize mode", () => {
+    renderCard(0);
+    expect(screen.queryByRole("button", { name: "应用曲线" })).toBeNull();
+    expect(screen.getByText(/其他模式下固件不使用自定义曲线/)).toBeTruthy();
+  });
+
+  it("shows the editor in customize mode", () => {
+    renderCard(6);
+    expect(screen.getByRole("button", { name: "应用曲线" })).toBeTruthy();
+    expect(screen.queryByText(/其他模式下固件不使用自定义曲线/)).toBeNull();
+  });
+
+  it("swaps the hint for the editor after switching to customize", async () => {
+    renderCard(0);
+    // Starts without the editor.
+    expect(screen.queryByRole("button", { name: "应用曲线" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /customize/ }));
+
+    // The click wrote the mode; the refresh re-renders the mode as customize.
+    await waitFor(() => expect(setFanMode).toHaveBeenCalledWith("custom"));
+    // In the harness the snapshot follows the click, mirroring the poll.
+    expect(await screen.findByRole("button", { name: "应用曲线" })).toBeTruthy();
   });
 });
