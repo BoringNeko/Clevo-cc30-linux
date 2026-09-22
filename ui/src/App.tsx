@@ -362,6 +362,10 @@ export default function App() {
                       curve={curve}
                       writable={snapshot?.curve_writable ?? false}
                       onApplied={refreshCurve}
+                      temps={{
+                        cpu: snapshot.cpu.temp_c ?? undefined,
+                        gpu1: snapshot.gpu1.temp_c ?? undefined,
+                      }}
                     />
                   ) : (
                     <Typography sx={{ color: "text.disabled", fontSize: "0.75rem" }}>

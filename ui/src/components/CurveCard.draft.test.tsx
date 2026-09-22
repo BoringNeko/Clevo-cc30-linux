@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, fireEvent, screen, waitFor } from "@testing-library/react";
-import { CurveCard, FACTORY_CURVE, isEditablePoint, sameCurve, shouldAdoptCurve } from "./CurveCard";
+import { CurveCard, FACTORY_CURVE, curvePath, dutyAtTemp, isEditablePoint, sameCurve, shouldAdoptCurve } from "./CurveCard";
 import { setFanCurve } from "../api/daemon";
 import type { CurvePoint, FanCurve } from "../api/daemon";
 
@@ -103,24 +103,28 @@ function summaryOf(fan: "CPU" | "GPU1"): string {
 }
 
 /**
- * The element's on-screen size.
+ * The chart element's on-screen size.
  *
  * jsdom performs no layout, so `getBoundingClientRect` is all zeros and must be
- * stubbed. The default deliberately differs from the 320:150 viewBox - a real
- * card is about 2:1 while the viewBox is 2.13:1 - because a stubbed rect that
- * exactly matches the viewBox hides any error in the coordinate mapping.
+ * stubbed. The size deliberately differs from a square: the coordinate mapping
+ * maps the whole rectangle onto the plot, so a non-square stub catches an
+ * implementation that assumes the two axes scale alike.
  */
 const DEFAULT_RECT = { left: 0, top: 0, width: 700, height: 300 };
+
+/** Padding, as a percentage of the chart box, that the plot leaves unused. */
+const PAD_PCT = 4;
 
 function setup(curve: FanCurve, rect: { left: number; top: number; width: number; height: number } = DEFAULT_RECT) {
   const view = render(
     <CurveCard palette={palette} curve={curve} writable onApplied={() => {}} />,
   );
-  // The card also contains two 24x24 icon SVGs, so select by the chart's
-  // viewBox rather than by tag - `querySelector("svg")` gets an icon and the
-  // pointer events go nowhere.
-  const svg = document.querySelector('svg[viewBox="0 0 320 150"]')!;
-  svg.getBoundingClientRect = () =>
+  // The plot is the positioned box that holds the chart SVG; the pointer maths
+  // reads its rectangle, not the SVG's (which stretches to fill it). The card
+  // also contains icon SVGs, so select the chart by its viewBox.
+  const svg = document.querySelector('svg[viewBox="0 0 100 100"]')!;
+  const chart = svg.parentElement as HTMLElement;
+  chart.getBoundingClientRect = () =>
     ({
       ...rect,
       right: rect.left + rect.width,
@@ -128,42 +132,29 @@ function setup(curve: FanCurve, rect: { left: number; top: number; width: number
       x: rect.left,
       y: rect.top,
     }) as DOMRect;
-  return { view, svg, rect };
+  return { view, svg, chart, rect };
 }
 
 /**
- * Where a (temp, duty) point appears on screen, for a given element rectangle.
+ * Where a (temp, duty) point appears on screen, for a given chart rectangle.
  *
- * This mirrors how the browser maps the viewBox onto the element, including
- * `preserveAspectRatio`. When the ratios differ, the default ("xMidYMid meet")
- * scales the drawing to fit and *centres* it, leaving margins; "none" stretches
- * it to fill. Getting this wrong in the test is what let the mapping bug hide:
- * computing screen positions as if the drawing always filled the element made
- * the component's own (incorrect) assumption look right.
+ * The plot places temp/duty into an inner box inset by `PAD_PCT` on each side,
+ * then stretches that box across the element. Mirroring it here is what makes
+ * the simulated pointer land where the browser would really put the handle; a
+ * test that computed positions any other way would agree with a buggy mapping.
  */
 function pointOnScreen(
   temp: number,
   duty: number,
   rect: { left: number; top: number; width: number; height: number },
-  preserveAspectRatio: string = "none",
 ) {
-  const vx = 18 + (temp / 100) * (320 - 36);
-  const vy = 150 - 18 - (duty / 100) * (150 - 36);
-
-  let scaleX = rect.width / 320;
-  let scaleY = rect.height / 150;
-  let offsetX = rect.left;
-  let offsetY = rect.top;
-
-  if (preserveAspectRatio !== "none") {
-    const scale = Math.min(scaleX, scaleY);
-    scaleX = scale;
-    scaleY = scale;
-    offsetX = rect.left + (rect.width - 320 * scale) / 2;
-    offsetY = rect.top + (rect.height - 150 * scale) / 2;
-  }
-
-  return { x: offsetX + vx * scaleX, y: offsetY + vy * scaleY };
+  const span = 100 - 2 * PAD_PCT;
+  const xPct = PAD_PCT + (temp / 100) * span;
+  const yPct = PAD_PCT + ((100 - duty) / 100) * span;
+  return {
+    x: rect.left + (xPct / 100) * rect.width,
+    y: rect.top + (yPct / 100) * rect.height,
+  };
 }
 
 /** Drag the point at `from` (a temp/duty pair) to the `to` pair. */
@@ -173,11 +164,8 @@ function drag(
   to: [number, number],
   rect: { left: number; top: number; width: number; height: number } = DEFAULT_RECT,
 ) {
-  // Read the element's own declaration so the simulated pointer lands where the
-  // browser would really put the point.
-  const par = svg.getAttribute("preserveAspectRatio") ?? "";
-  const a = pointOnScreen(from[0], from[1], rect, par);
-  const b = pointOnScreen(to[0], to[1], rect, par);
+  const a = pointOnScreen(from[0], from[1], rect);
+  const b = pointOnScreen(to[0], to[1], rect);
   fireEvent.pointerDown(svg, { clientX: a.x, clientY: a.y, pointerId: 1 });
   fireEvent.pointerMove(svg, { clientX: b.x, clientY: b.y, pointerId: 1 });
   fireEvent.pointerUp(svg, { clientX: b.x, clientY: b.y, pointerId: 1 });
@@ -301,19 +289,18 @@ describe("isEditablePoint", () => {
 });
 
 describe("CurveCard coordinate mapping", () => {
-  // The element rarely has the viewBox's 320:150 ratio. When it does not, the
-  // browser either stretches the drawing or letterboxes it; the pointer maths
-  // assumes the former. Testing only at 320x150 stubs the rectangle to match
-  // the viewBox, which hides the discrepancy entirely.
+  // The chart element is rarely square, and the mapping stretches the plot
+  // across the whole element. Testing only at one size hides an implementation
+  // that assumes a fixed aspect ratio.
   const SIZES = [
     { label: "wide", rect: { left: 0, top: 0, width: 700, height: 300 } },
     { label: "tall", rect: { left: 0, top: 0, width: 300, height: 400 } },
-    { label: "exact", rect: { left: 0, top: 0, width: 320, height: 150 } },
+    { label: "square", rect: { left: 0, top: 0, width: 400, height: 400 } },
     { label: "offset", rect: { left: 40, top: 25, width: 640, height: 260 } },
   ];
 
   for (const { label, rect } of SIZES) {
-    it(`grabs each point when the element is ${label}`, () => {
+    it(`grabs each point when the chart is ${label}`, () => {
       const { svg } = setup(asCurve(BASE, GPU_OTHER), rect);
 
       // Move each editable point in turn; every one must be picked up.
@@ -336,6 +323,43 @@ describe("CurveCard coordinate mapping", () => {
     // coordinate is off by the size of the margin.
     const { svg } = setup(asCurve(BASE));
     expect(svg.getAttribute("preserveAspectRatio")).toBe("none");
+  });
+});
+
+describe("curvePath", () => {
+  it("starts at the first point's plotted position", () => {
+    const d = curvePath([P(40, 25), P(60, 36), P(80, 53), P(100, 100)], 4);
+    // temp 40 -> 4 + 0.4*92 = 40.8 ; duty 25 -> 4 + 0.75*92 = 73
+    const [x, y] = d.slice(2).split(" C")[0].trim().split(/\s+/).map(Number);
+    expect(x).toBeCloseTo(40.8, 6);
+    expect(y).toBeCloseTo(73, 6);
+  });
+
+  it("uses a cubic segment per gap, so the line is smooth", () => {
+    const d = curvePath([P(40, 25), P(60, 36), P(80, 53), P(100, 100)], 4);
+    // Three gaps, three curves, and no straight `L` left.
+    expect(d.match(/C /g)).toHaveLength(3);
+    expect(d).not.toContain("L");
+  });
+
+  it("is empty for an empty curve", () => {
+    expect(curvePath([], 4)).toBe("");
+  });
+});
+
+describe("dutyAtTemp", () => {
+  it("reads a point's own duty", () => {
+    expect(dutyAtTemp(60, BASE)).toBe(36);
+  });
+
+  it("interpolates between points", () => {
+    // Halfway from (60,36) to (80,53).
+    expect(dutyAtTemp(70, BASE)).toBe(45);
+  });
+
+  it("clamps beyond the first and last point", () => {
+    expect(dutyAtTemp(20, BASE)).toBe(25);
+    expect(dutyAtTemp(110, BASE)).toBe(100);
   });
 });
 
@@ -369,6 +393,99 @@ describe("CurveCard applying", () => {
     drag(svg, [60, 36], [72, 80]);
     fireEvent.click(screen.getByRole("button", { name: /保存配置/ }));
     expect(await screen.findByText(/CPU 曲线/)).toBeTruthy();
+  });
+});
+
+describe("CurveCard handles", () => {
+  /**
+   * The handle boxes, in DOM order: CPU's four then GPU1's four.
+   *
+   * The positions live in Emotion's stylesheet rather than in inline styles,
+   * so `getComputedStyle` is what actually reports where a box lands.
+   */
+  function handleBoxes(): HTMLElement[] {
+    return Array.from(document.querySelectorAll<HTMLElement>('[data-testid="curve-handle"]'));
+  }
+
+  it("renders one handle per curve point, both channels", () => {
+    setup(asCurve(BASE, GPU_OTHER));
+    expect(handleBoxes()).toHaveLength(8);
+  });
+
+  it("centres each handle on its point instead of hanging below it", () => {
+    // The bug: `top` puts the box's top edge at the point, so a
+    // `translate(-50%, 50%)` dropped every handle a full handle-height too low
+    // - a shift the drag tests could not see, because they aim at the data
+    // coordinate rather than at the rendered box.
+    setup(asCurve(BASE, GPU_OTHER));
+    for (const el of handleBoxes()) {
+      expect(getComputedStyle(el).transform).toContain("translate(-50%, -50%)");
+    }
+  });
+
+  it("places a handle at the percentage its point maps to", () => {
+    setup(asCurve(BASE, GPU_OTHER));
+    // BASE point 2 is (60°C, 36%): x = 4 + 0.6*92 = 59.2, y = 4 + 0.64*92 = 62.88.
+    const second = getComputedStyle(handleBoxes()[1]);
+    expect(parseFloat(second.left)).toBeCloseTo(59.2, 6);
+    expect(parseFloat(second.top)).toBeCloseTo(62.88, 6);
+  });
+
+  it("marks the firmware-owned ends as inert and the middle as editable", () => {
+    setup(asCurve(BASE, GPU_OTHER));
+    const cpu = handleBoxes().slice(0, 4).map((el) => getComputedStyle(el));
+    // The ends stay hollow and dimmed; the middle points are solid.
+    for (const style of [cpu[0], cpu[3]]) {
+      expect(style.backgroundColor).toBe("rgba(0, 0, 0, 0)");
+      expect(parseFloat(style.opacity)).toBeLessThan(1);
+    }
+    for (const style of [cpu[1], cpu[2]]) {
+      expect(style.backgroundColor).toBe("rgb(120, 200, 255)");
+      expect(parseFloat(style.opacity)).toBe(1);
+    }
+  });
+});
+
+describe("CurveCard readout", () => {
+  /** Text of the readout block above the chart, whitespace-normalised. */
+  function readoutText(): string {
+    return (screen.getByTestId("curve-readout").textContent ?? "").replace(/\s+/g, " ");
+  }
+
+  it("shows the live temperature and the duty the curve gives there", () => {
+    render(
+      <CurveCard
+        palette={palette}
+        curve={asCurve(BASE, GPU_OTHER)}
+        writable
+        onApplied={() => {}}
+        temps={{ cpu: 75, gpu1: 75 }}
+      />,
+    );
+    // 75 C sits three quarters of the way from (60,36) to (80,53) -> 49% for
+    // the CPU curve; the GPU1 curve at 75 C is halfway from (65,70) to
+    // (85,82) -> 76%.
+    expect(readoutText()).toContain("75°C");
+    expect(readoutText()).toContain("49%");
+    expect(readoutText()).toContain("76%");
+  });
+
+  it("shows a dash when no temperature is known", () => {
+    render(<CurveCard palette={palette} curve={asCurve(BASE, GPU_OTHER)} writable onApplied={() => {}} />);
+    expect(readoutText()).toContain("—");
+  });
+
+  it("shows the dragged point's own value while it is held", () => {
+    const { svg } = setup(asCurve(BASE, GPU_OTHER));
+    // Press and move but do not release, so the drag is still in progress.
+    const from = pointOnScreen(60, 36, DEFAULT_RECT);
+    fireEvent.pointerDown(svg, { clientX: from.x, clientY: from.y, pointerId: 1 });
+    const to = pointOnScreen(72, 80, DEFAULT_RECT);
+    fireEvent.pointerMove(svg, { clientX: to.x, clientY: to.y, pointerId: 1 });
+
+    // The readout switches to that point's (temp, duty) rather than the live one.
+    expect(readoutText()).toContain("72°C");
+    expect(readoutText()).toContain("80%");
   });
 });
 
