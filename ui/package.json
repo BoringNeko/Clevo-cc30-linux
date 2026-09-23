@@ -2,7 +2,9 @@
   "name": "clevo-cc-ui",
   "private": true,
   "version": "0.1.4",
-  "description": "Clevo control-center desktop UI (React + TypeScript; Tauri 2 or Electron shell)",
+  "description": "Monitor fans and switch fan/performance modes",
+  "author": "BoringNeko <noreply@github.com>",
+  "homepage": "https://github.com/BoringNeko/Clevo-cc30-linux",
   "license": "MIT OR Apache-2.0",
   "type": "module",
   "main": "electron/main.cjs",
@@ -63,28 +65,20 @@
       }
     ],
     "linux": {
-      "target": ["AppImage", "deb", "rpm"],
-      "category": "System",
+      "target": ["AppImage"],
+      "category": "System;HardwareSettings;Settings;",
       "icon": "src-tauri/icons",
       "executableName": "clevo-cc-ui-electron",
       "desktop": {
         "Name": "Clevo Control Center (Electron)",
-        "Comment": "Monitor fans and switch fan/performance modes",
-        "Categories": "System;HardwareSettings;Settings;",
+        "GenericName": "Fan and Performance Control",
         "Keywords": "fan;thermal;performance;clevo;",
+        "StartupNotify": "true",
         "StartupWMClass": "clevo-cc-ui-electron"
       }
     },
     "appImage": {
       "artifactName": "clevo-cc-ui-electron-${version}-${arch}.AppImage"
-    },
-    "deb": {
-      "artifactName": "clevo-cc-linux-ui-electron_${version}_${arch}.deb",
-      "depends": ["clevo-cc-linux"]
-    },
-    "rpm": {
-      "artifactName": "clevo-cc-linux-ui-electron-${version}-1.${arch}.rpm",
-      "depends": ["clevo-cc-linux"]
     }
   }
 }

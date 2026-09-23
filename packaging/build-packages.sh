@@ -7,8 +7,11 @@
 #   rpm      clevo-cc-linux (+ ui if built), %post drives dkms
 #   appimage clevo-cc-ui only (the daemon/driver are system-level; an AppImage
 #            cannot install a kernel module, a D-Bus service or PolicyKit rules)
-#   electron AppImage for the Electron shell (clevo-cc-ui-electron). Built with
-#            electron-builder; the daemon/driver are still system-level.
+#   electron AppImage only for the Electron shell (clevo-cc-ui-electron),
+#            built with electron-builder; the daemon/driver are still
+#            system-level. deb/rpm are intentionally not built here: they need
+#            the `fpm` tool (an extra network + system dependency) and would
+#            only repackage the same UI.
 #
 # The two UI toolkits (Tauri 2 and Electron) produce distinctly named artifacts
 # so they can be published side by side:
@@ -324,16 +327,13 @@ build_electron() {
     ( cd "${REPO_ROOT}/ui" \
         && pnpm install --frozen-lockfile \
         && pnpm build \
-        && pnpm exec electron-builder --linux AppImage deb rpm )
+        && pnpm exec electron-builder --linux AppImage )
 
     mkdir -p "${DIST}"
     # electron-builder writes to ui/release/.
-    find "${REPO_ROOT}/ui/release" -maxdepth 1 \
-        \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \) \
+    find "${REPO_ROOT}/ui/release" -maxdepth 1 -name '*.AppImage' \
         -exec cp {} "${DIST}/" \;
-    # The deb/rpm from electron-builder are named by its own scheme; keep the
-    # AppImage named consistently with the Tauri one.
-    log "wrote Electron artifacts to dist/"
+    log "wrote the Electron AppImage to dist/"
 }
 
 main() {

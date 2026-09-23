@@ -30,6 +30,11 @@ Thumbs.db
 # Electron UI: electron-builder output (AppImage/deb/rpm/unpacked tree).
 /ui/release/
 
+# AppImage extraction scratch (scripts/tests-electron-bridge.sh cleans up, but
+# an interrupted run can leave one behind).
+/squashfs-root/
+/ui/squashfs-root/
+
 # The UI is an application: keep its lockfile for reproducible builds.
 !/ui/src-tauri/Cargo.lock
 

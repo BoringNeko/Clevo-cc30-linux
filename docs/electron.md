@@ -121,9 +121,13 @@ pnpm electron           # 用已下载的 Electron 直接跑（开发）
 打包发行产物：
 
 ```bash
-pnpm electron:build                  # AppImage / deb / rpm → ui/release/
+pnpm electron:build                  # AppImage → ui/release/
 packaging/build-packages.sh electron # 同上，并复制到 dist/
 ```
+
+只产出 **AppImage**。deb/rpm 需要 electron-builder 下载 `fpm`（额外的网络与系统
+依赖），而内容与 AppImage 相同（都只是 UI 外壳），所以刻意不做。系统级部分
+（驱动/守护进程/D-Bus/PolicyKit）由 `clevo-cc-linux` 包或 `install.sh` 提供。
 
 `install.sh --electron` 还需要**无壳后端**，其构建命令是：
 
@@ -132,8 +136,10 @@ cd ui/src-tauri
 CARGO_TARGET_DIR=target/electron cargo build --release --locked --no-default-features
 ```
 
-electron-builder 通过 `extraResources` 把 `src-tauri/target/release/clevo-cc-ui`
-打进 AppImage；`build-packages.sh` / `install.sh` 会先把无壳后端复制到该路径。
+electron-builder 通过 `extraResources` 把
+`src-tauri/target/electron/release/clevo-cc-ui`（**无壳后端的专属路径**）打进
+AppImage。不要用 `target/release/`：那里也有 Tauri 版二进制，指过去会把它当后端
+打进包（表现为后端握手超时、启动约 15 秒后退出）。
 
 ### 4.1 下载 Electron 失败怎么办
 

@@ -127,6 +127,44 @@ else
     pass "electron-builder config does not touch target/release"
 fi
 
+# The desktop entry must carry the full category list and the human-facing
+# Comment/GenericName. electron-builder overwrites `Categories` with
+# `linux.category` and `Comment` with the package `description` *after* merging
+# `linux.desktop`, so those two must be set at their real source; setting them
+# under `linux.desktop` silently does nothing (the AppImage shipped with
+# `Categories=System;` and a technical comment until this was fixed).
+if grep -q '"category": "System;HardwareSettings;Settings;"' "$ROOT/ui/package.json"; then
+    pass "AppImage carries the full desktop category list"
+else
+    bad "linux.category must be the full 'System;HardwareSettings;Settings;' string"
+fi
+
+if grep -q '"description": "Monitor fans and switch fan/performance modes"' "$ROOT/ui/package.json"; then
+    pass "desktop Comment comes from the package description"
+else
+    bad "package description should be the user-facing desktop Comment"
+fi
+
+if grep -q '"GenericName": "Fan and Performance Control"' "$ROOT/ui/package.json"; then
+    pass "desktop entry sets GenericName"
+else
+    bad "desktop entry is missing GenericName"
+fi
+
+# Only AppImage is built: deb/rpm need the `fpm` tool, which is an extra network
+# and system dependency we do not want to require.
+if grep -q '"target": \["AppImage"\]' "$ROOT/ui/package.json"; then
+    pass "electron-builder targets AppImage only"
+else
+    bad "electron-builder target list should be AppImage only"
+fi
+
+if grep -q '"deb"\|"rpm"' "$ROOT/ui/package.json"; then
+    bad "ui/package.json still has deb/rpm config but those targets are not built"
+else
+    pass "no stale deb/rpm config"
+fi
+
 # If an Electron app tree has been built, its bundled backend must answer
 # --serve. This is the check that would have caught the flash-and-quit.
 BUNDLED="$ROOT/ui/release/linux-unpacked/resources/clevo-cc-ui"
@@ -141,6 +179,30 @@ if [[ -x "$BUNDLED" ]]; then
     fi
 else
     skip "no Electron app tree built; skipping bundled-backend check"
+fi
+
+# If an AppImage exists, its generated desktop entry must match.
+APPIMAGE="$(find "$ROOT/ui/release" -maxdepth 1 -name '*.AppImage' -type f 2>/dev/null | head -n1)"
+if [[ -n "$APPIMAGE" ]]; then
+    rm -rf "$ROOT/ui/squashfs-root"
+    ( cd "$ROOT/ui" && "$APPIMAGE" --appimage-extract '*.desktop' >/dev/null 2>&1 || true )
+    entry_file="$(find "$ROOT/ui/squashfs-root" -maxdepth 1 -name '*.desktop' 2>/dev/null | head -n1)"
+    entry=""
+    [[ -n "$entry_file" ]] && entry="$(cat "$entry_file")"
+    rm -rf "$ROOT/ui/squashfs-root"
+
+    if [[ "$entry" == *"Categories=System;HardwareSettings;Settings;"* ]]; then
+        pass "AppImage desktop entry has the full Categories"
+    else
+        bad "AppImage desktop entry is missing Categories (got: $(echo "$entry" | grep -i '^Categories' || echo none))"
+    fi
+    if [[ "$entry" == *"GenericName=Fan and Performance Control"* ]]; then
+        pass "AppImage desktop entry has GenericName"
+    else
+        bad "AppImage desktop entry is missing GenericName"
+    fi
+else
+    skip "no AppImage built; skipping desktop-entry check"
 fi
 
 exit "$fail"
