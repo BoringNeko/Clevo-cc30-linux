@@ -2,7 +2,9 @@ import { describe, expect, it, beforeEach, vi } from "vitest";
 import { renderHook, waitFor, act } from "@testing-library/react";
 
 const invoke = vi.hoisted(() => vi.fn());
-vi.mock("@tauri-apps/api/core", () => ({ invoke }));
+// The hooks now dispatch through the shell-agnostic bridge; mocking it keeps
+// these tests independent of which shell (Tauri or Electron) would host them.
+vi.mock("../api/bridge", () => ({ invokeBridge: invoke }));
 
 import { useWallpaper } from "./useWallpaper";
 import { FALLBACK_PALETTE } from "../lib/color";

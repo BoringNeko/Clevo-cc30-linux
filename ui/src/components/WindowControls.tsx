@@ -7,27 +7,17 @@ import FullscreenExitIcon from "@mui/icons-material/FullscreenExit";
 import FullscreenIcon from "@mui/icons-material/Fullscreen";
 import MinimizeIcon from "@mui/icons-material/Minimize";
 import { hideMainWindow } from "../api/daemon";
+import { windowBridge, type WindowControlsBridge } from "../api/bridge";
 
-/** The subset of a Tauri window the controls use. */
-export interface WindowHandle {
-  minimize: () => Promise<void>;
-  setFullscreen: (fullscreen: boolean) => Promise<void>;
-  close: () => Promise<void>;
-  isFullscreen: () => Promise<boolean>;
-  onResized: (handler: () => void) => Promise<() => void>;
-}
+/** The subset of a window the controls use. */
+export type WindowHandle = WindowControlsBridge;
 
 /**
- * Load the Tauri window handle, or null outside Tauri (plain browser dev), where
- * `@tauri-apps/api/window` is unavailable.
+ * Load the window handle for the current shell (Tauri or Electron), or null in
+ * a plain browser where neither is available.
  */
 async function loadWindow(): Promise<WindowHandle | null> {
-  try {
-    const { getCurrentWindow } = await import("@tauri-apps/api/window");
-    return getCurrentWindow();
-  } catch {
-    return null;
-  }
+  return windowBridge();
 }
 
 /** A 32×32 icon button matching the header's icon-button style. */

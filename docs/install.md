@@ -51,7 +51,9 @@ sudo packaging/install.sh --enable   # 顺带启用并启动 clevod
 --bin-dir DIR    使用 DIR 里预编译好的 clevod/clevo-cc，跳过 cargo 构建
 --no-driver      不装内核驱动（只用只读 acpi_call 回退）
 --no-udev        不装 udev 规则、不建 clevo-cc 组
---ui             额外安装已构建的桌面 UI 二进制
+--ui             安装 Tauri 2 桌面 UI（缺失时构建）
+--electron       安装 Electron 桌面 UI（缺失时构建）
+--no-ui-build    配合上面两个，只装已有产物、不构建
 --enable         安装后 systemctl enable --now clevod
 --dry-run        只打印将要执行的操作
 ```
@@ -212,7 +214,13 @@ hwmon 节点设为组可读。**加入该组等同授予写入 EC 的能力，�
 
 ## 4. 桌面 UI
 
-UI 是 Tauri 2 应用，需要 webkit 运行库：
+UI 有两个可选的壳，**共用同一套前端**：默认 **Tauri 2**，另有 **Electron**。
+两者都只通过 D-Bus 读取/控制，不直接接触硬件。完整说明见
+[`electron.md`](electron.md)。
+
+### 4.1 Tauri 2（默认）
+
+需要 webkit 运行库：
 
 ```bash
 # Arch
@@ -225,7 +233,20 @@ cd ui && pnpm install && pnpm tauri build
 cd .. && sudo packaging/install.sh --ui
 ```
 
-UI 只通过 D-Bus 读取/控制，不直接接触硬件。
+### 4.2 Electron（NVIDIA 驱动推荐）
+
+在 NVIDIA 专有驱动上 WebKitGTK 有启动/退出崩溃（见 `hardware-notes.md` §15），
+此时用 Electron 壳更稳：
+
+```bash
+# 需要 Node + pnpm；首次会下载 Electron 运行时
+cd ui && pnpm install
+
+# 安装（缺产物会先构建：无壳后端 + 前端 + electron-builder --dir）
+cd .. && sudo packaging/install.sh --electron
+```
+
+Electron 版与 Tauri 版可**同时安装**，二进制名、桌面项、图标互不冲突。
 
 ### 分辨率的处理方式
 

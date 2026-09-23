@@ -11,8 +11,9 @@ const state = {
 
 const hideMainWindow = vi.fn();
 
-vi.mock("@tauri-apps/api/window", () => ({
-  getCurrentWindow: () => ({
+// The controls load their window handle from the shell-agnostic bridge.
+vi.mock("../api/bridge", () => ({
+  windowBridge: async () => ({
     minimize: state.minimize,
     setFullscreen: state.setFullscreen,
     close: state.close,

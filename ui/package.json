@@ -2,16 +2,19 @@
   "name": "clevo-cc-ui",
   "private": true,
   "version": "0.1.3",
-  "description": "Clevo control-center desktop UI (Tauri 2 + React + TypeScript)",
+  "description": "Clevo control-center desktop UI (React + TypeScript; Tauri 2 or Electron shell)",
   "license": "MIT OR Apache-2.0",
   "type": "module",
+  "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "electron": "electron .",
+    "electron:build": "pnpm build && electron-builder --linux"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
@@ -31,9 +34,57 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
     "jsdom": "^25.0.1",
     "typescript": "^5.6.3",
     "vite": "^6.0.3",
     "vitest": "^2.1.8"
+  },
+  "build": {
+    "appId": "org.clevo.cc.ui.electron",
+    "productName": "Clevo Control Center (Electron)",
+    "directories": {
+      "output": "release",
+      "buildResources": "electron/resources"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "src-tauri/target/electron/release/clevo-cc-ui",
+        "to": "clevo-cc-ui"
+      },
+      {
+        "from": "src-tauri/icons/icon.png",
+        "to": "icon.png"
+      }
+    ],
+    "linux": {
+      "target": ["AppImage", "deb", "rpm"],
+      "category": "System",
+      "icon": "src-tauri/icons",
+      "executableName": "clevo-cc-ui-electron",
+      "desktop": {
+        "Name": "Clevo Control Center (Electron)",
+        "Comment": "Monitor fans and switch fan/performance modes",
+        "Categories": "System;HardwareSettings;Settings;",
+        "Keywords": "fan;thermal;performance;clevo;",
+        "StartupWMClass": "clevo-cc-ui-electron"
+      }
+    },
+    "appImage": {
+      "artifactName": "clevo-cc-ui-electron-${version}-${arch}.AppImage"
+    },
+    "deb": {
+      "artifactName": "clevo-cc-linux-ui-electron_${version}_${arch}.deb",
+      "depends": ["clevo-cc-linux"]
+    },
+    "rpm": {
+      "artifactName": "clevo-cc-linux-ui-electron-${version}-1.${arch}.rpm",
+      "depends": ["clevo-cc-linux"]
+    }
   }
 }

@@ -22,11 +22,13 @@
   经内核驱动 + PolicyKit 授权，可逆。
 - **守护进程**：`clevod` 是唯一接触硬件的长期进程，在系统 D-Bus 上提供
   `org.clevo.CC`，缓存读数并持久化用户选择。
-- **桌面 UI**：Tauri 2 应用，只经 D-Bus 通信；玻璃拟态仪表盘、自绘标题栏、
-  可拖拽编辑的风扇曲线、深浅色、自定义强调色/logo/壁纸、自绘取色器、
-  显示设置（比例/分辨率/缩放，重启记忆）、兼容性选项。
+- **桌面 UI**：React 前端，Tauri 2（默认）或 Electron 两个壳均可运行，只经 D-Bus
+  通信；玻璃拟态仪表盘、自绘标题栏、可拖拽编辑的风扇曲线、深浅色、自定义强调色/logo/壁纸、
+  自绘取色器、显示设置（比例/分辨率/缩放，重启记忆）、兼容性选项。
+  Electron 用于规避 WebKitGTK 在 NVIDIA 驱动上的崩溃，见
+  [`docs/electron.md`](docs/electron.md)。
 - **系统托盘**：原生菜单直接切换性能模式（`▶` 标记当前模式）、打开控制中心、退出；
-  关闭窗口为隐藏到托盘，进程继续常驻。
+  关闭窗口即回到托盘，进程继续常驻。
 - **安全默认**：写入默认关闭；`acpi_call` 传输只读；未验证的固件常量明确标注。
 - **可离线测试**：无需硬件，全部用手写 fixture 测试（166 Rust + 28 UI 后端 + 182 前端）。
 
@@ -50,7 +52,7 @@ CLI               ─┼─▶ org.clevo.CC (D-Bus, PolicyKit) ─▶ clevod ─
 |---|---|
 | 协议层 / 传输 / CLI / 守护进程 | Rust（`zbus`、`tokio`、`serde`） |
 | 内核驱动 | C（ACPI platform driver，GPL-2.0-only，DKMS） |
-| 桌面 UI | Tauri 2 + React + TypeScript + Vite + MUI |
+| 桌面 UI | React + TypeScript + Vite + MUI；壳可选 Tauri 2 或 Electron |
 | 集成 | D-Bus、PolicyKit、systemd、udev、DKMS |
 
 ## 安装
@@ -58,7 +60,8 @@ CLI               ─┼─▶ org.clevo.CC (D-Bus, PolicyKit) ─▶ clevod ─
 ```bash
 sudo packaging/install.sh                 # 装驱动(DKMS)+守护进程+D-Bus/polkit/systemd/udev/man
 sudo packaging/install.sh --enable        # 并立即启动 clevod
-sudo packaging/install.sh --enable --ui   # 立即启动 clevod 并安装 UI 界面
+sudo packaging/install.sh --enable --ui   # 立即启动 clevod 并安装 Tauri 2 UI
+sudo packaging/install.sh --enable --electron  # 改用 Electron UI（NVIDIA 驱动推荐）
 sudo packaging/uninstall.sh               # 完整回滚
 ```
 
@@ -75,6 +78,8 @@ sudo packaging/uninstall.sh               # 完整回滚
 | [`docs/hardware-notes.md`](docs/hardware-notes.md) | 逆向出的协议事实与真机验证 |
 | [`docs/install.md`](docs/install.md) | 安装 / 升级 / 卸载 |
 | [`docs/support-matrix.md`](docs/support-matrix.md) | 支持矩阵与发行版适配 |
+| [`docs/ui.md`](docs/ui.md) | 桌面 UI 使用说明 |
+| [`docs/electron.md`](docs/electron.md) | Electron 壳：架构、构建与安装 |
 
 ## 补充
 

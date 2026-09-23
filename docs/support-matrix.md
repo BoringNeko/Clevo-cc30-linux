@@ -13,6 +13,7 @@
 | `clevo-cc-cli` | D-Bus（zbus） | ✅ 任何有 D-Bus 的 Linux |
 | `clevod` | systemd + D-Bus + polkit | ✅ 任何有 systemd/polkit 的 Linux |
 | `ui/`（Tauri 2） | webkit2gtk-4.1、gtk3、libsoup3 | ✅ 主流发行版 |
+| `ui/electron`（Electron） | Node + pnpm（运行时自带 Chromium） | ✅ 任意 Linux |
 | `kernel/clevo-cc` | Linux 内核 ACPI 子系统 | ✅ 跨内核可编；**协议只保证 P15 23** |
 
 ## 2. 支持等级
@@ -106,10 +107,26 @@ make -C /usr/lib/modules/$(uname -r)/build M=$PWD LLVM=1
 > `Submenu::set_text` 只改 GTK 标签，宿主不会可靠刷新，标题会停在旧值。切换后
 > 重建整个菜单并 `TrayIcon::set_menu` 重新挂载，宿主才会重读结构。
 >
-> **关闭窗口 = 隐藏到托盘**：点标题栏的关闭按钮（或窗口管理器自己的关闭）不会
-> 退出程序，只是把窗口隐藏，托盘的功能继续可用（`lib.rs` 拦截
-> `CloseRequested` 并 `prevent_exit`）。要真正退出，用托盘的 **退出**，或
-> 设置 → **应用程序** → **退出**。
+> **关闭窗口 = 回到托盘**：点标题栏的关闭按钮（或窗口管理器自己的关闭）不会
+> 退出程序，托盘的功能继续可用（`lib.rs` 拦截 `CloseRequested` 并
+> `prevent_exit`）。要真正退出，用托盘的 **退出**，或设置 → **应用程序** → **退出**。
+
+### 3.4 UI（Electron）
+
+Electron 壳自带 Chromium，**不依赖 webkit2gtk**，因此更适合 WebKitGTK 有问题的
+环境（尤其 NVIDIA 专有驱动，见 `hardware-notes.md` §15）。构建/运行需要：
+
+| 发行版 | 包 |
+|---|---|
+| 通用 | Node ≥ 18 + pnpm；首次构建会下载 Electron 运行时 |
+
+运行时依赖由 Electron 自带，通常无需额外系统库；托盘同样依赖
+`libappindicator3` / `libayatana-appindicator3`。安装与行为细节见
+[`electron.md`](electron.md)。
+
+> **关闭窗口 = 销毁窗口、回到托盘**（与 Tauri 的"隐藏"不同）：Electron 下会调用
+> `destroy()` 释放 Chromium 渲染进程（实测省约 600 MB 常驻内存），托盘保留，
+> 重开时重建窗口；后端 `--serve` 不重启（`electron.md` §6）。
 
 ## 4. PolicyKit 认证代理（由桌面决定）
 

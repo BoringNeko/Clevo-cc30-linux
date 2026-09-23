@@ -28,14 +28,15 @@ UI added.
 - **Daemon**: `clevod` is the only long-lived process that touches the hardware.
   It serves `org.clevo.CC` on the system D-Bus, caches readings and persists
   choices.
-- **Desktop UI**: a Tauri 2 app that talks only over D-Bus; glass dashboard,
-  custom title bar, an editable fan curve, light/dark themes, custom accent
-  colour/logo/wallpaper, a built-in colour picker, display settings (aspect
-  ratio / resolution / zoom, all remembered across restarts) and compatibility
-  options.
+- **Desktop UI**: a React frontend that runs under either **Tauri 2** (default)
+  or **Electron**, talking only over D-Bus; glass dashboard, custom title bar, an
+  editable fan curve, light/dark themes, custom accent colour/logo/wallpaper, a
+  built-in colour picker, display settings (aspect ratio / resolution / zoom, all
+  remembered across restarts) and compatibility options. Electron avoids the
+  WebKitGTK crashes on the NVIDIA driver — see [`docs/electron.md`](docs/electron.md).
 - **System tray**: a native menu that switches the performance mode (`▶` marks
-  the active one), opens the control center and quits; closing the window hides
-  it to the tray and keeps the process running.
+  the active one), opens the control center and quits; closing the window returns
+  to the tray and keeps the process running.
 - **Safe by default**: writes are off by default; the `acpi_call` transport is
   read-only; unverified firmware constants are clearly marked.
 - **Offline-testable**: no hardware required, everything is tested against
@@ -62,7 +63,7 @@ CLI               ─┼─▶ org.clevo.CC (D-Bus, PolicyKit) ─▶ clevod ─
 |---|---|
 | Protocol / transport / CLI / daemon | Rust (`zbus`, `tokio`, `serde`) |
 | Kernel driver | C (ACPI platform driver, GPL-2.0-only, DKMS) |
-| Desktop UI | Tauri 2 + React + TypeScript + Vite + MUI |
+| Desktop UI | React + TypeScript + Vite + MUI; Tauri 2 or Electron shell |
 | Integration | D-Bus, PolicyKit, systemd, udev, DKMS |
 
 ## Install
@@ -70,7 +71,8 @@ CLI               ─┼─▶ org.clevo.CC (D-Bus, PolicyKit) ─▶ clevod ─
 ```bash
 sudo packaging/install.sh                 # driver (DKMS) + daemon + D-Bus/polkit/systemd/udev/man
 sudo packaging/install.sh --enable        # and start clevod now
-sudo packaging/install.sh --enable --ui   # start clevod and install the UI too
+sudo packaging/install.sh --enable --ui   # start clevod and install the Tauri 2 UI
+sudo packaging/install.sh --enable --electron  # ...or the Electron UI (recommended on NVIDIA)
 sudo packaging/uninstall.sh               # full rollback
 ```
 
@@ -87,6 +89,8 @@ unprivileged sysfs access, troubleshooting).
 | [`docs/hardware-notes.md`](docs/hardware-notes.md) | Reverse-engineered protocol facts and verification |
 | [`docs/install.md`](docs/install.md) | Install / upgrade / uninstall |
 | [`docs/support-matrix.md`](docs/support-matrix.md) | Support matrix and distribution notes |
+| [`docs/ui.md`](docs/ui.md) | Desktop UI guide |
+| [`docs/electron.md`](docs/electron.md) | Electron shell: architecture, build, install |
 
 ## Notes
 

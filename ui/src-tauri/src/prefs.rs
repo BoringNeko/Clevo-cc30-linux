@@ -89,8 +89,14 @@ pub fn save_launch_prefs(prefs: &LaunchPrefs) -> Result<(), String> {
 /// This is applied even when `software_rendering` is set, since that path's
 /// `WEBKIT_DISABLE_DMABUF_RENDERER` does not stop the GPU teardown.
 pub fn apply_launch_env() {
-    let prefs = load_launch_prefs();
+    apply_launch_env_with(&load_launch_prefs());
+}
 
+/// Apply a given set of preferences as environment variables.
+///
+/// Split from [`apply_launch_env`] so the shared [`crate::launch_env`] helper
+/// can hand in pre-loaded preferences without reading the file twice.
+pub fn apply_launch_env_with(prefs: &LaunchPrefs) {
     match prefs.backend.as_str() {
         "wayland" if std::env::var_os("GDK_BACKEND").is_none() => {
             std::env::set_var("GDK_BACKEND", "wayland");
@@ -149,8 +155,11 @@ mod tests {
     ];
 
     /// The process environment is global, so the tests that mutate it must not
-    /// run concurrently. This lock serialises them.
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    /// run concurrently. This lock serialises them; it is shared with
+    /// `launch_env::tests` through `crate::test_env_lock`.
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        crate::test_env_lock()
+    }
 
     /// Point `XDG_CONFIG_HOME` at a fresh dir holding `prefs_json`, and clear
     /// the managed env vars so `apply_launch_env` starts from a known state.
@@ -181,7 +190,7 @@ mod tests {
     fn isolate(prefs_json: &str) -> EnvGuard {
         // Poisoning is irrelevant here: a previous assertion failure already
         // fails its own test, and we only need mutual exclusion.
-        let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let lock = env_lock();
 
         let dir = std::env::temp_dir().join(format!(
             "clevo-prefs-{}-{:?}",
@@ -191,10 +200,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("clevo-cc")).unwrap();
         std::fs::write(dir.join("clevo-cc/ui-launch.json"), prefs_json).unwrap();
 
-        let saved = MANAGED
-            .iter()
-            .map(|k| (*k, std::env::var_os(k)))
-            .collect();
+        let saved = MANAGED.iter().map(|k| (*k, std::env::var_os(k))).collect();
         let saved_xdg = std::env::var_os("XDG_CONFIG_HOME");
         for key in MANAGED {
             std::env::remove_var(key);

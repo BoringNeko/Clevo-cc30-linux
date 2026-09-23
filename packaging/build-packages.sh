@@ -7,18 +7,26 @@
 #   rpm      clevo-cc-linux (+ ui if built), %post drives dkms
 #   appimage clevo-cc-ui only (the daemon/driver are system-level; an AppImage
 #            cannot install a kernel module, a D-Bus service or PolicyKit rules)
+#   electron AppImage for the Electron shell (clevo-cc-ui-electron). Built with
+#            electron-builder; the daemon/driver are still system-level.
+#
+# The two UI toolkits (Tauri 2 and Electron) produce distinctly named artifacts
+# so they can be published side by side:
+#   clevo-cc-ui-<ver>-x86_64.AppImage            (Tauri)
+#   clevo-cc-ui-electron-<ver>-x86_64.AppImage   (Electron)
 #
 # Debian packages are assembled directly with dpkg-deb, so no debhelper / dh is
 # needed (it is not available outside Debian). packaging/debian/ is kept for
 # people building inside a real Debian environment.
 #
 # Usage:
-#   packaging/build-packages.sh [deb] [rpm] [appimage] [all]
+#   packaging/build-packages.sh [deb] [rpm] [appimage] [electron] [all]
 #
 # Requirements (by target):
 #   deb       dpkg (dpkg-deb), cargo
 #   rpm       rpm-tools (rpmbuild), cargo
 #   appimage  appimagetool, pnpm + the Tauri build deps
+#   electron  pnpm (downloads Electron + electron-builder), cargo
 #
 # Output goes to dist/.
 
@@ -49,6 +57,18 @@ build_rust() {
 }
 
 ui_present() { [[ -x "${REPO_ROOT}/ui/src-tauri/target/release/clevo-cc-ui" ]]; }
+
+# The Electron backend is the same crate built without the Tauri shell. The
+# Tauri build above already satisfies it (the headless binary is a separate
+# build), so this checks for the explicit headless artifact and builds it if
+# missing. electron-builder packages it as an extra resource.
+electron_backend_present() { [[ -x "${REPO_ROOT}/ui/src-tauri/target/electron/release/clevo-cc-ui" ]]; }
+
+build_electron_backend() {
+    log "building the headless UI backend (no Tauri shell)"
+    ( cd "${REPO_ROOT}/ui/src-tauri" \
+        && CARGO_TARGET_DIR=target/electron cargo build --release --locked --no-default-features )
+}
 
 # ---------------------------------------------------------------- deb --------
 # Populate a package root with the shared files (daemon, CLI, integration).
@@ -287,6 +307,35 @@ APPRUN
     log "wrote ${DIST}/clevo-cc-ui-${PKGVER}-x86_64.AppImage"
 }
 
+# ----------------------------------------------------------- electron --------
+# Build the Electron AppImage (and deb/rpm) via electron-builder. Distinct
+# artifact names keep it from colliding with the Tauri AppImage.
+build_electron() {
+    command -v pnpm >/dev/null || die "pnpm not found (needed for the Electron build)"
+    build_electron_backend
+
+    log "building the Electron bundle (electron-builder)"
+    # electron-builder reads extraResources from ui/package.json, which points at
+    # src-tauri/target/electron/release/clevo-cc-ui (the exclusive no-Tauri path).
+    # Do NOT copy it over target/release/: that path holds the Tauri binary too,
+    # and overwriting it either ships the wrong backend or clobbers the Tauri
+    # build. Keeping the two in separate target dirs is what prevents that.
+
+    ( cd "${REPO_ROOT}/ui" \
+        && pnpm install --frozen-lockfile \
+        && pnpm build \
+        && pnpm exec electron-builder --linux AppImage deb rpm )
+
+    mkdir -p "${DIST}"
+    # electron-builder writes to ui/release/.
+    find "${REPO_ROOT}/ui/release" -maxdepth 1 \
+        \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \) \
+        -exec cp {} "${DIST}/" \;
+    # The deb/rpm from electron-builder are named by its own scheme; keep the
+    # AppImage named consistently with the Tauri one.
+    log "wrote Electron artifacts to dist/"
+}
+
 main() {
     [[ $# -eq 0 ]] && set -- all
     for target in "$@"; do
@@ -294,8 +343,9 @@ main() {
             deb)      build_deb ;;
             rpm)      build_rpm ;;
             appimage) build_appimage ;;
+            electron) build_electron ;;
             all)      build_deb; build_rpm; build_appimage ;;
-            *)        die "unknown target: $target (deb|rpm|appimage|all)" ;;
+            *)        die "unknown target: $target (deb|rpm|appimage|electron|all)" ;;
         esac
     done
     log "done. artifacts in ${DIST}/"
