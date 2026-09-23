@@ -8,7 +8,7 @@
 #  tarball or a git URL when publishing.)
 
 pkgname=clevo-cc-linux
-pkgver=0.1.3
+pkgver=0.1.4
 pkgrel=1
 pkgdesc="Clevo (蓝天) control center: fan and performance mode control (DCHU/ACPI)"
 arch=('x86_64')

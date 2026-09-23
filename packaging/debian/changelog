@@ -1,3 +1,23 @@
+clevo-cc-linux (0.1.4-1) unstable; urgency=medium
+
+  * Add an optional Electron shell alongside Tauri 2, sharing the same React
+    frontend and Rust backend commands (for hosts where WebKitGTK fails on the
+    NVIDIA proprietary driver).
+  * Make the UI backend shell-agnostic: a headless build exposes a localhost
+    HTTP bridge (`--serve`) the Electron main process proxies.
+  * Release the Electron renderer when the window is closed, keeping the tray
+    and backend alive.
+
+ -- clevo-cc-linux  Wed, 23 Sep 2026 00:00:00 +0000
+
+clevo-cc-linux (0.1.3-1) unstable; urgency=medium
+
+  * Add a `customize` fan mode.
+  * Add a custom fan curve editor (command 14).
+  * Add temperature readings and the verified command-12 offsets.
+
+ -- clevo-cc-linux  Wed, 23 Sep 2026 00:00:00 +0000
+
 clevo-cc-linux (0.1.2-1) unstable; urgency=medium
 
   * Fix NVIDIA exit crash (core dump on every close) by moving Skia to CPU.

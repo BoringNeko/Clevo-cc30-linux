@@ -122,6 +122,11 @@ dkms install -m clevo-cc -v %{version} >/dev/null 2>&1 || :
 /usr/src/clevo-cc-%{version}
 
 %changelog
+* Wed Sep 23 2026 BoringNeko <noreply@github.com> - 0.1.4-1
+- Add an optional Electron shell alongside Tauri 2
+- Make the UI backend shell-agnostic (headless `--serve` HTTP bridge)
+- Release the Electron renderer when the window is closed
+
 * Wed Sep 23 2026 BoringNeko <noreply@github.com> - 0.1.3-1
 - Add a `customize` fan mode
 - Add a custom fan curve editor (command 14)
