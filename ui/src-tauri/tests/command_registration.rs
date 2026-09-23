@@ -8,6 +8,11 @@
 //!
 //! Checked by reading the sources, because the failure mode is an omission in a
 //! macro invocation, which nothing else can observe.
+//!
+//! Only the Tauri shell registers an invoke handler; the headless Electron
+//! backend dispatches by name in `serve.rs` instead.
+
+#![cfg(feature = "tauri-shell")]
 
 const COMMANDS: &str = include_str!("../src/commands.rs");
 const LIB: &str = include_str!("../src/lib.rs");
@@ -31,6 +36,10 @@ fn declared() -> Vec<String> {
 }
 
 /// Command names passed to `generate_handler!` in lib.rs.
+///
+/// Entries look like `commands::tauri_commands::get_fan_snapshot`. Splitting on
+/// `commands::` is not enough: `tauri_commands` itself contains that substring,
+/// so the command name is taken as the final `::` segment instead.
 fn registered() -> Vec<String> {
     let start = LIB
         .find("generate_handler!")
@@ -38,14 +47,15 @@ fn registered() -> Vec<String> {
     let body = &LIB[start..];
     let end = body.find("])").expect("the handler list is closed");
     body[..end]
-        .split("commands::")
-        .skip(1)
-        .filter_map(|chunk| {
-            let name: String = chunk
-                .chars()
-                .take_while(|c| c.is_alphanumeric() || *c == '_')
-                .collect();
-            (!name.is_empty()).then_some(name)
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim().trim_end_matches(',');
+            // Keep only the registration calls, not the macro/attribute lines.
+            if !line.starts_with("commands::") {
+                return None;
+            }
+            let name = line.rsplit("::").next()?;
+            (!name.is_empty()).then(|| name.to_string())
         })
         .collect()
 }
