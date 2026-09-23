@@ -1,0 +1,16 @@
+#!/bin/sh
+# AppRun for the Electron build of the Clevo control center.
+#
+# The Electron main process spawns the bundled Rust backend itself; it locates
+# it next to the app resources (see ui/electron/main.cjs, resolveBackendPath).
+# Nothing extra is required here, but keeping a single AppRun makes the two
+# builds (Tauri / Electron) behave the same when launched from a shell.
+HERE="$(dirname "$(readlink -f "$0")")"
+export PATH="${HERE}/usr/bin:${PATH}"
+
+# Point Electron at the bundled backend explicitly, so a stale system copy is
+# never picked up.
+BACKEND="${HERE}/usr/lib/clevo-cc-ui/clevo-cc-ui"
+[ -x "$BACKEND" ] && export CLEVO_CC_UI_BACKEND="$BACKEND"
+
+exec "${HERE}/usr/bin/clevo-cc-ui-electron" "$@"

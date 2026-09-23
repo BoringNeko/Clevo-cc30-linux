@@ -84,14 +84,20 @@ elif command -v systemctl >/dev/null 2>&1; then
 fi
 
 # --- binaries ----------------------------------------------------------------
-run rm -f "${DESTDIR}${PREFIX}/bin/clevod" "${DESTDIR}${PREFIX}/bin/clevo-cc" "${DESTDIR}${PREFIX}/bin/clevo-cc-ui"
+run rm -f "${DESTDIR}${PREFIX}/bin/clevod" "${DESTDIR}${PREFIX}/bin/clevo-cc" \
+    "${DESTDIR}${PREFIX}/bin/clevo-cc-ui" "${DESTDIR}${PREFIX}/bin/clevo-cc-ui-electron"
+
+# --- Electron app tree -------------------------------------------------------
+run rm -rf "${DESTDIR}${PREFIX}/lib/clevo-cc-ui-electron"
 
 # --- man pages ---------------------------------------------------------------
 run rm -f "${DESTDIR}${MAN_DIR}/man8/clevod.8" "${DESTDIR}${MAN_DIR}/man1/clevo-cc.1"
 
 # --- desktop entry + icons ---------------------------------------------------
 run rm -f "${DESTDIR}${APPS_DIR}/org.clevo.cc.ui.desktop"
+run rm -f "${DESTDIR}${APPS_DIR}/org.clevo.cc.ui.electron.desktop"
 run rm -f "${DESTDIR}${ICONS_DIR}"/*/apps/org.clevo.cc.ui.png
+run rm -f "${DESTDIR}${ICONS_DIR}"/*/apps/org.clevo.cc.ui.electron.png
 if (( DRY_RUN )); then
     printf '  [dry-run] update-desktop-database + gtk-update-icon-cache\n'
 else

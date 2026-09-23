@@ -27,6 +27,9 @@ Thumbs.db
 /ui/src-tauri/target/
 /ui/src-tauri/gen/
 
+# Electron UI: electron-builder output (AppImage/deb/rpm/unpacked tree).
+/ui/release/
+
 # The UI is an application: keep its lockfile for reproducible builds.
 !/ui/src-tauri/Cargo.lock
 

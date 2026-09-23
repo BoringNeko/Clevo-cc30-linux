@@ -8,7 +8,8 @@
 #   2. the clevod daemon and the D-Bus policy + PolicyKit action,
 #   3. the systemd unit,
 #   4. the udev rule and the clevo-cc group (unless --no-udev),
-#   5. optionally the desktop UI (--ui; needs a prebuilt binary).
+#   5. optionally the desktop UI: --ui installs the Tauri 2 build, --electron
+#      installs the Electron build (each needs its binary built first).
 #
 # Every step is reversible with packaging/uninstall.sh. Nothing is enabled or
 # started unless --enable is passed, and nothing is written to hardware.
@@ -22,8 +23,9 @@
 #   --bin-dir DIR    install prebuilt clevod/clevo-cc from DIR instead of building
 #   --no-driver      skip the kernel driver
 #   --no-udev        skip the udev rule and group
-#   --ui             install the desktop UI (build it first if missing)
-#   --no-ui-build    with --ui, install an existing UI build without building
+#   --ui             install the Tauri 2 desktop UI (build it first if missing)
+#   --electron       install the Electron desktop UI (build it first if missing)
+#   --no-ui-build    with --ui/--electron, install an existing build without building
 #   --enable         enable + start clevod after installing
 #   --dry-run        print actions without changing anything
 #   -h, --help       this help
@@ -41,6 +43,7 @@ BIN_DIR=""
 WITH_DRIVER=1
 WITH_UDEV=1
 WITH_UI=0
+WITH_ELECTRON=0
 UI_BUILD=1
 ENABLE=0
 DRY_RUN=0
@@ -139,6 +142,7 @@ while (( $# )); do
         --no-driver)  WITH_DRIVER=0; shift ;;
         --no-udev)    WITH_UDEV=0; shift ;;
         --ui)         WITH_UI=1; shift ;;
+        --electron)   WITH_ELECTRON=1; shift ;;
         --no-ui-build) UI_BUILD=0; shift ;;
         --enable)     ENABLE=1; shift ;;
         --dry-run)    DRY_RUN=1; shift ;;
@@ -283,56 +287,151 @@ if (( WITH_UDEV )); then
 fi
 
 # --- 7. optional UI ----------------------------------------------------------
-if (( WITH_UI )); then
-    ui_bin="${REPO_ROOT}/ui/src-tauri/target/release/clevo-cc-ui"
+#
+# Two independent shells can be installed: the Tauri 2 build (`--ui`) and the
+# Electron build (`--electron`). They install to different binary names and
+# desktop files so both can coexist; each reuses the same daemon over D-Bus.
+
+# Install one of the Tauri-shipped PNGs as an app icon at the right pixel size.
+install_hicolor_icons() {
+    local icon_name="$1"
+    for size in 32x32 128x128 128x128@2x; do
+        local src_icon="${REPO_ROOT}/ui/src-tauri/icons/${size}.png"
+        [[ -f "$src_icon" ]] || continue
+        local px
+        case "$size" in
+            32x32)      px=32 ;;
+            128x128)    px=128 ;;
+            128x128@2x) px=256 ;;
+        esac
+        run install -Dm644 "$src_icon" \
+            "${DESTDIR}${ICONS_DIR}/${px}x${px}/apps/${icon_name}.png"
+    done
+}
+
+refresh_desktop_caches() {
+    if (( ! DRY_RUN )) && command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database "${DESTDIR}${APPS_DIR}" 2>/dev/null || true
+    fi
+    if (( ! DRY_RUN )) && command -v gtk-update-icon-cache >/dev/null 2>&1; then
+        gtk-update-icon-cache -qtf "${DESTDIR}${ICONS_DIR}" 2>/dev/null || true
+    fi
+}
+
+# Run pnpm in ui/ as the invoking account under sudo (so the pnpm store and
+# node_modules stay the user's), like the Rust build above.
+ui_pnpm() {
+    local pnpm_bin
+    pnpm_bin="$(command -v pnpm || true)"
+    [[ -n "$pnpm_bin" ]] || die "pnpm not found; install it or build the UI yourself (cd ui && pnpm tauri build)"
+    local pnpm_dir
+    pnpm_dir="$(dirname "$pnpm_bin")"
+    if [[ -n "${SUDO_USER:-}" && "$SUDO_USER" != "root" ]]; then
+        sudo -u "$SUDO_USER" \
+            env CARGO_HOME="${CARGO_HOME_DIR:-}" RUSTUP_HOME="${RUSTUP_HOME_DIR:-}" \
+                PATH="${CARGO_HOME_DIR}/bin:${pnpm_dir}:${PATH}" \
+            sh -c "cd '${REPO_ROOT}/ui' && $*"
+    else
+        ( cd "${REPO_ROOT}/ui" && PATH="${pnpm_dir}:${PATH}" bash -c "$*" )
+    fi
+}
+
+install_tauri_ui() {
+    local ui_bin="${REPO_ROOT}/ui/src-tauri/target/release/clevo-cc-ui"
     if [[ ! -x "$ui_bin" && "$UI_BUILD" == "1" ]]; then
-        log "building the desktop UI (pnpm tauri build)"
+        log "building the Tauri desktop UI (pnpm tauri build)"
         if (( DRY_RUN )); then
             printf '  [dry-run] pnpm install && pnpm tauri build (in ui/)\n'
         else
-            pnpm_bin="$(command -v pnpm || true)"
-            [[ -n "$pnpm_bin" ]] || die "pnpm not found; install it or build the UI yourself (cd ui && pnpm tauri build)"
-            # Build as the invoking account under sudo, like the Rust build.
+            ui_pnpm "pnpm install --frozen-lockfile && pnpm tauri build --no-bundle" \
+                || die "Tauri UI build failed"
+        fi
+    fi
+    if [[ ! -x "$ui_bin" && "$DRY_RUN" -eq 0 ]]; then
+        warn "Tauri UI binary not found at $ui_bin; build it with: cd ui && pnpm tauri build"
+        return
+    fi
+    log "installing the Tauri desktop UI"
+    run install -Dm755 "$ui_bin" "${DESTDIR}${PREFIX}/bin/clevo-cc-ui"
+    run install -Dm644 "${SCRIPT_DIR}/desktop/org.clevo.cc.ui.desktop" \
+        "${DESTDIR}${APPS_DIR}/org.clevo.cc.ui.desktop"
+    install_hicolor_icons "org.clevo.cc.ui"
+    refresh_desktop_caches
+}
+
+install_electron_ui() {
+    # The Electron build needs (a) the headless backend, (b) the frontend dist,
+    # (c) the Electron app itself. `pnpm electron:build` produces an AppImage,
+    # deb and rpm under ui/release/; here we only need a runnable app tree, so we
+    # build the backend + dist and install the `--no-bundle` unpacked app.
+    local backend="${REPO_ROOT}/ui/src-tauri/target/electron/release/clevo-cc-ui"
+    local unpacked="${REPO_ROOT}/ui/release/linux-unpacked"
+
+    if [[ ! -x "$backend" && "$UI_BUILD" == "1" ]]; then
+        log "building the headless Electron backend"
+        if (( DRY_RUN )); then
+            printf '  [dry-run] cargo build --release --no-default-features (ui/src-tauri)\n'
+        else
+            local cargo_bin
+            cargo_bin="$(find_cargo)" || die "cargo not found; build ui/src-tauri first"
             if [[ -n "${SUDO_USER:-}" && "$SUDO_USER" != "root" ]]; then
                 sudo -u "$SUDO_USER" \
                     env CARGO_HOME="${CARGO_HOME_DIR:-}" RUSTUP_HOME="${RUSTUP_HOME_DIR:-}" \
                         PATH="${CARGO_HOME_DIR}/bin:${PATH}" \
-                    sh -c "cd '${REPO_ROOT}/ui' && '${pnpm_bin}' install --frozen-lockfile && '${pnpm_bin}' tauri build --no-bundle" \
-                    || die "UI build failed"
+                    sh -c "cd '${REPO_ROOT}/ui/src-tauri' && CARGO_TARGET_DIR=target/electron '${cargo_bin}' build --release --locked --no-default-features" \
+                    || die "Electron backend build failed"
             else
-                ( cd "${REPO_ROOT}/ui" \
-                    && "$pnpm_bin" install --frozen-lockfile \
-                    && "$pnpm_bin" tauri build --no-bundle ) \
-                    || die "UI build failed"
+                ( cd "${REPO_ROOT}/ui/src-tauri" \
+                    && CARGO_TARGET_DIR=target/electron "$cargo_bin" build --release --locked --no-default-features ) \
+                    || die "Electron backend build failed"
             fi
         fi
     fi
-    if [[ ! -x "$ui_bin" && "$DRY_RUN" -eq 0 ]]; then
-        warn "UI binary not found at $ui_bin; build it with: cd ui && pnpm tauri build"
-    else
-        log "installing the desktop UI"
-        run install -Dm755 "$ui_bin" "${DESTDIR}${PREFIX}/bin/clevo-cc-ui"
-        run install -Dm644 "${SCRIPT_DIR}/desktop/org.clevo.cc.ui.desktop" \
-            "${DESTDIR}${APPS_DIR}/org.clevo.cc.ui.desktop"
-        # Install the app icon at the sizes Tauri ships.
-        for size in 32x32 128x128 128x128@2x; do
-            src_icon="${REPO_ROOT}/ui/src-tauri/icons/${size}.png"
-            [[ -f "$src_icon" ]] || continue
-            case "$size" in
-                32x32)     px=32 ;;
-                128x128)   px=128 ;;
-                128x128@2x) px=256 ;;
-            esac
-            run install -Dm644 "$src_icon" \
-                "${DESTDIR}${ICONS_DIR}/${px}x${px}/apps/org.clevo.cc.ui.png"
-        done
-        if (( ! DRY_RUN )) && command -v update-desktop-database >/dev/null 2>&1; then
-            update-desktop-database "${DESTDIR}${APPS_DIR}" 2>/dev/null || true
-        fi
-        if (( ! DRY_RUN )) && command -v gtk-update-icon-cache >/dev/null 2>&1; then
-            gtk-update-icon-cache -qtf "${DESTDIR}${ICONS_DIR}" 2>/dev/null || true
+
+    if [[ ! -d "$unpacked" && "$UI_BUILD" == "1" ]]; then
+        log "building the Electron app (electron-builder --dir)"
+        if (( DRY_RUN )); then
+            printf '  [dry-run] pnpm install && pnpm build && electron-builder --dir (in ui/)\n'
+        else
+            # electron-builder takes the headless backend from
+            # src-tauri/target/electron/release/ (see ui/package.json
+            # extraResources). That path is exclusive to the no-Tauri build, so
+            # it cannot collide with the Tauri binary in target/release/.
+            ui_pnpm "pnpm install --frozen-lockfile && pnpm build && pnpm exec electron-builder --linux dir" \
+                || die "Electron build failed"
         fi
     fi
+
+    if [[ ! -d "$unpacked" && "$DRY_RUN" -eq 0 ]]; then
+        warn "Electron app not found at $unpacked; build it with: cd ui && pnpm electron:build"
+        return
+    fi
+    log "installing the Electron desktop UI"
+    # The unpacked app tree goes under lib/; a tiny launcher in bin/ starts it.
+    run install -d "${DESTDIR}${PREFIX}/lib/clevo-cc-ui-electron"
+    if (( DRY_RUN )); then
+        printf '  [dry-run] copy %s -> %s\n' "$unpacked" "${PREFIX}/lib/clevo-cc-ui-electron"
+    else
+        cp -a "$unpacked/." "${DESTDIR}${PREFIX}/lib/clevo-cc-ui-electron/"
+    fi
+    write_file "${DESTDIR}${PREFIX}/bin/clevo-cc-ui-electron" <<EOF
+#!/bin/sh
+# Launcher for the Electron build of the Clevo control center.
+exec "${PREFIX}/lib/clevo-cc-ui-electron/clevo-cc-ui-electron" "\$@"
+EOF
+    run chmod 0755 "${DESTDIR}${PREFIX}/bin/clevo-cc-ui-electron"
+    run install -Dm644 "${SCRIPT_DIR}/desktop/org.clevo.cc.ui.electron.desktop" \
+        "${DESTDIR}${APPS_DIR}/org.clevo.cc.ui.electron.desktop"
+    install_hicolor_icons "org.clevo.cc.ui.electron"
+    refresh_desktop_caches
+}
+
+if (( WITH_UI )); then
+    install_tauri_ui
+fi
+
+if (( WITH_ELECTRON )); then
+    install_electron_ui
 fi
 
 # --- 8. activate / restart -----------------------------------------------
