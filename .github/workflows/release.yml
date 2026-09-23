@@ -66,6 +66,12 @@ jobs:
       - name: Build deb, rpm and AppImage
         run: packaging/build-packages.sh all
 
+      # The Electron AppImage is separate: it needs electron-builder, which
+      # downloads the Electron runtime (~120 MB). Kept out of `all` so the Tauri
+      # path stays fast, but part of the release because the notes advertise it.
+      - name: Build the Electron AppImage
+        run: packaging/build-packages.sh electron
+
       - name: List artifacts
         run: ls -lh dist/
 
@@ -105,7 +111,8 @@ jobs:
             > AppImage **仅包含 UI 界面**（不含守护进程与内核驱动）。
 
             ### Add
-            - 新增 customize 风扇模式
-            - 添加自定义风扇曲线
-            - 添加温度检测
+            - 添加 Electron 以解决 Tauri 2 无法使用 Nvidia 硬件加速的问题
+
+            ### Note
+            - Tauri 2 依旧可用，但在 Nvidia 上可能遇到流畅性等问题
           fail_on_unmatched_files: true
