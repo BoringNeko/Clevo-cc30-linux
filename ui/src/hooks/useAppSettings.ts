@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { invokeBridge as invoke } from "../api/bridge";
 import {
   DEFAULT_APPEARANCE,
   RESOLUTION_PRESETS,
@@ -116,7 +117,6 @@ export function writeCompatibilityPrefs(prefs: CompatibilityPrefs) {
 /** Persist through the Tauri backend when available (imported lazily). */
 async function persistLaunchPrefs(prefs: CompatibilityPrefs): Promise<void> {
   try {
-    const { invoke } = await import("@tauri-apps/api/core");
     await invoke("set_launch_prefs", {
       prefs: { backend: prefs.backend, software_rendering: prefs.softwareRendering },
     });
@@ -131,7 +131,6 @@ async function persistLaunchPrefs(prefs: CompatibilityPrefs): Promise<void> {
  */
 export async function loadCompatibilityPrefs(): Promise<CompatibilityPrefs> {
   try {
-    const { invoke } = await import("@tauri-apps/api/core");
     const prefs = await invoke<{ backend: string; software_rendering: boolean }>(
       "get_launch_prefs",
     );

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { invokeBridge as invoke } from "../api/bridge";
 
 /**
  * The sidebar logo image.
@@ -25,7 +26,6 @@ export function useLogo(defaultPath: string) {
       return;
     }
     try {
-      const { invoke } = await import("@tauri-apps/api/core");
       const url = await invoke<string | null>("read_image_path", { path: defaultPath });
       setLogo(url ?? null);
     } catch {
@@ -35,7 +35,6 @@ export function useLogo(defaultPath: string) {
 
   const restore = useCallback(async () => {
     try {
-      const { invoke } = await import("@tauri-apps/api/core");
       const saved = await invoke<string | null>("load_logo");
       if (saved) {
         setLogo(saved);
@@ -56,7 +55,6 @@ export function useLogo(defaultPath: string) {
   const setLogoFromFile = useCallback(async (file: File) => {
     if (!file.type.startsWith("image/")) return;
     try {
-      const { invoke } = await import("@tauri-apps/api/core");
       const reader = new FileReader();
       const dataUrl: string = await new Promise((resolve, reject) => {
         reader.onload = () => resolve(String(reader.result));
@@ -76,7 +74,6 @@ export function useLogo(defaultPath: string) {
 
   const resetLogo = useCallback(async () => {
     try {
-      const { invoke } = await import("@tauri-apps/api/core");
       await invoke("clear_logo");
     } catch {
       // ignore

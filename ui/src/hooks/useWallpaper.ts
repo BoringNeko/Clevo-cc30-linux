@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { invokeBridge as invoke } from "../api/bridge";
 import {
   cssTriplet,
   extractPalette,
@@ -31,7 +32,6 @@ function extOf(file: File): string {
 /** Persist via the Tauri backend when available (lazy import). */
 async function persistWallpaper(file: File): Promise<string | null> {
   try {
-    const { invoke } = await import("@tauri-apps/api/core");
     const data_base64 = await fileToBase64(file);
     const saved = await invoke<{ data_url: string }>("save_wallpaper", {
       dataBase64: data_base64,
@@ -79,7 +79,6 @@ export function useWallpaper() {
     let cancelled = false;
     (async () => {
       try {
-        const { invoke } = await import("@tauri-apps/api/core");
         const saved = await invoke<string | null>("load_wallpaper");
         if (!cancelled && saved) {
           setWallpaper(saved);
@@ -125,7 +124,6 @@ export function useWallpaper() {
 
   const resetWallpaper = useCallback(async () => {
     try {
-      const { invoke } = await import("@tauri-apps/api/core");
       await invoke("clear_wallpaper");
     } catch {
       // ignore

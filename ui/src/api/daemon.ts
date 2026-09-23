@@ -1,9 +1,11 @@
-// Typed adapter over the Tauri commands exposed by `src-tauri`.
+// Typed adapter over the backend commands exposed by `src-tauri`.
 //
 // The UI never talks to hardware or D-Bus directly: every call goes through a
-// Tauri command, which in turn speaks `org.clevo.CC` to `clevod`.
+// backend command, which in turn speaks `org.clevo.CC` to `clevod`. The same
+// commands run under both shells — Tauri's IPC or Electron's HTTP bridge — so
+// they are dispatched through `invokeBridge` rather than a Tauri-only `invoke`.
 
-import { invoke } from "@tauri-apps/api/core";
+import { invokeBridge as invoke } from "./bridge";
 
 /** Freshness of a cached reading, mirrored from the daemon. */
 export type Freshness = "fresh" | "stale" | "unknown";
@@ -171,10 +173,20 @@ export async function setPerfMode(mode: string): Promise<number> {
  * the same as quitting.
  */
 export async function hideMainWindow(): Promise<void> {
+  // Electron owns its window, so go through the shell bridge (which destroys
+  // the window, releasing the renderer). Tauri's window is managed by the Rust
+  // side, so there it stays a backend command.
+  const { isElectron, windowBridge } = await import("./bridge");
+  if (isElectron()) {
+    const bridge = await windowBridge();
+    if (bridge) return bridge.hide();
+    return;
+  }
   return invoke<void>("hide_main_window");
 }
 
 /** Quit the app entirely (window and tray icon). */
 export async function quitApp(): Promise<void> {
-  return invoke<void>("quit_app");
+  const { quitBridge } = await import("./bridge");
+  return quitBridge();
 }

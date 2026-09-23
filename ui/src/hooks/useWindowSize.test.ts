@@ -5,14 +5,11 @@ import { DEFAULT_APPEARANCE, type Appearance } from "../theme";
 
 const setSize = vi.fn().mockResolvedValue(undefined);
 
-vi.mock("@tauri-apps/api/window", () => ({
-  getCurrentWindow: () => ({ setSize }),
-  LogicalSize: class {
-    constructor(
-      public width: number,
-      public height: number,
-    ) {}
-  },
+// The hook resizes through the shell-agnostic window bridge now.
+vi.mock("../api/bridge", () => ({
+  windowBridge: async () => ({
+    setSize: (width: number, height: number) => setSize(width, height),
+  }),
 }));
 
 describe("useWindowSize", () => {
@@ -24,9 +21,7 @@ describe("useWindowSize", () => {
     const appearance: Appearance = { ...DEFAULT_APPEARANCE, displayWidth: 1920, displayHeight: 1080 };
     renderHook(() => useWindowSize(appearance));
     await waitFor(() => expect(setSize).toHaveBeenCalledTimes(1));
-    const size = setSize.mock.calls[0][0] as { width: number; height: number };
-    expect(size.width).toBe(1920);
-    expect(size.height).toBe(1080);
+    expect(setSize).toHaveBeenCalledWith(1920, 1080);
   });
 
   it("reapplies when the resolution changes", async () => {
@@ -36,9 +31,7 @@ describe("useWindowSize", () => {
     await waitFor(() => expect(setSize).toHaveBeenCalledTimes(1));
     rerender({ a: { ...DEFAULT_APPEARANCE, displayWidth: 2560, displayHeight: 1440 } });
     await waitFor(() => expect(setSize).toHaveBeenCalledTimes(2));
-    const size = setSize.mock.calls[1][0] as { width: number; height: number };
-    expect(size.width).toBe(2560);
-    expect(size.height).toBe(1440);
+    expect(setSize).toHaveBeenLastCalledWith(2560, 1440);
   });
 
   it("returns a resize function for manual use", async () => {
@@ -46,9 +39,7 @@ describe("useWindowSize", () => {
     await waitFor(() => expect(setSize).toHaveBeenCalled());
     result.current(1600, 900);
     await waitFor(() => {
-      const calls = setSize.mock.calls;
-      const last = calls[calls.length - 1]?.[0] as { width: number; height: number };
-      expect(last).toMatchObject({ width: 1600, height: 900 });
+      expect(setSize).toHaveBeenLastCalledWith(1600, 900);
     });
   });
 });

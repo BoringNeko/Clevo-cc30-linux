@@ -1,14 +1,11 @@
 import { useCallback, useEffect } from "react";
 import { windowSize, type Appearance } from "../theme";
+import { windowBridge } from "../api/bridge";
 
-/** Resize the Tauri window to an inner logical size (no-op outside Tauri). */
+/** Resize the window to an inner logical size (no-op outside a shell). */
 export async function resizeWindow(width: number, height: number): Promise<void> {
-  try {
-    const { getCurrentWindow, LogicalSize } = await import("@tauri-apps/api/window");
-    await getCurrentWindow().setSize(new LogicalSize(width, height));
-  } catch {
-    // Not running inside Tauri.
-  }
+  const bridge = await windowBridge();
+  if (bridge) await bridge.setSize(width, height);
 }
 
 /**
