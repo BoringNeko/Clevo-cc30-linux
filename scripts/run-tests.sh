@@ -94,6 +94,30 @@ if [ "$WANT_UI" = 1 ]; then
         step "UI: Rust backend tests (incl. D-Bus)"
         try bash -c "cd ui/src-tauri && $(command -v dbus-run-session >/dev/null 2>&1 \
             && echo dbus-run-session -- || true) cargo test"
+
+        # The Electron shell's JS is not covered by vitest; at least parse it,
+        # and check that its handshake string matches the backend's.
+        step "UI: Electron shell syntax + handshake"
+        try node --check ui/electron/main.cjs
+        try node --check ui/electron/preload.cjs
+        try node scripts/tests-electron-preload.mjs
+        try scripts/tests-electron-bridge.sh
+
+        # The headless backend (no Tauri shell) must also build and pass its
+        # tests: it is what the Electron main process spawns.
+        step "UI: headless backend build + tests (Electron)"
+        try bash -c "cd ui/src-tauri && cargo test --no-default-features"
+
+        # End-to-end: start the backend, drive the HTTP bridge, and (with a
+        # display and the Electron runtime downloaded) launch the real app.
+        # Self-skips without Electron, so CI without the runtime still passes.
+        step "UI: Electron end-to-end"
+        try scripts/electron-e2e.sh
+
+        # The Electron window must release its renderer on close (scheme 2),
+        # keeping the tray and backend alive, and recreate it on reopen.
+        step "UI: Electron tray/window release"
+        try scripts/electron-tray-release.sh
     fi
 fi
 
