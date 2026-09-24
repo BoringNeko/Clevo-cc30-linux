@@ -86,7 +86,7 @@ export function WindowControls() {
   };
 
   return (
-    <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
+    <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, WebkitAppRegion: "no-drag" }}>
       <ControlButton label="最小化" onClick={() => withWindow((w) => w.minimize())}>
         <MinimizeIcon sx={{ fontSize: 16 }} />
       </ControlButton>

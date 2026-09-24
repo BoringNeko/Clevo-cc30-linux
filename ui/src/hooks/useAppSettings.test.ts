@@ -57,6 +57,7 @@ describe("app settings", () => {
     expect(a.displayWidth).toBe(1600);
     expect(a.displayHeight).toBe(900);
     expect(a.scale).toBe(100);
+    expect(a.animationsEnabled).toBe(true);
   });
 
   it("round-trips display settings", () => {
@@ -66,18 +67,22 @@ describe("app settings", () => {
       displayWidth: 1920,
       displayHeight: 1200,
       scale: 150,
+      animationSpeed: 150,
+      animationsEnabled: false,
     });
     const a = readAppearance();
     expect(a.aspect).toBe("16:10");
     expect(a.displayWidth).toBe(1920);
     expect(a.displayHeight).toBe(1200);
     expect(a.scale).toBe(150);
+    expect(a.animationSpeed).toBe(150);
+    expect(a.animationsEnabled).toBe(false);
   });
 
   it("clamps the scale and snaps an unknown resolution to the ratio default", () => {
     window.localStorage.setItem(
       "clevo.appearance",
-      JSON.stringify({ aspect: "16:10", displayWidth: 9999, displayHeight: 9999, scale: 900 }),
+      JSON.stringify({ aspect: "16:10", displayWidth: 9999, displayHeight: 9999, scale: 900, animationSpeed: 900 }),
     );
     const a = readAppearance();
     expect(a.aspect).toBe("16:10");
@@ -85,5 +90,6 @@ describe("app settings", () => {
     expect(a.displayWidth).toBe(1680);
     expect(a.displayHeight).toBe(1050);
     expect(a.scale).toBe(200);
+    expect(a.animationSpeed).toBe(200);
   });
 });

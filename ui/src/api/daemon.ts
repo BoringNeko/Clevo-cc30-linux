@@ -106,6 +106,23 @@ export async function pollFan(): Promise<FanSnapshot> {
   return invoke<FanSnapshot>("poll_fan");
 }
 
+export interface HardwareUsage {
+  cpu_percent: number;
+  cpu_temp_c: number | null;
+  cpu_freq_mhz: number | null;
+  gpu_percent: number | null;
+  gpu_temp_c: number | null;
+  gpu_freq_mhz: number | null;
+  gpu_available: boolean;
+  memory_percent: number;
+  swap_percent: number;
+  disks: Array<{ mount_point: string; percent: number }>;
+}
+
+export async function getHardwareUsage(): Promise<HardwareUsage> {
+  return invoke<HardwareUsage>("get_hardware_usage");
+}
+
 /** Read the fan curve as parsed data. */
 export async function getFanCurve(): Promise<FanCurve> {
   return invoke<FanCurve>("get_fan_curve");
