@@ -1,5 +1,6 @@
 import { createTheme, type Theme } from "@mui/material/styles";
 import type { ExtractedPalette } from "./lib/color";
+import { DEFAULT_MOTION_SPEED, UI_MOTION_DURATION, UI_MOTION_EASING } from "./motion";
 
 /**
  * Appearance settings chosen in Settings, layered on top of the wallpaper
@@ -39,6 +40,10 @@ export interface Appearance {
   displayHeight: number;
   /** UI zoom factor (0.5..2), applied to the whole interface. */
   scale: number;
+  /** Transition speed percentage; higher values make transitions faster. */
+  animationSpeed: number;
+  /** Whether page and settings transitions are enabled. */
+  animationsEnabled: boolean;
 }
 
 export type AspectRatio = "16:9" | "16:10";
@@ -117,6 +122,8 @@ export const DEFAULT_APPEARANCE: Appearance = {
   displayWidth: DESIGN_WIDTH,
   displayHeight: DESIGN_HEIGHT,
   scale: 100,
+  animationSpeed: DEFAULT_MOTION_SPEED,
+  animationsEnabled: true,
 };
 
 /**
@@ -281,7 +288,9 @@ export function buildTheme(
     },
     components: {
       MuiCssBaseline: {
-        styleOverrides: { body: { transition: "background-color 500ms ease" } },
+        styleOverrides: {
+          body: { transition: appearance.animationsEnabled ? "background-color 500ms ease" : "none" },
+        },
       },
       MuiCard: {
         defaultProps: { elevation: 0 },
@@ -297,13 +306,22 @@ export function buildTheme(
                 : "0 10px 30px rgba(0,0,0,0.12)",
             isolation: "isolate",
             transform: "translateZ(0)",
-            transition: "border-color 500ms ease, background-color 500ms ease",
+            transition: appearance.animationsEnabled
+              ? "border-color 500ms ease, background-color 500ms ease"
+              : "none",
           },
         },
       },
       MuiButton: {
         defaultProps: { disableElevation: true },
-        styleOverrides: { root: { borderRadius: 6, transition: "all 300ms ease" } },
+        styleOverrides: {
+          root: {
+            borderRadius: 6,
+            transition: appearance.animationsEnabled
+              ? `all ${UI_MOTION_DURATION}ms ${UI_MOTION_EASING}`
+              : "none",
+          },
+        },
       },
       MuiTooltip: {
         styleOverrides: {
@@ -358,7 +376,9 @@ export function glassSx(
         : "0 10px 30px rgba(0,0,0,0.12)",
     isolation: "isolate",
     transform: "translateZ(0)",
-    transition: "border-color 500ms ease, background-color 500ms ease",
+    transition: appearance.animationsEnabled
+      ? "border-color 500ms ease, background-color 500ms ease"
+      : "none",
   } as const;
 }
 

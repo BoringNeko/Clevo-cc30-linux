@@ -9,6 +9,7 @@ import {
   type Appearance,
   type AspectRatio,
 } from "../theme";
+import { MOTION_SPEED_MAX, MOTION_SPEED_MIN } from "../motion";
 
 /**
  * Whether to use the frosted-glass blur.
@@ -157,6 +158,14 @@ export function readAppearance(): Appearance {
     const blurPx = typeof parsed.blurPx === "number" ? parsed.blurPx : DEFAULT_APPEARANCE.blurPx;
     const opacity = typeof parsed.opacity === "number" ? parsed.opacity : null;
     const scale = typeof parsed.scale === "number" ? parsed.scale : DEFAULT_APPEARANCE.scale;
+    const animationSpeed =
+      typeof parsed.animationSpeed === "number"
+        ? parsed.animationSpeed
+        : DEFAULT_APPEARANCE.animationSpeed;
+    const animationsEnabled =
+      typeof parsed.animationsEnabled === "boolean"
+        ? parsed.animationsEnabled
+        : DEFAULT_APPEARANCE.animationsEnabled;
     const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
     const aspect: AspectRatio = parsed.aspect === "16:10" ? "16:10" : "16:9";
     // Snap the stored size to a preset of the stored ratio; anything else falls
@@ -184,6 +193,8 @@ export function readAppearance(): Appearance {
       displayWidth,
       displayHeight,
       scale: clamp(scale, SCALE_MIN, SCALE_MAX),
+      animationSpeed: clamp(animationSpeed, MOTION_SPEED_MIN, MOTION_SPEED_MAX),
+      animationsEnabled,
     };
   } catch {
     return DEFAULT_APPEARANCE;

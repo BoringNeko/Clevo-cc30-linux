@@ -47,13 +47,14 @@ describe("design-surface layout", () => {
     expect(AppSource).toContain("designScaleFactor");
   });
 
-  it("the dashboard grid uses fixed rows so it cannot outgrow the surface", () => {
-    // `minmax(0, 1fr)` rather than plain `1fr`: a plain `1fr` row cannot shrink
-    // below its content's intrinsic height, so the two card rows would overflow
-    // the surface and eat the bottom margin.
+  it("the overview left column fills the remaining surface height", () => {
+    // The overview gives its left column a bounded final row so the disk card
+    // can end at the same bottom edge as the sidebar without pushing the page.
     expect(AppSource).toContain(
-      'gridTemplateRows: "minmax(0, 1fr) minmax(0, 1fr)"',
+      'gridTemplateRows: active === "overview" ? "minmax(0, 1fr)" : "max-content max-content"',
     );
+    expect(AppSource).toContain('gridTemplateRows: "max-content max-content minmax(0, 1fr)"');
+    expect(AppSource).toContain('alignItems: "start"');
   });
 
   it("only shows the curve editor in the customize fan mode", () => {

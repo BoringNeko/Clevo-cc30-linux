@@ -15,7 +15,10 @@ export function GlassCard({ children, sx }: GlassCardProps) {
         display: "flex",
         flexDirection: "column",
         p: 2.5,
-        height: "100%",
+        height: "auto",
+        width: "100%",
+        minWidth: 0,
+        boxSizing: "border-box",
         ...sx,
       }}
     >

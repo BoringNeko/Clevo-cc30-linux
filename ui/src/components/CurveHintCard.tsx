@@ -20,8 +20,8 @@ export function CurveHintCard({ palette }: CurveHintCardProps) {
   const accent = rgbString(palette.primary, 0.95);
 
   return (
-    <GlassCard sx={{ gap: 2 }}>
-      <CardHeader icon={<ShowChartIcon sx={{ fontSize: 16 }} />} title="风扇曲线" hint="customize" />
+    <GlassCard sx={{ gap: 2, minHeight: 360 }}>
+      <CardHeader icon={<ShowChartIcon sx={{ fontSize: 16 }} />} title="风扇曲线" />
 
       <Box
         sx={{

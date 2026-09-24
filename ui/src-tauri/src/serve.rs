@@ -120,6 +120,7 @@ fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
     match command {
         "get_fan_snapshot" => ok(commands::get_fan_snapshot()?),
         "poll_fan" => ok(commands::poll_fan()?),
+        "get_hardware_usage" => ok(commands::get_hardware_usage()?),
         "get_fan_curve" => ok(commands::get_fan_curve()?),
         "set_fan_mode" => {
             let mode = str_arg(args, "mode")?;

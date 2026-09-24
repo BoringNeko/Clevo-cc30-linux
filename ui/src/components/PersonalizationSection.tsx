@@ -3,6 +3,8 @@ import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import ButtonGroup from "@mui/material/ButtonGroup";
 import Slider from "@mui/material/Slider";
+import Switch from "@mui/material/Switch";
+import FormControlLabel from "@mui/material/FormControlLabel";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import ImageIcon from "@mui/icons-material/Image";
@@ -11,6 +13,7 @@ import DarkModeIcon from "@mui/icons-material/DarkMode";
 import LightModeIcon from "@mui/icons-material/LightMode";
 import { ColorPicker } from "./ColorPicker";
 import { rgbTupleToHex, type ExtractedPalette } from "../lib/color";
+import { DEFAULT_MOTION_SPEED, MOTION_SPEED_MAX, MOTION_SPEED_MIN } from "../motion";
 import type { Appearance } from "../theme";
 
 interface PersonalizationSectionProps {
@@ -237,6 +240,50 @@ export function PersonalizationSection({
       </Row>
 
       <Row
+        title="动画"
+        description="关闭页面和设置切换动画，卡片内容会直接切换。"
+      >
+        <FormControlLabel
+          control={
+            <Switch
+              checked={appearance.animationsEnabled}
+              onChange={(e) => onAppearanceChange({ animationsEnabled: e.target.checked })}
+            />
+          }
+          label={appearance.animationsEnabled ? "开" : "关"}
+          sx={{ "& .MuiFormControlLabel-label": { fontSize: "0.75rem", color: "text.secondary" } }}
+        />
+      </Row>
+
+      <Row
+        title="动画速度"
+        description={`页面和设置切换的动画速度（${MOTION_SPEED_MIN}%–${MOTION_SPEED_MAX}%）。数值越高切换越快。`}
+      >
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, width: 220 }}>
+          <Slider
+            aria-label="动画速度"
+            min={MOTION_SPEED_MIN}
+            max={MOTION_SPEED_MAX}
+            step={10}
+            value={appearance.animationSpeed}
+            onChange={(_, v) => onAppearanceChange({ animationSpeed: v as number })}
+            sx={{ color: "primary.main", "& .MuiSlider-thumb": { width: 14, height: 14, borderRadius: 0.75 } }}
+          />
+          <Typography sx={{ fontSize: "0.75rem", width: 44, color: "text.secondary", fontVariantNumeric: "tabular-nums" }}>
+            {appearance.animationSpeed}%
+          </Typography>
+          <Button
+            onClick={() => onAppearanceChange({ animationSpeed: DEFAULT_MOTION_SPEED })}
+            disabled={appearance.animationSpeed === DEFAULT_MOTION_SPEED}
+            size="small"
+            sx={{ minWidth: 0, fontSize: "0.6875rem", color: appearance.animationSpeed === DEFAULT_MOTION_SPEED ? "text.disabled" : "text.secondary" }}
+          >
+            默认
+          </Button>
+        </Box>
+      </Row>
+
+      <Row
         title="文字颜色"
         description="界面文字颜色。默认随主题模式。"
       >
@@ -308,33 +355,6 @@ export function PersonalizationSection({
         </Box>
       </Row>
 
-      <Box sx={{ mt: 1.5 }}>
-        <Typography
-          sx={{
-            fontSize: "0.625rem",
-            textTransform: "uppercase",
-            letterSpacing: "0.12em",
-            color: "text.secondary",
-            mb: 0.75,
-          }}
-        >
-          当前强调色
-        </Typography>
-        <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
-          <Box
-            sx={{
-              width: 40,
-              height: 28,
-              borderRadius: 1,
-              border: "1px solid rgba(127,127,127,0.4)",
-              backgroundColor: appearance.accent ?? rgbToHex(palette.primary),
-            }}
-          />
-          <Typography sx={{ fontSize: "0.6875rem", color: "text.secondary" }}>
-            {appearance.accent ?? `${rgbToHex(palette.primary)}（来自壁纸）`}
-          </Typography>
-        </Box>
-      </Box>
     </Box>
   );
 }

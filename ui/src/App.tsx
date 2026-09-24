@@ -6,16 +6,20 @@ import Typography from "@mui/material/Typography";
 import { ThemeProvider } from "@mui/material/styles";
 import {
   getFanCurve,
+  getHardwareUsage,
   getFanSnapshot,
   isCustomizeMode,
   pollFan,
   type FanCurve,
   type FanSnapshot,
+  type HardwareUsage,
 } from "./api/daemon";
 import { Sidebar } from "./components/Sidebar";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { WindowControls } from "./components/WindowControls";
 import { FansCard } from "./components/FansCard";
+import { DiskUsageCard, ResourceUsageCard } from "./components/ResourceUsageCard";
+import { FanModeCard } from "./components/FanModeCard";
 import { PerformanceCard } from "./components/PerformanceCard";
 import { CurveCard } from "./components/CurveCard";
 import { CurveHintCard } from "./components/CurveHintCard";
@@ -33,6 +37,7 @@ import {
   type CompatibilityPrefs,
 } from "./hooks/useAppSettings";
 import { cssTriplet, withAccent } from "./lib/color";
+import { enterAnimation } from "./motion";
 import { buildTheme, glassSx } from "./theme";
 
 const POLL_INTERVAL_MS = 2000;
@@ -109,9 +114,10 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const [snapshot, setSnapshot] = useState<FanSnapshot | null>(null);
+  const [hardwareUsage, setHardwareUsage] = useState<HardwareUsage | null>(null);
   const [curve, setCurve] = useState<FanCurve | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [active, setActive] = useState<string>("overview");
+  const [active, setActive] = useState<"overview" | "fans">("overview");
   const [cpuHistory, setCpuHistory] = useState<number[]>([]);
   const [gpuHistory, setGpuHistory] = useState<number[]>([]);
   const timer = useRef<number | null>(null);
@@ -124,7 +130,9 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     try {
-      applySnapshot(await pollFan());
+      const [snap, usage] = await Promise.all([pollFan(), getHardwareUsage()]);
+      applySnapshot(snap);
+      setHardwareUsage(usage);
       setError(null);
     } catch (e) {
       setError(String(e));
@@ -136,10 +144,11 @@ export default function App() {
     let cancelled = false;
     (async () => {
       try {
-        const [snap, cv] = await Promise.all([getFanSnapshot(), getFanCurve()]);
+        const [snap, cv, usage] = await Promise.all([getFanSnapshot(), getFanCurve(), getHardwareUsage()]);
         if (cancelled) return;
         applySnapshot(snap);
         setCurve(cv);
+        setHardwareUsage(usage);
         setError(null);
         await pollFan()
           .then((fresh) => !cancelled && applySnapshot(fresh))
@@ -178,27 +187,8 @@ export default function App() {
     };
   }, [refresh]);
 
-  // Sync the sidebar highlight with the section in view.
-  useEffect(() => {
-    const ids = ["overview", "fans", "performance", "curve"];
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (entry.isIntersecting) setActive(entry.target.id);
-        }
-      },
-      { rootMargin: "-40% 0px -55% 0px" },
-    );
-    for (const id of ids) {
-      const el = document.getElementById(id);
-      if (el) observer.observe(el);
-    }
-    return () => observer.disconnect();
-  }, []);
-
   const navigate = (id: string) => {
-    setActive(id);
-    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (id === "overview" || id === "fans") setActive(id);
   };
 
   return (
@@ -286,21 +276,22 @@ export default function App() {
                 display: "flex",
                 flexDirection: "column",
                 gap: 2,
+                borderRadius: 1,
+                overflow: "hidden",
                 // No scrolling: the design surface is a fixed 1600x900 and the
                 // content fits inside it. `overflow: auto` would show a
                 // scrollbar for a 1-2 px rounding overflow.
-                overflow: "hidden",
               }}
             >
             <Box
               component="header"
-              id="overview"
               data-tauri-drag-region
               sx={{
                 ...glassSx(blurEnabled, appearance),
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "space-between",
+                WebkitAppRegion: "drag",
                 // Symmetric with the surface padding below and the sidebar, so
                 // the visible top gap matches the left/right/bottom gaps.
                 p: 2,
@@ -310,7 +301,7 @@ export default function App() {
                 data-tauri-drag-region
                 sx={{ fontSize: "1rem", fontWeight: 600, color: "text.primary" }}
               >
-                系统概览
+                {active === "overview" ? "系统概览" : "风扇"}
               </Typography>
               <WindowControls />
             </Box>
@@ -322,62 +313,83 @@ export default function App() {
             )}
 
             {snapshot ? (
-              // Two fixed columns: the design surface is always 1600x900, so
-              // viewport-based breakpoints (lg = 1200px) would wrongly collapse
-              // this grid on a scaled-down window.
-              //
-              // The grid fills the space the header leaves. Its natural height is
-              // ~3 px taller than that, so it is allowed to overflow by that
-              // amount and clipped rather than forcing a scrollbar.
               <Box
+                key={active}
                 sx={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
-                  // Two equal rows filling the available height. `minmax(0, 1fr)`
-                  // lets a row shrink below its content's intrinsic height
-                  // instead of overflowing, which would eat the bottom margin.
-                  gridTemplateRows: "minmax(0, 1fr) minmax(0, 1fr)",
-                  gap: 2,
-                  flex: 1,
-                  minHeight: 0,
-                }}
+                  animation: enterAnimation(appearance.animationSpeed, appearance.animationsEnabled),
+                  willChange: "transform",
+                    display: "grid",
+                    gridTemplateColumns: "1fr 1fr",
+                    gridTemplateRows: active === "overview" ? "minmax(0, 1fr)" : "max-content max-content",
+                    alignItems: "start",
+                    gap: 2,
+                    flex: 1,
+                    minHeight: 0,
+                    height: "100%",
+                  }}
               >
-                <Box id="fans" sx={{ scrollMarginTop: 16, minHeight: 0 }}>
-                  <FansCard palette={accentPalette} snapshot={snapshot} />
-                </Box>
-                <Box id="performance" sx={{ scrollMarginTop: 16, minHeight: 0 }}>
-                  <PerformanceCard
-                    palette={accentPalette}
-                    snapshot={snapshot}
-                    onRefresh={refresh}
-                    onError={setError}
-                  />
-                </Box>
-                <Box id="curve" sx={{ scrollMarginTop: 16, minHeight: 0 }}>
-                  {!isCustomizeMode(snapshot.fan_mode) ? (
-                    <CurveHintCard palette={accentPalette} />
-                  ) : curve ? (
-                    <CurveCard
-                      palette={accentPalette}
-                      curve={curve}
-                      writable={snapshot?.curve_writable ?? false}
-                      onApplied={refreshCurve}
-                      temps={{
-                        cpu: snapshot.cpu.temp_c ?? undefined,
-                        gpu1: snapshot.gpu1.temp_c ?? undefined,
-                      }}
-                    />
+                {active === "overview" ? (
+                    <>
+                      <Box sx={{ display: "grid", gridTemplateRows: "max-content max-content minmax(0, 1fr)", gap: 2, minHeight: 0, minWidth: 0, width: "100%", height: "100%" }}>
+                        <FansCard palette={accentPalette} snapshot={snapshot} usage={hardwareUsage} />
+                        <ResourceUsageCard
+                          palette={accentPalette}
+                          memoryPercent={hardwareUsage?.memory_percent ?? null}
+                          swapPercent={hardwareUsage?.swap_percent ?? null}
+                        />
+                        <DiskUsageCard
+                          palette={accentPalette}
+                          disks={hardwareUsage?.disks ?? null}
+                        />
+                      </Box>
+                      <Box sx={{ minHeight: 0, minWidth: 0, width: "100%" }}>
+                        <PerformanceCard
+                          palette={accentPalette}
+                          snapshot={snapshot}
+                          onRefresh={refresh}
+                          onError={setError}
+                        />
+                      </Box>
+                    </>
                   ) : (
-                    <Typography sx={{ color: "text.disabled", fontSize: "0.75rem" }}>
-                      风扇曲线不可用
-                    </Typography>
+                    <>
+                      <Box sx={{ gridColumn: 1, gridRow: 1, minHeight: 0, minWidth: 0, width: "100%" }}>
+                        <FanModeCard
+                          palette={accentPalette}
+                          snapshot={snapshot}
+                          onRefresh={refresh}
+                          onError={setError}
+                        />
+                      </Box>
+                      <Box sx={{ gridColumn: 2, gridRow: "1 / span 2", minHeight: 0, minWidth: 0, width: "100%" }}>
+                        {!isCustomizeMode(snapshot.fan_mode) ? (
+                          <CurveHintCard palette={accentPalette} />
+                        ) : curve ? (
+                          <CurveCard
+                            palette={accentPalette}
+                            curve={curve}
+                            writable={snapshot.curve_writable}
+                            onApplied={refreshCurve}
+                            temps={{
+                              cpu: snapshot.cpu.temp_c ?? undefined,
+                              gpu1: snapshot.gpu1.temp_c ?? undefined,
+                            }}
+                          />
+                        ) : (
+                          <Typography sx={{ color: "text.disabled", fontSize: "0.75rem" }}>
+                            风扇曲线不可用
+                          </Typography>
+                        )}
+                      </Box>
+                      <Box sx={{ gridColumn: 1, gridRow: 2, minHeight: 0, minWidth: 0, width: "100%" }}>
+                        <TelemetryCard
+                          palette={accentPalette}
+                          cpuHistory={cpuHistory}
+                          gpuHistory={gpuHistory}
+                        />
+                      </Box>
+                    </>
                   )}
-                </Box>
-                <TelemetryCard
-                  palette={accentPalette}
-                  cpuHistory={cpuHistory}
-                  gpuHistory={gpuHistory}
-                />
               </Box>
             ) : (
               <Typography data-testid="loading" sx={{ color: "text.disabled" }}>

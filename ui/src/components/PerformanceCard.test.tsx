@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { useState } from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { PerformanceCard, isFullWidthMode } from "./PerformanceCard";
+import { FanModeCard, isFullWidthMode } from "./FanModeCard";
 import { CurveCard } from "./CurveCard";
 import { CurveHintCard } from "./CurveHintCard";
 import {
@@ -92,7 +92,7 @@ function Dashboard({ initialMode }: { initialMode: number }) {
   };
   return (
     <>
-      <PerformanceCard
+      <FanModeCard
         palette={palette}
         snapshot={snapshot(fanMode)}
         onRefresh={() => applyMode(reported)}

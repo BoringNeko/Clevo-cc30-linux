@@ -28,6 +28,11 @@ pub fn poll_fan() -> Result<FanSnapshot, String> {
     client.snapshot().map_err(|e| e.message)
 }
 
+/// Read host CPU/GPU utilisation and the latest daemon temperatures.
+pub fn get_hardware_usage() -> Result<crate::usage::HardwareUsage, String> {
+    crate::usage::read()
+}
+
 /// Return the parsed fan curve.
 pub fn get_fan_curve() -> Result<FanCurve, String> {
     client()?.curve().map_err(|e| e.message)
@@ -181,6 +186,11 @@ pub mod tauri_commands {
     #[tauri::command]
     pub fn poll_fan() -> Result<FanSnapshot, String> {
         super::poll_fan()
+    }
+
+    #[tauri::command]
+    pub fn get_hardware_usage() -> Result<crate::usage::HardwareUsage, String> {
+        super::get_hardware_usage()
     }
 
     #[tauri::command]

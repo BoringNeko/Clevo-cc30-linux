@@ -39,6 +39,7 @@ describe("PersonalizationSection", () => {
     expect(screen.getByRole("button", { name: "强调色" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "卡片颜色" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "文字颜色" })).toBeTruthy();
+    expect(screen.queryByText("当前强调色")).toBeNull();
     // No native colour input remains.
     expect(document.querySelectorAll('input[type="color"]').length).toBe(0);
   });
@@ -50,6 +51,22 @@ describe("PersonalizationSection", () => {
     fireEvent.click(screen.getByRole("button", { name: "强调色" }));
     fireEvent.change(screen.getByLabelText("十六进制颜色"), { target: { value: "#123456" } });
     expect(changes).toContainEqual({ accent: "#123456" });
+  });
+
+  it("toggles page animations", () => {
+    const changes: Partial<Appearance>[] = [];
+    setup(DEFAULT_APPEARANCE, (p: Partial<Appearance>) => changes.push(p));
+    fireEvent.click(screen.getByRole("switch", { name: "开" }));
+    expect(changes).toContainEqual({ animationsEnabled: false });
+  });
+
+  it("reports the animation speed", () => {
+    const changes: Partial<Appearance>[] = [];
+    setup(DEFAULT_APPEARANCE, (p: Partial<Appearance>) => changes.push(p));
+    fireEvent.change(screen.getByRole("slider", { name: "动画速度" }), {
+      target: { value: "150" },
+    });
+    expect(changes).toContainEqual({ animationSpeed: 150 });
   });
 
   it("resets a colour to default", () => {

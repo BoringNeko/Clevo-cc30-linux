@@ -20,6 +20,7 @@ pub mod dbus;
 pub mod launch_env;
 pub mod prefs;
 pub mod serve;
+pub mod usage;
 
 #[cfg(feature = "tauri-shell")]
 pub mod tray;
@@ -44,6 +45,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::tauri_commands::get_fan_snapshot,
             commands::tauri_commands::poll_fan,
+            commands::tauri_commands::get_hardware_usage,
             commands::tauri_commands::get_fan_curve,
             commands::tauri_commands::set_fan_curve,
             commands::tauri_commands::set_fan_mode,

@@ -96,17 +96,19 @@ export function CircularGauge({
           ) : null}
         </Box>
       </Box>
-      <Typography
-        sx={{
-          fontSize: "0.75rem",
-          fontWeight: 500,
-          textTransform: "uppercase",
-          letterSpacing: "0.12em",
-          color: "text.secondary",
-        }}
-      >
-        {label}
-      </Typography>
+      {label ? (
+        <Typography
+          sx={{
+            fontSize: "0.75rem",
+            fontWeight: 500,
+            textTransform: "uppercase",
+            letterSpacing: "0.12em",
+            color: "text.secondary",
+          }}
+        >
+          {label}
+        </Typography>
+      ) : null}
     </Box>
   );
 }

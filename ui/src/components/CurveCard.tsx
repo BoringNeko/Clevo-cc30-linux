@@ -490,7 +490,7 @@ export function CurveCard({
      * label are live values, and a drag that sweeps across them must keep
      * moving the point rather than start a text selection.
      */
-    <GlassCard sx={{ gap: 1.5, userSelect: "none", WebkitUserSelect: "none" }}>
+    <GlassCard sx={{ gap: 1.5, minHeight: 360, userSelect: "none", WebkitUserSelect: "none" }}>
       <CardHeader
         icon={<ShowChartIcon sx={{ fontSize: 16 }} />}
         title="风扇曲线"
