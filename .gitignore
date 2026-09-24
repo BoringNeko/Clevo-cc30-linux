@@ -18,6 +18,9 @@ Thumbs.db
 # Local ACPI verification dump artifacts (contain machine-identifying data)
 /acpi-verify/
 
+# Local UI notes, deliberately not published.
+/docs/ui.md
+
 # Tauri UI
 /ui/node_modules/
 /ui/dist/
