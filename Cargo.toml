@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/clevo-proto", "crates/clevo-transport", "crates/clevo-cc-cli", "crates/clevod"]
 
 [workspace.package]
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT OR Apache-2.0"

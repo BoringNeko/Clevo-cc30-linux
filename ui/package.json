@@ -1,7 +1,7 @@
 {
   "name": "clevo-cc-ui",
   "private": true,
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Monitor fans and switch fan/performance modes",
   "author": "BoringNeko <noreply@github.com>",
   "homepage": "https://github.com/BoringNeko/Clevo-cc30-linux",

@@ -167,7 +167,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "clevo-cc-cli"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "clap",
  "clevo-proto",
@@ -179,18 +179,18 @@ dependencies = [
 
 [[package]]
 name = "clevo-proto"
-version = "0.1.4"
+version = "0.1.5"
 
 [[package]]
 name = "clevo-transport"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "clevo-proto",
 ]
 
 [[package]]
 name = "clevod"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "async-trait",
  "clap",
