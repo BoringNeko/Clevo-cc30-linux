@@ -126,6 +126,11 @@ fi
 step "Packaging: install.sh activation logic"
 try scripts/tests-install-restart.sh
 
+# An upgrade that leaves the old kernel module loaded keeps the old sysfs shape
+# (fan_curve stays read-only). The installer must reload a stale module.
+step "Packaging: install.sh driver-reload logic"
+try scripts/tests-install-driver-reload.sh
+
 if [ "$WANT_KERNEL" = 1 ]; then
     step "Kernel: build the clevo-cc module (from clean)"
     if [ -d "/lib/modules/$(uname -r)/build" ]; then

@@ -134,6 +134,42 @@ write_file() {
 
 usage() { sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
+# Reload the loaded clevo-cc module when it does not match the installed one.
+#
+# `modprobe` is a no-op for an already-loaded module, so an upgrade used to
+# leave the old code in memory while the new .ko sat on disk. The sysfs
+# attributes kept their old shape - `fan_curve` stayed read-only - and the
+# resulting EACCES looked like a permissions bug rather than a stale module.
+# Compare srcversions and reload on a mismatch. Best effort throughout.
+#
+# SYS_MODULE_DIR is a test seam; production always uses /sys/module.
+reload_driver_if_stale() {
+    local dir="${SYS_MODULE_DIR:-/sys/module}"
+    [[ -e "${dir}/clevo_cc/srcversion" ]] || {
+        # Not loaded: load it now if the firmware device is present.
+        modprobe clevo-cc 2>/dev/null ||
+            warn "clevo-cc built but not loaded (device absent or in use); it will load on reboot"
+        return 0
+    }
+
+    local loaded installed now
+    loaded="$(cat "${dir}/clevo_cc/srcversion" 2>/dev/null || true)"
+    installed="$(modinfo -F srcversion clevo-cc 2>/dev/null || true)"
+    [[ -n "$loaded" && -n "$installed" && "$loaded" != "$installed" ]] || return 0
+
+    warn "clevo-cc is loaded from an older build (${loaded} != ${installed}); reloading"
+    if rmmod clevo_cc 2>/dev/null && modprobe clevo-cc 2>/dev/null; then
+        now="$(cat "${dir}/clevo_cc/srcversion" 2>/dev/null || true)"
+        if [[ "$now" == "$installed" ]]; then
+            log "reloaded clevo-cc (srcversion ${now})"
+        else
+            warn "reloaded clevo-cc but srcversion is ${now}, expected ${installed}"
+        fi
+    else
+        warn "could not reload clevo-cc (in use?); run: sudo rmmod clevo_cc && sudo modprobe clevo-cc"
+    fi
+}
+
 while (( $# )); do
     case "$1" in
         --prefix)     PREFIX="$2"; shift 2 ;;
@@ -166,6 +202,26 @@ if (( WITH_DRIVER )); then
     if ! command -v dkms >/dev/null 2>&1; then
         warn "dkms not found; install it or re-run with --no-driver"
     else
+        # `dkms build` without `-k` targets the *running* kernel. After a kernel
+        # upgrade the old module tree (and its headers) is gone, so the build
+        # fails with a bare "headers cannot be found" error that says nothing
+        # about the real cause: the machine is still on the previous kernel.
+        # Explain it before dkms does.
+        if (( ! DRY_RUN )); then
+            running_rel="$(uname -r)"
+            if [[ ! -e "/lib/modules/${running_rel}/build/Makefile" &&
+                  ! -e "/lib/modules/${running_rel}/source/Makefile" ]]; then
+                warn "no kernel headers for the running kernel ${running_rel}"
+                warn "  dkms builds for the running kernel and will fail"
+                newest_rel="$(find /lib/modules -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort -V | tail -n1)"
+                if [[ -n "$newest_rel" && "$newest_rel" != "$running_rel" ]]; then
+                    warn "  a newer kernel is installed (${newest_rel}); reboot into it and re-run"
+                else
+                    warn "  install the matching headers package (e.g. linux-headers)"
+                fi
+            fi
+        fi
+
         log "installing the kernel driver via DKMS"
         src="/usr/src/clevo-cc-${VERSION}"
         run install -d "${DESTDIR}${src}"
@@ -180,9 +236,11 @@ if (( WITH_DRIVER )); then
             dkms add -m clevo-cc -v "${VERSION}"
             dkms build -m clevo-cc -v "${VERSION}"
             dkms install -m clevo-cc -v "${VERSION}"
-            # Load it now if the firmware device is present (best effort).
-            modprobe clevo-cc 2>/dev/null || \
-                warn "clevo-cc built but not loaded (device absent or in use); it will load on reboot"
+
+            # Make the running module match the one just installed.
+            if [[ -z "$DESTDIR" ]]; then
+                reload_driver_if_stale
+            fi
         fi
     fi
 fi

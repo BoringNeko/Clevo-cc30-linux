@@ -138,12 +138,26 @@ EC 断电即忘（[`hardware-notes.md` §13.3](hardware-notes.md)），是守护
 
 ```bash
 sudo packaging/install.sh            # DKMS 模块 + clevod/clevo-cc + UI
-sudo rmmod clevo_cc && sudo modprobe clevo_cc   # 立即换成新模块
 cat /sys/module/clevo_cc/srcversion  # 与内核目录下的 .ko 比对
 modinfo -F srcversion kernel/clevo-cc/clevo-cc.ko
 ```
 
 两个 `srcversion` 一致即表示加载的是最新构建。
+
+> **`install.sh` 现在会自动重载不匹配的模块。** `modprobe` 对已加载的模块是
+> 空操作，所以升级后曾经出现"磁盘上是新 `.ko`、内存里是旧模块"：`fan_curve`
+> 仍是只读，写入报 `Permission denied`，看起来像权限问题其实是旧代码。安装器会
+> 比对 `srcversion`，不一致时自动 `rmmod` + `modprobe` 并打印 `reloaded
+> clevo-cc`。若模块正在使用导致重载失败，会提示手动执行：
+>
+> ```bash
+> sudo rmmod clevo_cc && sudo modprobe clevo_cc
+> ```
+>
+> **若 DKMS 报"找不到内核头文件"**，通常不是头文件缺失，而是**正在运行的内核
+> 与已安装内核不一致**（内核升级后还没重启，旧内核的模块目录已被删除）。
+> `install.sh` 会先提示 `no kernel headers for the running kernel ...; reboot
+> into it and re-run`。按提示重启后再装即可。
 
 **`install.sh` 会自动重启正在运行的 `clevod`**（打印
 `restarting clevod to pick up the new binary`）。这一点很关键：`systemctl
