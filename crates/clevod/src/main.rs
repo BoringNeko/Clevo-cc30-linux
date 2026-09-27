@@ -101,10 +101,20 @@ async fn main() -> ExitCode {
         }
     };
 
-    let service = Arc::new(clevod::Service::new(transport));
+    // Persist only when the hardware is real. A `--mock` run replays a fixture
+    // and must not write user choices into the live config: they would be
+    // re-applied to the EC by the next real daemon start.
+    let persist_path = if args.mock.is_some() {
+        info!("mock transport: configuration persistence disabled");
+        None
+    } else {
+        Some(args.config.clone())
+    };
+    let service = Arc::new(clevod::Service::new(transport).with_config_path(persist_path));
     info!(
         kind = ?service.kind(),
         writable = service.writable(),
+        config = %args.config.display(),
         "clevod starting"
     );
 

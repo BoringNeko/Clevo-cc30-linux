@@ -116,6 +116,15 @@ clevo-cc --transport dbus fan set-curve --cpu "40,20 60,40 80,70 100,100" --appl
 温度必须严格递增，占空比 `0..100`。写入后会自动切到 `custom` 模式，
 否则固件不会使用新曲线。想恢复自动控制：`clevo-cc --transport dbus fan set-mode auto --apply`。
 
+写入成功后，`clevod` 会把风扇模式、性能模式和这条曲线存进
+`/etc/clevo-cc/clevod.toml`，并在下次启动时重放。所以**自定义曲线能跨重启保留**：
+EC 断电即忘（[`hardware-notes.md` §13.3](hardware-notes.md)），是守护进程重新下发
+命令 14 再切回 `custom`。只重启 `clevod` 看不出效果（EC 仍留着曲线），
+要**重启系统**才能验证。
+
+> 注意：命令 14 **不携带第 1 点和第 4 点**（T1/D1、T4/D4 由 EC 保留），
+> 所以写 `40,20 60,40 ...` 后读回，第一个点仍是旧值。只有中间两点会被改。
+
 > **底层语义**（排查时有用）：命令 14 是**整表替换**。内核驱动会先读当前曲线、
 > 只合并你点名的通道，再整份下发，所以只改 CPU 不会碰 GPU。详见
 > [`hardware-notes.md` §7.2](hardware-notes.md)。

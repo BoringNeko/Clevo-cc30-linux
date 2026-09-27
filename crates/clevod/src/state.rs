@@ -139,6 +139,12 @@ pub struct DaemonState {
     pub fan: FanState,
     /// Cached fan curve, if it has ever been read.
     pub curve: Option<FanCurveInfo>,
+    /// User-saved curve used for local persistence.
+    ///
+    /// This is kept separate from [`Self::curve`]: the latter is the latest
+    /// curve read from the EC, while this value is the curve the user asked
+    /// the daemon to remember across restarts.
+    pub saved_curve: Option<clevo_proto::FanCurve>,
     /// Last fan mode written by the daemon (`121/1`).
     pub fan_mode: Option<u8>,
     /// Last performance mode written by the daemon (`121/25`).

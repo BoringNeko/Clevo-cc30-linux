@@ -721,14 +721,42 @@ mode; `fan_mode` must be set to `custom` afterwards.
   mode; reserved, not exposed. The plain performance modes (0..3) are
   implemented (see §13.1).
 - **Mode persistence** — the driver only sends the EC command; persistence is
-  handled by `clevod` (local TOML), not the kernel.
+  handled by `clevod` (local TOML), not the kernel. `clevod` saves the fan mode,
+  performance mode and the custom curve to its config after every successful
+  write and replays them on startup (see §13.3).
 
-### 13.3 Persistence caveat
+### 13.3 Persistence
 
 The original Control Center persists the fan mode to AppSettings (`SetAPPData`)
 in addition to sending `121/1`. The driver only sends the EC command; on reboot
-the EC returns to its own default. Persisting the mode is planned for `clevod`
-(local TOML + optional EC page), not the kernel driver.
+the EC returns to its own default, so persistence lives in `clevod`, not the
+kernel.
+
+`clevod` writes its versioned TOML file (`/etc/clevo-cc/clevod.toml`, schema v2)
+after every successful `SetFanMode` / `SetPerfMode` / `SetCurve`, and
+`apply_saved` replays them on startup. The saved curve is written **before** the
+`custom` mode is selected, and a curve that fails to write leaves the mode
+unchanged rather than pointing `custom` at an empty table. Startup replay does
+not rewrite the file it just read. Saving merges into the config that was
+loaded, so hand-edited fields (`cpu_tdp_class`, `apply_on_start`) survive.
+
+Because the EC forgets the curve on power loss, this is what makes a custom
+curve survive a reboot: the daemon re-sends command `14` and then `121/1=6`.
+A daemon-only restart hides the problem (the EC still holds the curve); a full
+reboot exercises it.
+
+**Verified on the reference machine (2026-09-27).** After a curve was written and
+the config saved, the machine was powered off. On the next boot, with `clevod`
+not yet running, `fan_curve` read back the factory values (`cpu: 40,63 60,91
+80,135`), confirming the EC does forget across power loss. Starting `clevod`
+rewrote it to the saved curve (`cpu: 40,63 70,64 90,153`), i.e. command `14`
+followed by `custom`, with no `could not re-apply` warning. `perf_mode` was
+verified the same way: the module had reloaded (`perf_mode_set` reset), and the
+daemon still restored `performance`.
+
+Persisting to EC AppSettings (`page 0..7`) instead of, or in addition to, the
+local file remains unimplemented: there is no verified `_DSM` accessor on this
+machine yet (see §11).
 
 ### 13.4 The `fan_curve` text protocol, read vs. write
 

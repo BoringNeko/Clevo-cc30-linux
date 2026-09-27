@@ -10,6 +10,7 @@
 //! * performance mode values are validated to `0..=3`; when a capability bitmap
 //!   is available it is also checked, otherwise the firmware adjudicates.
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -111,6 +112,14 @@ pub struct Service {
     last_perf_mode: AtomicU64,
     /// CPU TDP class used to convert the raw CPU temperature byte.
     tdp_class: clevo_proto::TdpClass,
+    /// Where to persist user choices; `None` disables persistence.
+    config_path: Option<PathBuf>,
+    /// The config as last loaded/seeded, used as the merge base so a save does
+    /// not drop fields this process never touched (`cpu_tdp_class`, ...).
+    baseline: Mutex<config::Config>,
+    /// True while `apply_saved` replays stored values, so those writes do not
+    /// bounce straight back to disk on every startup.
+    applying: std::sync::atomic::AtomicBool,
 }
 
 /// Sentinel for "no mode applied yet" in the atomics above.
@@ -173,7 +182,29 @@ impl Service {
             // No conversion by default: correct on the reference machine and
             // the vendor's own behaviour for an unlisted CPU. Config overrides.
             tdp_class: clevo_proto::TdpClass::Raw,
+            config_path: None,
+            baseline: Mutex::new(config::Config::default()),
+            applying: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// Persist user choices to `path` on every successful write.
+    ///
+    /// The daemon owns persistence (design decision D9): the EC forgets
+    /// everything on reboot, so without this a saved curve and the mode that
+    /// selects it would both be lost. Pass `None` to disable persistence
+    /// (tests, `--mock`).
+    pub fn with_config_path(mut self, path: Option<PathBuf>) -> Self {
+        self.config_path = path;
+        self
+    }
+
+    /// Seed the merge base from the config that was just loaded.
+    ///
+    /// Every save merges the live modes into this value, so fields the daemon
+    /// does not manage (`cpu_tdp_class`, `apply_on_start`, ...) survive.
+    pub fn set_baseline(&self, config: &config::Config) {
+        *self.baseline.lock().unwrap() = config.clone();
     }
 
     /// Replace the clock (used by tests).
@@ -292,9 +323,14 @@ impl Service {
         // that makes the firmware use the table just written.
         const CUSTOM: u8 = 6;
         self.apply(SUB_FAN_MODE, CUSTOM)?;
+        {
+            let mut state = self.state.lock().unwrap();
+            state.fan_mode = Some(CUSTOM);
+            state.saved_curve = Some(*curve);
+        }
         self.last_fan_mode
             .store(u64::from(CUSTOM), Ordering::SeqCst);
-        self.state.lock().unwrap().fan_mode = Some(CUSTOM);
+        self.persist();
         Ok(())
     }
 
@@ -320,6 +356,7 @@ impl Service {
         self.apply(SUB_FAN_MODE, value)?;
         self.last_fan_mode.store(u64::from(value), Ordering::SeqCst);
         self.state.lock().unwrap().fan_mode = Some(value);
+        self.persist();
         Ok(value)
     }
 
@@ -337,6 +374,7 @@ impl Service {
         self.last_perf_mode
             .store(u64::from(value), Ordering::SeqCst);
         self.state.lock().unwrap().perf_mode = Some(value);
+        self.persist();
         Ok(value)
     }
 
@@ -354,14 +392,69 @@ impl Service {
     ///
     /// Failures are non-fatal and reported to the caller for logging.
     pub fn apply_saved(&self, config: &config::Config) -> Vec<String> {
-        let mut failures = Vec::new();
+        // The loaded file becomes the merge base for later saves, so replaying
+        // (and any write that follows) preserves fields we do not manage.
+        self.set_baseline(config);
+
         if !config.apply_on_start || !self.transport.writable() {
-            return failures;
+            return Vec::new();
         }
+
+        // Replaying stored values must not immediately rewrite the file it was
+        // read from; persistence is for user actions, not startup.
+        self.applying.store(true, Ordering::SeqCst);
+        let failures = self.replay_saved(config);
+        self.applying.store(false, Ordering::SeqCst);
+        failures
+    }
+
+    /// The actual replay, with persistence suppressed by the caller.
+    fn replay_saved(&self, config: &config::Config) -> Vec<String> {
+        let mut failures = Vec::new();
+
+        // A persisted curve is only written when it is meant to be active:
+        // `custom` (or no saved mode, where applying the curve implies
+        // `custom`). Normal modes must not rewrite the EC curve on startup.
+        let mut curve_applied = false;
+        let mut curve_invalid = false;
+        if let Some(wire) = config.fan_curve {
+            let curve = wire.to_curve();
+            if let Err(err) = encode_curve(&curve) {
+                curve_invalid = true;
+                failures.push(format!("fan_curve: {err}"));
+            } else {
+                self.state.lock().unwrap().saved_curve = Some(curve);
+                let mode_uses_curve = config.fan_mode.is_none() || config.fan_mode == Some(6);
+                if mode_uses_curve {
+                    match self.set_curve(&curve) {
+                        Ok(()) => curve_applied = true,
+                        Err(err) => failures.push(format!("fan_curve: {err}")),
+                    }
+                }
+            }
+        }
+
         if let Some(value) = config.fan_mode {
             match fan_mode_name(value) {
                 Some(name) => {
-                    if let Err(e) = self.set_fan_mode(name) {
+                    if value == 6 && config.fan_curve.is_some() {
+                        // `set_curve` performs command 14 followed by the
+                        // custom-mode write. Never select custom after a
+                        // failed or invalid curve restore.
+                        if curve_applied {
+                            // Already applied by set_curve.
+                        } else if curve_invalid {
+                            failures.push(
+                                "fan_mode 6: skipped because the saved curve is invalid"
+                                    .to_string(),
+                            );
+                        } else {
+                            failures.push(
+                                "fan_mode 6: skipped because the saved curve could not be written"
+                                    .to_string(),
+                            );
+                        }
+                    } else if let Err(e) = self.set_fan_mode(name) {
                         failures.push(format!("fan_mode {value}: {e}"));
                     }
                 }
@@ -382,13 +475,53 @@ impl Service {
     }
 
     /// Build the config representing the current in-memory modes.
+    ///
+    /// Starts from the loaded baseline so fields this process never manages
+    /// (`cpu_tdp_class`, `apply_on_start`) are preserved, then overlays the
+    /// live modes. Only fields the daemon actually set are overwritten: a mode
+    /// that was never written this session (the `UNSET` sentinel) keeps the
+    /// value from the baseline rather than being cleared.
     pub fn to_config(&self) -> config::Config {
+        let mut config = self.baseline.lock().unwrap().clone();
+
         let fan = self.last_fan_mode.load(Ordering::SeqCst);
+        if fan != UNSET {
+            config.fan_mode = Some(fan as u8);
+        }
+
         let perf = self.last_perf_mode.load(Ordering::SeqCst);
-        config::Config {
-            fan_mode: (fan != UNSET).then_some(fan as u8),
-            perf_mode: (perf != UNSET).then_some(perf as u8),
-            ..config::Config::default()
+        if perf != UNSET {
+            config.perf_mode = Some(perf as u8);
+        }
+
+        let curve = self.state.lock().unwrap().saved_curve;
+        if curve.is_some() {
+            config.fan_curve = curve.as_ref().map(config::FanCurveWire::from_curve);
+        }
+
+        config
+    }
+
+    /// Persist the current configuration, if a path is configured.
+    ///
+    /// Failures are logged, not propagated: persistence must never turn a
+    /// successful hardware write into an error. Called after each successful
+    /// write, and suppressed during startup replay so reading the file does not
+    /// immediately rewrite it.
+    fn persist(&self) {
+        if self.applying.load(Ordering::SeqCst) {
+            return;
+        }
+        let Some(path) = self.config_path.as_deref() else {
+            return;
+        };
+        let config = self.to_config();
+        if let Err(err) = config::save(path, &config) {
+            tracing::warn!(
+                path = %path.display(),
+                %err,
+                "could not persist configuration"
+            );
         }
     }
 }

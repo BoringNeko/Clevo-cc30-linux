@@ -15,10 +15,68 @@
 
 use std::path::{Path, PathBuf};
 
+use clevo_proto::fan_curve::{FanCurve, FanPoint, CURVE_POINTS};
 use serde::{Deserialize, Serialize};
 
 /// Current on-disk schema version.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
+
+/// A fan-curve point in the versioned configuration file.
+///
+/// This is deliberately separate from `clevo-proto` so the protocol crate
+/// remains dependency-free and the TOML schema can evolve independently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FanPointWire {
+    /// Temperature in degrees Celsius.
+    pub temp: u8,
+    /// Fan duty as a percentage (`0..=100`).
+    pub duty_pct: u8,
+}
+
+/// A persisted four-point fan curve.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FanCurveWire {
+    /// CPU fan curve.
+    pub cpu: [FanPointWire; CURVE_POINTS],
+    /// GPU1 fan curve.
+    pub gpu1: [FanPointWire; CURVE_POINTS],
+    /// GPU2 fan curve.
+    pub gpu2: [FanPointWire; CURVE_POINTS],
+}
+
+impl FanCurveWire {
+    /// Convert a protocol curve into its persisted representation.
+    pub fn from_curve(curve: &FanCurve) -> Self {
+        fn points(points: &[FanPoint; CURVE_POINTS]) -> [FanPointWire; CURVE_POINTS] {
+            points.map(|point| FanPointWire {
+                temp: point.temp,
+                duty_pct: point.duty_pct,
+            })
+        }
+
+        Self {
+            cpu: points(&curve.cpu),
+            gpu1: points(&curve.gpu1),
+            gpu2: points(&curve.gpu2),
+        }
+    }
+
+    /// Convert the persisted representation back into a protocol curve.
+    pub fn to_curve(self) -> FanCurve {
+        fn points(points: [FanPointWire; CURVE_POINTS]) -> [FanPoint; CURVE_POINTS] {
+            points.map(|point| FanPoint {
+                temp: point.temp,
+                duty_pct: point.duty_pct,
+            })
+        }
+
+        FanCurve {
+            cpu: points(self.cpu),
+            gpu1: points(self.gpu1),
+            gpu2: points(self.gpu2),
+        }
+    }
+}
 
 /// Persisted settings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,6 +90,9 @@ pub struct Config {
     /// Last performance mode (`121/25` value) chosen by the user.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub perf_mode: Option<u8>,
+    /// Last user-saved custom fan curve.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fan_curve: Option<FanCurveWire>,
     /// TDP class override for the raw CPU temperature byte.
     ///
     /// One of `35W`, `47W`, `65W`, `84W` or `91W`, matching the vendor's
@@ -101,6 +162,7 @@ impl Default for Config {
             schema_version: SCHEMA_VERSION,
             fan_mode: None,
             perf_mode: None,
+            fan_curve: None,
             cpu_tdp_class: None,
             apply_on_start: true,
         }
@@ -143,9 +205,15 @@ impl From<std::io::Error> for ConfigError {
 
 /// Parse config text, rejecting newer schema versions.
 pub fn parse(text: &str) -> Result<Config, ConfigError> {
-    let config: Config = toml::from_str(text).map_err(ConfigError::Parse)?;
+    let mut config: Config = toml::from_str(text).map_err(ConfigError::Parse)?;
     if config.schema_version > SCHEMA_VERSION {
         return Err(ConfigError::UnsupportedVersion(config.schema_version));
+    }
+    // Schema v1 had no curve field. Missing fields already deserialize to
+    // `None`; normalizing the version makes a subsequent save an explicit v2
+    // migration without changing the user's modes.
+    if config.schema_version < SCHEMA_VERSION {
+        config.schema_version = SCHEMA_VERSION;
     }
     Ok(config)
 }
@@ -192,6 +260,20 @@ mod tests {
             schema_version: SCHEMA_VERSION,
             fan_mode: Some(8),
             perf_mode: Some(2),
+            fan_curve: Some(FanCurveWire {
+                cpu: [FanPointWire {
+                    temp: 40,
+                    duty_pct: 25,
+                }; CURVE_POINTS],
+                gpu1: [FanPointWire {
+                    temp: 45,
+                    duty_pct: 30,
+                }; CURVE_POINTS],
+                gpu2: [FanPointWire {
+                    temp: 0,
+                    duty_pct: 0,
+                }; CURVE_POINTS],
+            }),
             cpu_tdp_class: Some("47W".to_string()),
             apply_on_start: true,
         };
@@ -206,6 +288,18 @@ mod tests {
         assert_eq!(parsed, Config::default());
         assert!(parsed.apply_on_start);
         assert!(parsed.fan_mode.is_none());
+        assert!(parsed.fan_curve.is_none());
+    }
+
+    #[test]
+    fn v1_file_is_read_and_upgraded() {
+        let parsed =
+            parse("schema_version = 1\nfan_mode = 8\nperf_mode = 2\napply_on_start = true\n")
+                .unwrap();
+        assert_eq!(parsed.schema_version, SCHEMA_VERSION);
+        assert_eq!(parsed.fan_mode, Some(8));
+        assert_eq!(parsed.perf_mode, Some(2));
+        assert!(parsed.fan_curve.is_none());
     }
 
     #[test]

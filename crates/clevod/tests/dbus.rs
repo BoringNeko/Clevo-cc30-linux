@@ -191,6 +191,46 @@ async fn set_curve_rejects_malformed_curves() {
 }
 
 #[tokio::test]
+async fn set_curve_persists_to_the_config_file() {
+    if no_session_bus() {
+        return;
+    }
+    // The daemon owns persistence: a curve written over D-Bus must land in the
+    // config file so the next daemon start can replay it.
+    let dir = std::env::temp_dir().join(format!("clevod-dbus-persist-{}", std::process::id()));
+    let path = dir.join("clevod.toml");
+    let mock = MockTransport::from_fixture_str(FIXTURE).expect("fixture");
+    let service = Arc::new(Service::new(Box::new(mock)).with_config_path(Some(path.clone())));
+    let _server = zbus::connection::Builder::session()
+        .expect("session bus builder")
+        .name("org.clevo.CC.persist")
+        .expect("valid name")
+        .serve_at(
+            DBUS_PATH,
+            CcDaemon::with_authorizer(service, Arc::new(AllowAll)),
+        )
+        .expect("serve object")
+        .build()
+        .await
+        .expect("server connection");
+    let proxy = proxy("org.clevo.CC.persist").await;
+
+    let curve = r#"{"cpu":[[40,20],[55,40],[75,70],[95,100]],
+                    "gpu1":[[45,25],[60,45],[80,75],[99,100]],
+                    "gpu2":[[0,0],[0,0],[0,0],[0,0]]}"#;
+    proxy
+        .call_method("SetCurve", &(curve,))
+        .await
+        .expect("set curve");
+
+    let saved = clevod::config::load(&path).expect("saved config");
+    assert_eq!(saved.fan_mode, Some(6), "custom mode persisted");
+    assert!(saved.fan_curve.is_some(), "curve persisted");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
 async fn writes_are_denied_without_authorization() {
     if no_session_bus() {
         return;

@@ -63,7 +63,11 @@ interface
 .SH FILES
 .TP
 .I /etc/clevo-cc/clevod.toml
-Versioned daemon configuration; saved modes are re-applied on startup.
+Versioned daemon configuration (schema v2). The fan mode, performance mode and
+the custom fan curve are saved after every successful write and re-applied on
+startup; the curve is written before the
+.BR custom
+mode is selected.
 .SH SEE ALSO
 .BR clevo-cc (1),
 .BR systemctl (1),
