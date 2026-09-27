@@ -1,3 +1,15 @@
+clevo-cc-linux (0.2.0-1) unstable; urgency=medium
+
+  * Persist the fan mode, performance mode and custom fan curve, and replay
+    them on startup, so they survive a reboot (the EC forgets on power loss).
+  * Capture the machine's real factory fan curve on a cold boot and serve it
+    over D-Bus, so "restore default" no longer relies on a hardcoded table.
+  * Fix the installer so an upgrade actually updates: reload a stale kernel
+    module when its srcversion differs, rebuild an out-of-date UI instead of
+    reusing it, and stop a running UI before replacing its files.
+
+ -- BoringNeko <noreply@github.com>  Sun, 27 Sep 2026 00:00:00 +0000
+
 clevo-cc-linux (0.1.5-1) unstable; urgency=medium
 
   * Add the hardware overview cards for CPU/GPU, memory, swap and disk usage.

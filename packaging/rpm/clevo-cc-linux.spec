@@ -122,6 +122,12 @@ dkms install -m clevo-cc -v %{version} >/dev/null 2>&1 || :
 /usr/src/clevo-cc-%{version}
 
 %changelog
+* Sun Sep 27 2026 BoringNeko <noreply@github.com> - 0.2.0-1
+- Persist fan mode, performance mode and custom fan curve across reboots
+- Capture the real factory fan curve on a cold boot (restore-default source)
+- Fix the installer: reload a stale module, rebuild an out-of-date UI, stop a
+  running UI before replacing it
+
 * Thu Sep 24 2026 BoringNeko <noreply@github.com> - 0.1.5-1
 - Add hardware overview cards for CPU/GPU, memory, swap and disk usage
 - Organize the UI into overview and fan pages with configurable transitions
