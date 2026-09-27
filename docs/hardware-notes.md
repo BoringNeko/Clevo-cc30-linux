@@ -732,7 +732,7 @@ in addition to sending `121/1`. The driver only sends the EC command; on reboot
 the EC returns to its own default, so persistence lives in `clevod`, not the
 kernel.
 
-`clevod` writes its versioned TOML file (`/etc/clevo-cc/clevod.toml`, schema v2)
+`clevod` writes its versioned TOML file (`/etc/clevo-cc/clevod.toml`, schema v3)
 after every successful `SetFanMode` / `SetPerfMode` / `SetCurve`, and
 `apply_saved` replays them on startup. The saved curve is written **before** the
 `custom` mode is selected, and a curve that fails to write leaves the mode
@@ -757,6 +757,32 @@ daemon still restored `performance`.
 Persisting to EC AppSettings (`page 0..7`) instead of, or in addition to, the
 local file remains unimplemented: there is no verified `_DSM` accessor on this
 machine yet (see §11).
+
+**Factory-curve snapshot.** The UI's "restore default" needs the curve the
+machine shipped with, and there is no command that restores it once a custom one
+has been written. The daemon captures it opportunistically instead, and the
+`FactoryCurve` D-Bus property serves it (`""` when not captured). The rule is a
+comparison, not a flag:
+
+- On a **cold boot** the EC has forgotten the saved curve and reports the shipped
+  table. It differs from what the config has saved, so it is captured.
+- On a **warm restart** the EC still holds the curve the daemon itself wrote, so
+  what it reports describes the same state as the saved curve. That is not the
+  factory table and is not captured; the default stays unknown rather than being
+  faked.
+
+"Same state" is **not** equality. Command `14` carries only the middle two points
+of each fan, so a genuine read-back after a write keeps the EC's own T1/T4 and
+never equals the saved curve - comparing whole curves would call every warm
+restart a cold boot and record the user's curve as the default. The comparison is
+`FanCurve::same_writable_state`: the middle two points of each channel the write
+touches (a channel whose middle points are both zero is skipped by the write and
+not compared).
+
+Capturing also happens on the way into the first curve write, which covers a
+machine whose config has no curve yet. The read used for the snapshot does not
+populate the `FanCurve` cache, so the property continues to reflect the EC only
+after an explicit `GetCurve`.
 
 ### 13.4 The `fan_curve` text protocol, read vs. write
 

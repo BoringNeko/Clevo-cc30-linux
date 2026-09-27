@@ -38,6 +38,11 @@ pub fn get_fan_curve() -> Result<FanCurve, String> {
     client()?.curve().map_err(|e| e.message)
 }
 
+/// Return the captured factory curve, or `None` when it was never captured.
+pub fn get_factory_curve() -> Result<Option<FanCurve>, String> {
+    client()?.factory_curve().map_err(|e| e.message)
+}
+
 /// Set the fan mode (`auto`/`max`/`maxq`/`quiet`); returns the applied value.
 pub fn set_fan_mode(mode: String) -> Result<u8, String> {
     client()?.set_fan_mode(&mode).map_err(|e| e.message)
@@ -196,6 +201,11 @@ pub mod tauri_commands {
     #[tauri::command]
     pub fn get_fan_curve() -> Result<FanCurve, String> {
         super::get_fan_curve()
+    }
+
+    #[tauri::command]
+    pub fn get_factory_curve() -> Result<Option<FanCurve>, String> {
+        super::get_factory_curve()
     }
 
     #[tauri::command]

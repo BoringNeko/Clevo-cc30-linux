@@ -19,7 +19,7 @@ use clevo_proto::fan_curve::{FanCurve, FanPoint, CURVE_POINTS};
 use serde::{Deserialize, Serialize};
 
 /// Current on-disk schema version.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// A fan-curve point in the versioned configuration file.
 ///
@@ -93,6 +93,13 @@ pub struct Config {
     /// Last user-saved custom fan curve.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fan_curve: Option<FanCurveWire>,
+    /// Snapshot of the EC curve taken before the daemon ever wrote one.
+    ///
+    /// This is what "restore default" loads. It has to be captured on first
+    /// sighting: once the daemon writes a curve, the EC no longer holds the
+    /// factory table, and there is no command that restores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub factory_curve: Option<FanCurveWire>,
     /// TDP class override for the raw CPU temperature byte.
     ///
     /// One of `35W`, `47W`, `65W`, `84W` or `91W`, matching the vendor's
@@ -163,6 +170,7 @@ impl Default for Config {
             fan_mode: None,
             perf_mode: None,
             fan_curve: None,
+            factory_curve: None,
             cpu_tdp_class: None,
             apply_on_start: true,
         }
@@ -274,6 +282,20 @@ mod tests {
                     duty_pct: 0,
                 }; CURVE_POINTS],
             }),
+            factory_curve: Some(FanCurveWire {
+                cpu: [FanPointWire {
+                    temp: 40,
+                    duty_pct: 25,
+                }; CURVE_POINTS],
+                gpu1: [FanPointWire {
+                    temp: 45,
+                    duty_pct: 30,
+                }; CURVE_POINTS],
+                gpu2: [FanPointWire {
+                    temp: 0,
+                    duty_pct: 0,
+                }; CURVE_POINTS],
+            }),
             cpu_tdp_class: Some("47W".to_string()),
             apply_on_start: true,
         };
@@ -300,6 +322,74 @@ mod tests {
         assert_eq!(parsed.fan_mode, Some(8));
         assert_eq!(parsed.perf_mode, Some(2));
         assert!(parsed.fan_curve.is_none());
+        assert!(parsed.factory_curve.is_none());
+    }
+
+    #[test]
+    fn v2_file_is_read_and_upgraded() {
+        // v2 is what shipped before the factory-curve snapshot. Its saved curve
+        // must survive the upgrade; the new field is simply absent (and the
+        // daemon will not guess it, see `capture_factory_curve`).
+        let text = "\
+schema_version = 2
+fan_mode = 6
+apply_on_start = true
+
+[[fan_curve.cpu]]
+temp = 40
+duty_pct = 20
+
+[[fan_curve.cpu]]
+temp = 60
+duty_pct = 40
+
+[[fan_curve.cpu]]
+temp = 80
+duty_pct = 70
+
+[[fan_curve.cpu]]
+temp = 100
+duty_pct = 100
+
+[[fan_curve.gpu1]]
+temp = 40
+duty_pct = 20
+
+[[fan_curve.gpu1]]
+temp = 60
+duty_pct = 40
+
+[[fan_curve.gpu1]]
+temp = 80
+duty_pct = 70
+
+[[fan_curve.gpu1]]
+temp = 99
+duty_pct = 100
+
+[[fan_curve.gpu2]]
+temp = 0
+duty_pct = 0
+
+[[fan_curve.gpu2]]
+temp = 0
+duty_pct = 0
+
+[[fan_curve.gpu2]]
+temp = 0
+duty_pct = 0
+
+[[fan_curve.gpu2]]
+temp = 0
+duty_pct = 0
+";
+        let parsed = parse(text).unwrap();
+        assert_eq!(parsed.schema_version, SCHEMA_VERSION);
+        assert_eq!(parsed.fan_mode, Some(6));
+        let curve = parsed.fan_curve.expect("v2 curve kept");
+        assert_eq!(curve.cpu[1].temp, 60);
+        assert_eq!(curve.cpu[1].duty_pct, 40);
+        assert!(parsed.factory_curve.is_none());
     }
 
     #[test]

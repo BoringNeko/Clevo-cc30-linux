@@ -129,6 +129,18 @@ export async function getFanCurve(): Promise<FanCurve> {
 }
 
 /**
+ * The curve the machine shipped with, captured by the daemon before any write.
+ *
+ * Returns `null` when the daemon never saw it — for example after a config
+ * migrated from a schema that did not store it, or against a daemon too old to
+ * expose it. Callers must show the default as unknown rather than substitute a
+ * hardcoded table, which could differ from what this machine actually shipped.
+ */
+export async function getFactoryCurve(): Promise<FanCurve | null> {
+  return invoke<FanCurve | null>("get_factory_curve");
+}
+
+/**
  * Write a custom fan curve and select the `custom` fan mode.
  *
  * The daemon validates the curve and authorizes the write through PolicyKit;

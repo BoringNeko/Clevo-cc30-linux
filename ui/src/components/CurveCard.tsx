@@ -19,6 +19,14 @@ interface CurveCardProps {
   onApplied?: () => void;
   /** Live temperatures, for the readout above the chart. */
   temps?: Partial<Record<Channel, number>>;
+  /**
+   * The curve the machine shipped with, for 还原默认.
+   *
+   * `null` when the daemon never captured it; the button then reports the
+   * default as unavailable rather than loading a curve that may not match this
+   * machine.
+   */
+  factoryCurve?: FanCurve | null;
 }
 
 /**
@@ -36,37 +44,8 @@ export function isEditablePoint(index: number): boolean {
 }
 
 /**
- * The curve the machine shipped with.
- *
- * Read from the EC before anything was written (see `docs/hardware-notes.md`)
- * and kept here so "还原默认" has something to restore. Duty is a percentage,
- * as everywhere above `clevo-proto`.
+ * The two fans the firmware writes through command 14.
  */
-export const FACTORY_CURVE: FanCurve = {
-  fan_count: 2,
-  init_mode: 0,
-  kb_type: 6,
-  cpu: [
-    { temp: 40, duty_pct: 25 },
-    { temp: 60, duty_pct: 36 },
-    { temp: 80, duty_pct: 53 },
-    { temp: 100, duty_pct: 100 },
-  ],
-  gpu1: [
-    { temp: 40, duty_pct: 25 },
-    { temp: 60, duty_pct: 36 },
-    { temp: 80, duty_pct: 53 },
-    { temp: 99, duty_pct: 100 },
-  ],
-  gpu2: [
-    { temp: 0, duty_pct: 0 },
-    { temp: 0, duty_pct: 0 },
-    { temp: 0, duty_pct: 0 },
-    { temp: 0, duty_pct: 0 },
-  ],
-};
-
-/** The two fans the firmware writes through command 14. */
 type Channel = "cpu" | "gpu1";
 
 const CHANNELS: readonly Channel[] = ["cpu", "gpu1"];
@@ -260,6 +239,7 @@ export function CurveCard({
   writable = false,
   onApplied,
   temps,
+  factoryCurve = null,
 }: CurveCardProps) {
   const colors: Record<Channel, string> = {
     cpu: rgbString(palette.primary),
@@ -473,12 +453,21 @@ export function CurveCard({
    *
    * Nothing is written until 保存配置 is pressed, so this is safe to try: the
    * user can see what the default looks like and still back out with 还原配置.
+   *
+   * The curve comes from the daemon's own snapshot of the EC, not a hardcoded
+   * table: the shipped curve differs between machines, and once a custom curve
+   * has been written the EC no longer holds it.
    */
   const restoreDefault = () => {
+    if (!factoryCurve) {
+      setError("出厂曲线未知，无法还原（守护进程未记录到本机的原始曲线）");
+      setNotice(null);
+      return;
+    }
     setDraft({
       ...draft,
-      cpu: FACTORY_CURVE.cpu.map((p) => ({ ...p })),
-      gpu1: FACTORY_CURVE.gpu1.map((p) => ({ ...p })),
+      cpu: factoryCurve.cpu.map((p) => ({ ...p })),
+      gpu1: factoryCurve.gpu1.map((p) => ({ ...p })),
     });
     setError(null);
     setNotice("已载入出厂默认曲线，按「保存配置」写入");

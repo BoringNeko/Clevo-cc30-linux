@@ -269,6 +269,33 @@ impl FanCurve {
             _ => None,
         }
     }
+
+    /// Whether `other` could be what the EC reports after writing `self`.
+    ///
+    /// Command `14` carries only the middle two points (T2/D2, T3/D3) of each
+    /// fan; T1 and T4 stay with the EC and are never sent. So a read-back after
+    /// writing `self` keeps `self`'s middle points but may carry the EC's own
+    /// T1/T4 - comparing whole curves would call that a difference and misread
+    /// every warm restart as a cold boot.
+    ///
+    /// **Directional:** `self` is the curve that was written (what the config
+    /// saved) and `other` is the EC's read-back. The set of channels the write
+    /// touches comes from `self`: a channel whose middle points are both zero is
+    /// skipped by the write, and `other`'s contents there are irrelevant.
+    pub fn same_writable_state(&self, other: &Self) -> bool {
+        let comparable = |written: &[FanPoint; CURVE_POINTS],
+                          read_back: &[FanPoint; CURVE_POINTS]| {
+            let absent = written[1].temp == 0 && written[2].temp == 0;
+            if absent {
+                // The write leaves this channel alone; nothing to compare.
+                return true;
+            }
+            written[1] == read_back[1] && written[2] == read_back[2]
+        };
+        comparable(&self.cpu, &other.cpu)
+            && comparable(&self.gpu1, &other.gpu1)
+            && comparable(&self.gpu2, &other.gpu2)
+    }
 }
 
 #[cfg(test)]
@@ -609,5 +636,114 @@ mod tests {
         for pct in 0..=100u8 {
             assert!((raw_duty_to_pct(pct_to_raw_duty(pct)) as i32 - i32::from(pct)).abs() <= 1);
         }
+    }
+
+    /// The real warm-restart case: a saved curve written and read back.
+    ///
+    /// Command `14` sends only T2/T3, so the EC's read-back keeps its own T1/T4
+    /// (here the factory `40,25%` / `100,100%`) while the middle two match what
+    /// was saved. An equality check calls these different; doing so would let
+    /// the daemon record a user curve as the factory default.
+    #[test]
+    fn same_writable_state_ignores_the_ec_owned_points() {
+        let saved = FanCurve {
+            cpu: [
+                FanPoint {
+                    temp: 50,
+                    duty_pct: 15,
+                },
+                FanPoint {
+                    temp: 70,
+                    duty_pct: 25,
+                },
+                FanPoint {
+                    temp: 90,
+                    duty_pct: 60,
+                },
+                FanPoint {
+                    temp: 100,
+                    duty_pct: 100,
+                },
+            ],
+            gpu1: [FanPoint {
+                temp: 0,
+                duty_pct: 0,
+            }; CURVE_POINTS],
+            gpu2: [FanPoint {
+                temp: 0,
+                duty_pct: 0,
+            }; CURVE_POINTS],
+        };
+        // The EC's own first/last points differ from the saved curve; the
+        // middle two are what command 14 wrote and are identical.
+        let read_back = FanCurve {
+            cpu: [
+                FanPoint {
+                    temp: 40,
+                    duty_pct: 25,
+                },
+                FanPoint {
+                    temp: 70,
+                    duty_pct: 25,
+                },
+                FanPoint {
+                    temp: 90,
+                    duty_pct: 60,
+                },
+                FanPoint {
+                    temp: 100,
+                    duty_pct: 100,
+                },
+            ],
+            ..saved
+        };
+
+        assert_ne!(saved, read_back, "the full curves differ (T1)");
+        // `saved` is what was written; `read_back` is what the EC reports.
+        assert!(saved.same_writable_state(&read_back));
+    }
+
+    #[test]
+    fn same_writable_state_detects_a_real_difference() {
+        let written = default_curve();
+        let mut read_back = written;
+        read_back.cpu[1].duty_pct = 99;
+        assert!(!written.same_writable_state(&read_back));
+    }
+
+    /// A channel the write skips (both middle temps zero) is not compared.
+    #[test]
+    fn same_writable_state_skips_absent_channels() {
+        // The written curve leaves GPU2 alone (its middle points are zero), so
+        // whatever the EC reports there must not count as a difference.
+        let written = FanCurve {
+            gpu2: [FanPoint {
+                temp: 0,
+                duty_pct: 0,
+            }; CURVE_POINTS],
+            ..default_curve()
+        };
+        let read_back = FanCurve {
+            gpu2: [
+                FanPoint {
+                    temp: 0,
+                    duty_pct: 0,
+                },
+                FanPoint {
+                    temp: 50,
+                    duty_pct: 40,
+                },
+                FanPoint {
+                    temp: 70,
+                    duty_pct: 80,
+                },
+                FanPoint {
+                    temp: 0,
+                    duty_pct: 0,
+                },
+            ],
+            ..written
+        };
+        assert!(written.same_writable_state(&read_back));
     }
 }

@@ -47,6 +47,7 @@ pub fn run() {
             commands::tauri_commands::poll_fan,
             commands::tauri_commands::get_hardware_usage,
             commands::tauri_commands::get_fan_curve,
+            commands::tauri_commands::get_factory_curve,
             commands::tauri_commands::set_fan_curve,
             commands::tauri_commands::set_fan_mode,
             commands::tauri_commands::set_perf_mode,

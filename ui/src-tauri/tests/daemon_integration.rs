@@ -162,3 +162,33 @@ fn curve_round_trips_through_the_daemon() {
         }
     }
 }
+
+/// The factory-curve property is served, and is parsable by the UI.
+///
+/// The UI loads 还原默认 from this instead of a hardcoded table, so a shape it
+/// cannot parse would leave the button broken. The property carries no machine
+/// metadata, so the parser has to accept the point arrays alone.
+#[test]
+fn factory_curve_is_readable_by_the_ui() {
+    if no_session_bus() {
+        return;
+    }
+    start_daemon("org.clevo.CC.factory");
+
+    let client = DaemonClient::session_with_name("org.clevo.CC.factory").expect("client");
+    // Not captured yet on a fresh daemon: that must be a clean `None`, not an
+    // error, so the UI can say "unknown".
+    assert!(client.factory_curve().expect("read factory curve").is_none());
+
+    // A write captures the EC's shipped curve before overwriting it.
+    let curve = client.curve().expect("read curve");
+    let json = clevo_cc_ui::commands::curve_to_json(&curve);
+    client.set_curve(&json).expect("write curve");
+
+    let factory = client
+        .factory_curve()
+        .expect("read factory curve")
+        .expect("captured after a write");
+    assert_eq!(factory.cpu.len(), 4);
+    assert_eq!(factory.gpu1.len(), 4);
+}

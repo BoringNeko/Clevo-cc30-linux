@@ -92,10 +92,17 @@ pub struct FanCurve {
 }
 
 /// The shape of the daemon's `GetCurve` JSON string.
+///
+/// The machine metadata is optional: `GetCurve` includes it, but the
+/// `FactoryCurve` property is only the three point arrays, so those fields
+/// default to `0` there (the UI takes them from the live curve).
 #[derive(Debug, Deserialize)]
 struct CurveJson {
+    #[serde(default)]
     fan_count: u8,
+    #[serde(default)]
     init_mode: u8,
+    #[serde(default)]
     kb_type: u8,
     cpu: Vec<[u8; 2]>,
     gpu1: Vec<[u8; 2]>,
@@ -238,6 +245,26 @@ impl DaemonClient {
                 message: format!("could not decode curve reply: {e}"),
             })?;
         parse_curve_json(&json)
+    }
+
+    /// Read the captured factory curve, or `None` when it was never captured.
+    ///
+    /// The daemon returns an empty string until it has seen the EC's shipped
+    /// curve (which must be before any write). The UI shows "unknown" rather
+    /// than the hardcoded table in that case, because a stale copy could differ
+    /// from what this machine actually shipped with.
+    ///
+    /// A daemon too old to have the property also yields `None`: the feature is
+    /// unavailable, which is exactly what "unknown" means here.
+    pub fn factory_curve(&self) -> Result<Option<FanCurve>, UiError> {
+        let json: String = match self.prop("FactoryCurve") {
+            Ok(json) => json,
+            Err(_) => return Ok(None),
+        };
+        if json.is_empty() {
+            return Ok(None);
+        }
+        parse_curve_json(&json).map(Some)
     }
 }
 

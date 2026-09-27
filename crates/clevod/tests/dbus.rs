@@ -191,6 +191,54 @@ async fn set_curve_rejects_malformed_curves() {
 }
 
 #[tokio::test]
+async fn factory_curve_is_served_and_snapshotted_on_write() {
+    if no_session_bus() {
+        return;
+    }
+    // A daemon that has not been asked for the factory curve yet serves "" (the
+    // UI reads that as "unknown"), and capturing it makes the EC's shipped table
+    // available without writing anything.
+    let mock = MockTransport::from_fixture_str(FIXTURE).expect("fixture");
+    let service = Arc::new(Service::new(Box::new(mock)));
+    let _server = zbus::connection::Builder::session()
+        .expect("session bus builder")
+        .name("org.clevo.CC.factory")
+        .expect("valid name")
+        .serve_at(
+            DBUS_PATH,
+            CcDaemon::with_authorizer(service, Arc::new(AllowAll)),
+        )
+        .expect("serve object")
+        .build()
+        .await
+        .expect("server connection");
+    let proxy = proxy("org.clevo.CC.factory").await;
+
+    let before: String = proxy.get_property("FactoryCurve").await.unwrap();
+    assert!(before.is_empty(), "not captured yet: {before}");
+
+    // Writing a custom curve captures the shipped one first.
+    let curve = r#"{"cpu":[[40,20],[55,40],[75,70],[95,100]],
+                    "gpu1":[[45,25],[60,45],[80,75],[99,100]],
+                    "gpu2":[[0,0],[0,0],[0,0],[0,0]]}"#;
+    proxy
+        .call_method("SetCurve", &(curve,))
+        .await
+        .expect("set curve");
+
+    let factory: String = proxy.get_property("FactoryCurve").await.unwrap();
+    assert!(
+        factory.contains("\"cpu\""),
+        "factory curve must be served after capture: {factory}"
+    );
+    // The snapshot is the EC's table, not the curve that was just written.
+    assert!(
+        !factory.contains("[55,40]"),
+        "the written curve must not be recorded as the factory default: {factory}"
+    );
+}
+
+#[tokio::test]
 async fn set_curve_persists_to_the_config_file() {
     if no_session_bus() {
         return;

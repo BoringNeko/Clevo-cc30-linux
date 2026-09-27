@@ -336,6 +336,20 @@ impl CcDaemon {
     fn curve_writable(&self) -> bool {
         self.service.writable()
     }
+
+    /// The captured factory curve as JSON, or `""` when it was never captured.
+    ///
+    /// This is what "restore default" loads. It is empty when the daemon has
+    /// never seen the EC's shipped curve (for example a config migrated from an
+    /// older schema after a user curve was already written); the UI must then
+    /// report the default as unknown rather than invent one.
+    #[zbus(property)]
+    fn factory_curve(&self) -> String {
+        self.service
+            .factory_curve()
+            .map(|curve| fan_curve_to_json(&curve))
+            .unwrap_or_default()
+    }
 }
 
 fn freshness_str(freshness: crate::state::Freshness) -> String {
@@ -365,5 +379,26 @@ pub fn curve_to_json(info: &clevo_proto::FanCurveInfo) -> String {
         points(&info.curve.cpu),
         points(&info.curve.gpu1),
         points(&info.curve.gpu2),
+    )
+}
+
+/// Render a bare [`clevo_proto::FanCurve`] as JSON (the three point arrays,
+/// without machine metadata).
+///
+/// Used for the captured factory curve, which is stored without `fan_count` /
+/// `kb_type`; the UI's parser fills those in from the live curve.
+pub fn fan_curve_to_json(curve: &clevo_proto::FanCurve) -> String {
+    let points = |points: &[clevo_proto::FanPoint; 4]| {
+        points
+            .iter()
+            .map(|p| format!("[{},{}]", p.temp, p.duty_pct))
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    format!(
+        "{{\"cpu\":[{}],\"gpu1\":[{}],\"gpu2\":[{}]}}",
+        points(&curve.cpu),
+        points(&curve.gpu1),
+        points(&curve.gpu2),
     )
 }

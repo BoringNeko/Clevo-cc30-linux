@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, fireEvent, screen, waitFor } from "@testing-library/react";
 import {
   CurveCard,
-  FACTORY_CURVE,
   curvePath,
   dutyAtTemp,
   isEditablePoint,
@@ -31,6 +30,18 @@ const EDITED = [P(40, 25), P(72, 80), P(80, 53), P(100, 100)];
 
 /** A GPU1 curve that does not coincide with BASE, for unambiguous grabs. */
 const GPU_OTHER = [P(45, 60), P(65, 70), P(85, 82), P(100, 100)];
+
+/**
+ * The factory default the daemon captured, as a fixture.
+ *
+ * The card no longer carries a hardcoded copy: the real curve comes from the
+ * daemon (the shipped table differs per machine, and is gone from the EC once a
+ * custom curve is written), so the tests supply one the same way.
+ */
+const FACTORY = {
+  cpu: BASE,
+  gpu1: [P(40, 25), P(60, 36), P(80, 53), P(99, 100)],
+} as const;
 
 describe("sameCurve", () => {
   it("compares by content, not identity", () => {
@@ -199,9 +210,19 @@ const DEFAULT_RECT = { left: 0, top: 0, width: 700, height: 300 };
 /** Padding, as a percentage of the chart box, that the plot leaves unused. */
 const PAD_PCT = 4;
 
-function setup(curve: FanCurve, rect: { left: number; top: number; width: number; height: number } = DEFAULT_RECT) {
+function setup(
+  curve: FanCurve,
+  rect: { left: number; top: number; width: number; height: number } = DEFAULT_RECT,
+  factoryCurve: FanCurve | null = asCurve([...FACTORY.cpu], [...FACTORY.gpu1]),
+) {
   const view = render(
-    <CurveCard palette={palette} curve={curve} writable onApplied={() => {}} />,
+    <CurveCard
+      palette={palette}
+      curve={curve}
+      factoryCurve={factoryCurve}
+      writable
+      onApplied={() => {}}
+    />,
   );
   // The plot is the positioned box that holds the chart SVG; the pointer maths
   // reads its rectangle, not the SVG's (which stretches to fill it). The card
@@ -681,7 +702,7 @@ describe("CurveCard restore buttons", () => {
     drag(svg, [60, 36], [15, 90]);
 
     fireEvent.click(screen.getByRole("button", { name: /还原默认/ }));
-    // The factory CPU curve, straight from hardware-notes.
+    // The curve the daemon captured, not a hardcoded table.
     expect(pointsOf("CPU")).toEqual([
       "40°C25%",
       "60°C36%",
@@ -701,8 +722,25 @@ describe("CurveCard restore buttons", () => {
 
     await waitFor(() => expect(mockedSetFanCurve).toHaveBeenCalledTimes(1));
     const sent = mockedSetFanCurve.mock.calls[0][0] as FanCurve;
-    expect(sent.cpu).toEqual(FACTORY_CURVE.cpu);
-    expect(sent.gpu1).toEqual(FACTORY_CURVE.gpu1);
+    expect(sent.cpu).toEqual(FACTORY.cpu);
+    expect(sent.gpu1).toEqual(FACTORY.gpu1);
+  });
+
+  it("reports an unknown default instead of loading a guessed curve", () => {
+    // No captured snapshot (for example a config migrated from an older schema
+    // after a custom curve was already written): 还原默认 must say so rather
+    // than load a table that may not match this machine.
+    const { svg } = setup(asCurve(BASE, GPU_OTHER), undefined, null);
+    drag(svg, [60, 36], [72, 80]);
+    const before = pointsOf("CPU");
+    expect(before).toContain("72°C80%");
+
+    fireEvent.click(screen.getByRole("button", { name: /还原默认/ }));
+
+    expect(screen.getByText(/出厂曲线未知/)).toBeInTheDocument();
+    // The draft is untouched, and nothing is written.
+    expect(pointsOf("CPU")).toEqual(before);
+    expect(mockedSetFanCurve).not.toHaveBeenCalled();
   });
 
   it("offers 还原默认 even when nothing has been edited yet", () => {

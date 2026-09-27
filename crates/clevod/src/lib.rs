@@ -62,6 +62,20 @@ mod tests {
         fn calls(&self) -> Vec<RecordedCall> {
             self.calls.lock().unwrap().clone()
         }
+
+        /// The recorded calls that actually change hardware state.
+        ///
+        /// The daemon also *reads* the curve to snapshot the factory table, and
+        /// these tests are about write ordering: filtering to the two write
+        /// commands keeps them asserting the thing they name.
+        fn writes(&self) -> Vec<RecordedCall> {
+            self.calls()
+                .into_iter()
+                .filter(|(command, _)| {
+                    *command == CMD_FAN_CURVE_WRITE.get() || *command == CMD_MAIN.get()
+                })
+                .collect()
+        }
     }
 
     impl Transport for RecordingTransport {
@@ -199,7 +213,7 @@ mod tests {
         };
 
         assert!(service.apply_saved(&config).is_empty());
-        let calls = transport.calls();
+        let calls = transport.writes();
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].0, CMD_FAN_CURVE_WRITE.get());
         assert_eq!(calls[1].0, CMD_MAIN.get());
@@ -218,7 +232,7 @@ mod tests {
         };
 
         assert!(service.apply_saved(&config).is_empty());
-        let calls = transport.calls();
+        let calls = transport.writes();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0, CMD_MAIN.get());
         assert_eq!(calls[0].1[3], SUB_FAN_MODE);
@@ -236,7 +250,7 @@ mod tests {
         };
 
         assert!(service.apply_saved(&config).is_empty());
-        let calls = transport.calls();
+        let calls = transport.writes();
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].0, CMD_FAN_CURVE_WRITE.get());
         assert_eq!(calls[1].0, CMD_MAIN.get());
@@ -257,7 +271,11 @@ mod tests {
         };
 
         let failures = service.apply_saved(&config);
-        assert_eq!(transport.calls().len(), 1);
+        assert_eq!(
+            transport.writes().len(),
+            1,
+            "no custom-mode write after a failed curve"
+        );
         assert!(failures.iter().any(|failure| failure.contains("fan_curve")));
         assert_eq!(service.state().lock().unwrap().fan_mode, None);
     }
@@ -389,5 +407,110 @@ mod tests {
         let service = Service::new(Box::new(transport.clone()));
         assert!(service.set_fan_mode("max").is_ok());
         assert_eq!(service.to_config().fan_mode, Some(1));
+    }
+
+    #[test]
+    fn factory_curve_is_unknown_until_captured() {
+        let service = Service::new(mock(FIXTURE));
+        assert!(service.factory_curve().is_none());
+    }
+
+    #[test]
+    fn capture_records_the_ec_curve_and_persists_it() {
+        let path = temp_config("factory");
+        let service = Service::new(mock(FIXTURE)).with_config_path(Some(path.clone()));
+
+        service.capture_factory_curve();
+
+        let expected = service.read_curve().unwrap().curve;
+        assert_eq!(service.factory_curve(), Some(expected));
+        let saved = config::load(&path).unwrap();
+        assert_eq!(
+            saved.factory_curve.map(|wire| wire.to_curve()),
+            Some(expected),
+            "the snapshot must survive a restart"
+        );
+
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn capture_is_a_no_op_once_recorded() {
+        let path = temp_config("factory-once");
+        let service = Service::new(mock(FIXTURE)).with_config_path(Some(path.clone()));
+
+        service.capture_factory_curve();
+        let first = service.factory_curve();
+        // A second call must not re-read (or overwrite) the stored snapshot.
+        service.capture_factory_curve();
+        assert_eq!(service.factory_curve(), first);
+
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn capture_does_not_mislabel_a_migrated_user_curve_as_factory() {
+        // A warm restart: the EC still holds the curve the daemon last saved, so
+        // what it reports is the user's table, not the shipped one. Capturing it
+        // would put a user curve behind 还原默认, which must not happen.
+        let path = temp_config("factory-migrated");
+        let service = Service::new(mock(FIXTURE)).with_config_path(Some(path.clone()));
+        // The exact curve the fixture EC reports, as if the daemon had written it.
+        let ec_curve = service.read_curve().unwrap().curve;
+        let cfg = config::Config {
+            fan_curve: Some(config::FanCurveWire::from_curve(&ec_curve)),
+            ..config::Config::default()
+        };
+
+        service.apply_saved(&cfg);
+
+        assert!(
+            service.factory_curve().is_none(),
+            "the EC's saved user curve must not be recorded as the factory default"
+        );
+
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn capture_records_the_shipped_curve_after_a_cold_boot() {
+        // A cold boot: the EC forgot the saved curve and reports the shipped
+        // table, which differs from what was saved. That difference is the
+        // signal that the shipped curve is available to capture.
+        let path = temp_config("factory-cold");
+        let service = Service::new(mock(FIXTURE)).with_config_path(Some(path.clone()));
+        let cfg = config::Config {
+            fan_curve: Some(config::FanCurveWire::from_curve(&curve())),
+            ..config::Config::default()
+        };
+
+        service.apply_saved(&cfg);
+
+        let expected = service.read_curve().unwrap().curve;
+        assert_eq!(service.factory_curve(), Some(expected));
+        assert_ne!(
+            service.factory_curve(),
+            Some(curve()),
+            "the saved user curve must not be captured as the default"
+        );
+
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn a_curve_write_captures_the_factory_curve_first() {
+        // On a fresh service the EC still holds the shipped curve; writing a
+        // custom one must snapshot it before overwriting.
+        let path = temp_config("factory-write");
+        let service = Service::new(mock(FIXTURE)).with_config_path(Some(path.clone()));
+
+        service.set_curve(&curve()).unwrap();
+
+        let expected = service.read_curve().unwrap().curve;
+        assert_eq!(service.factory_curve(), Some(expected));
+        // And it is not the curve we just wrote.
+        assert_ne!(service.factory_curve(), Some(curve()));
+
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 }

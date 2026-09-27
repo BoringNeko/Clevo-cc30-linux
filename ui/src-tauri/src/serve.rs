@@ -122,6 +122,7 @@ fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
         "poll_fan" => ok(commands::poll_fan()?),
         "get_hardware_usage" => ok(commands::get_hardware_usage()?),
         "get_fan_curve" => ok(commands::get_fan_curve()?),
+        "get_factory_curve" => ok(commands::get_factory_curve()?),
         "set_fan_mode" => {
             let mode = str_arg(args, "mode")?;
             ok(commands::set_fan_mode(mode)?)

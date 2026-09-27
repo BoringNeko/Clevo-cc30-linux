@@ -296,13 +296,87 @@ impl Service {
 
     /// Read and cache the fan curve.
     pub fn read_curve(&self) -> Result<clevo_proto::FanCurveInfo, ServiceError> {
+        let info = self.read_curve_uncached()?;
+        self.state.lock().unwrap().curve = Some(info);
+        Ok(info)
+    }
+
+    /// Read the fan curve without updating the cached "latest EC curve".
+    ///
+    /// Used by the factory-curve snapshot, which reads the EC before a write:
+    /// caching that value would leave the `FanCurve` property showing the
+    /// pre-write table, which is exactly the stale read-back the property
+    /// deliberately avoids.
+    fn read_curve_uncached(&self) -> Result<clevo_proto::FanCurveInfo, ServiceError> {
         let raw = self
             .transport
             .execute(CMD_FAN_CURVE_READ.get(), &empty_payload())?;
         let payload = response_first_record(&raw)?;
-        let info = parse_curve(payload)?;
-        self.state.lock().unwrap().curve = Some(info);
-        Ok(info)
+        Ok(parse_curve(payload)?)
+    }
+
+    /// The curve the firmware shipped with, if it was captured.
+    ///
+    /// `None` until [`Self::capture_factory_curve`] has run, which is why the
+    /// UI must treat a missing default as "unknown" rather than assume one.
+    pub fn factory_curve(&self) -> Option<FanCurve> {
+        self.baseline
+            .lock()
+            .unwrap()
+            .factory_curve
+            .map(config::FanCurveWire::to_curve)
+    }
+
+    /// Snapshot the EC's current curve as the factory default, when it is one.
+    ///
+    /// The firmware has no command that restores the shipped curve, and the EC
+    /// forgets whatever was written on power loss (see `docs/hardware-notes.md`
+    /// §13.3). So the shipped table is recoverable at every cold boot, from the
+    /// moment the daemon starts until its replay writes the saved curve.
+    ///
+    /// Capturing naively at startup would be wrong on a warm restart: the EC
+    /// then still holds the *user's* curve, which must not be recorded as the
+    /// default. The two are told apart by comparing what the EC reports against
+    /// the saved curve - if they agree on everything command `14` controls, the
+    /// EC is holding the daemon's own write and the shipped table is not
+    /// available this boot; if they differ, the EC forgot it and what it shows
+    /// is the shipped table.
+    ///
+    /// The comparison is [`FanCurve::same_writable_state`], not equality: a
+    /// written curve never reads back identical (T1/T4 stay with the EC, and an
+    /// absent channel is left alone), so equality would misread every warm
+    /// restart as a cold boot.
+    ///
+    /// A no-op once captured, and best-effort: a failed read leaves the default
+    /// unknown, which the UI reports honestly rather than guessing.
+    pub fn capture_factory_curve(&self) {
+        // Cheap check first: once captured, later curve writes must not re-read.
+        if self.baseline.lock().unwrap().factory_curve.is_some() {
+            return;
+        }
+        let saved = self
+            .baseline
+            .lock()
+            .unwrap()
+            .fan_curve
+            .map(|wire| wire.to_curve());
+        let Ok(info) = self.read_curve_uncached() else {
+            return;
+        };
+
+        let mut baseline = self.baseline.lock().unwrap();
+        // Re-check under the lock: a concurrent call may have captured it.
+        if baseline.factory_curve.is_some() {
+            return;
+        }
+        if saved.is_some_and(|saved| saved.same_writable_state(&info.curve)) {
+            // The EC holds the curve the daemon saved, so this is not a cold
+            // boot and the shipped table is gone.
+            return;
+        }
+        baseline.factory_curve = Some(config::FanCurveWire::from_curve(&info.curve));
+        drop(baseline);
+        self.persist();
     }
 
     /// Write a custom fan curve (command `14`) and switch to the `custom` mode.
@@ -316,6 +390,10 @@ impl Service {
         if !self.transport.writable() {
             return Err(ServiceError::NotWritable);
         }
+        // Capture the shipped curve before the first write overwrites it: after
+        // this command the EC no longer holds the factory table, and there is no
+        // command that restores it.
+        self.capture_factory_curve();
         let payload = encode_curve(curve)?;
         self.transport
             .execute(CMD_FAN_CURVE_WRITE.get(), &payload_from_slice(&payload)?)?;
@@ -395,6 +473,14 @@ impl Service {
         // The loaded file becomes the merge base for later saves, so replaying
         // (and any write that follows) preserves fields we do not manage.
         self.set_baseline(config);
+
+        // Capture the shipped curve before the replay can overwrite it. On a
+        // fresh boot the EC holds it; once a curve has been written there is no
+        // command that brings it back. This is a no-op once captured, and when a
+        // user curve is already stored (whose EC contents are not the factory
+        // table). Suppression during replay does not apply here, because
+        // `capture_factory_curve` runs before `applying` is set.
+        self.capture_factory_curve();
 
         if !config.apply_on_start || !self.transport.writable() {
             return Vec::new();

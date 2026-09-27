@@ -6,6 +6,7 @@ import Typography from "@mui/material/Typography";
 import { ThemeProvider } from "@mui/material/styles";
 import {
   getFanCurve,
+  getFactoryCurve,
   getHardwareUsage,
   getFanSnapshot,
   isCustomizeMode,
@@ -116,6 +117,7 @@ export default function App() {
   const [snapshot, setSnapshot] = useState<FanSnapshot | null>(null);
   const [hardwareUsage, setHardwareUsage] = useState<HardwareUsage | null>(null);
   const [curve, setCurve] = useState<FanCurve | null>(null);
+  const [factoryCurve, setFactoryCurve] = useState<FanCurve | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [active, setActive] = useState<"overview" | "fans">("overview");
   const [cpuHistory, setCpuHistory] = useState<number[]>([]);
@@ -144,10 +146,16 @@ export default function App() {
     let cancelled = false;
     (async () => {
       try {
-        const [snap, cv, usage] = await Promise.all([getFanSnapshot(), getFanCurve(), getHardwareUsage()]);
+        const [snap, cv, factory, usage] = await Promise.all([
+          getFanSnapshot(),
+          getFanCurve(),
+          getFactoryCurve(),
+          getHardwareUsage(),
+        ]);
         if (cancelled) return;
         applySnapshot(snap);
         setCurve(cv);
+        setFactoryCurve(factory);
         setHardwareUsage(usage);
         setError(null);
         await pollFan()
@@ -368,6 +376,7 @@ export default function App() {
                           <CurveCard
                             palette={accentPalette}
                             curve={curve}
+                            factoryCurve={factoryCurve}
                             writable={snapshot.curve_writable}
                             onApplied={refreshCurve}
                             temps={{
