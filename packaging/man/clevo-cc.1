@@ -65,6 +65,14 @@ would leave the firmware on its auto curve.
 Only the middle two points of each fan reach the EC; it keeps its own first and
 last point. All four are still required so the curve you send is a complete
 description, and the two that are not written are accepted as given.
+.PP
+A successful write is persisted by
+.BR clevod (8)
+to
+.IR /etc/clevo\-cc/clevod.toml
+and replayed on the next daemon start, so a custom curve survives a reboot. The
+EC forgets it on power loss; the daemon re-sends command 14 and then selects
+.BR custom .
 .SH SAFETY
 Writes need
 .B \-\-apply

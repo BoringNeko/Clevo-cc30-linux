@@ -51,12 +51,20 @@ sudo packaging/install.sh --enable   # 顺带启用并启动 clevod
 --bin-dir DIR    使用 DIR 里预编译好的 clevod/clevo-cc，跳过 cargo 构建
 --no-driver      不装内核驱动（只用只读 acpi_call 回退）
 --no-udev        不装 udev 规则、不建 clevo-cc 组
---ui             安装 Tauri 2 桌面 UI（缺失时构建）
---electron       安装 Electron 桌面 UI（缺失时构建）
+--ui             安装 Tauri 2 桌面 UI（缺失或过期时构建）
+--electron       安装 Electron 桌面 UI（缺失或过期时构建）
 --no-ui-build    配合上面两个，只装已有产物、不构建
 --enable         安装后 systemctl enable --now clevod
 --dry-run        只打印将要执行的操作
 ```
+
+> **`--ui` / `--electron` 会先停掉正在运行的 UI**。`cp` 无法覆盖正在执行的
+> 二进制（报 `文本文件 busy` / `ETXTBSY`），且安装会中途失败。安装器会先关闭
+> 同名 UI 再复制；重开应用即可。
+>
+> **构建判据是"新鲜度"而非"是否存在"**：产物比源码旧时自动重建（前端 `ui/src`、
+> `ui/electron`、`index.html`、`package.json`，以及无壳后端二进制）。改动过 UI
+> 后直接重跑 `install.sh --electron` 即可，不必手动删 `ui/release/`。
 
 > 构建使用**当前用户**的 Rust 工具链（遵循标准的 `CARGO_HOME` / `RUSTUP_HOME`），
 > 不假设任何特定账号。若当前用户没有 Rust，请先自行
@@ -124,6 +132,22 @@ EC 断电即忘（[`hardware-notes.md` §13.3](hardware-notes.md)），是守护
 
 > 注意：命令 14 **不携带第 1 点和第 4 点**（T1/D1、T4/D4 由 EC 保留），
 > 所以写 `40,20 60,40 ...` 后读回，第一个点仍是旧值。只有中间两点会被改。
+
+**出厂曲线（UI 的「还原默认」用它）。** 固件没有"恢复出厂曲线"的命令，EC 一旦
+被写过就再也拿不回原始表，所以 `clevod` 会**在冷启动、任何写入之前**把 EC 里
+的曲线快照下来，存入配置的 `factory_curve`，并通过 D-Bus 属性 `FactoryCurve`
+提供给 UI。
+
+判断"当前 EC 里的曲线是不是出厂表"靠比较，而不是标志位：把 EC 报告的曲线与配置
+里**已保存**的曲线按"命令 14 真正控制的那两点"比较——
+
+- **冷启动**（断电后）：EC 忘了保存的曲线、显示原始表，两者不同 → **捕获**。
+- **热重启**（只重启 `clevod`）：EC 仍持有 daemon 写入的曲线，两者一致 →
+  **不捕获**，UI 显示"出厂曲线未知"，绝不用猜测的表冒充本机默认。
+
+> 想验证：`busctl --system get-property org.clevo.CC /org/clevo/CC org.clevo.CC FactoryCurve`
+> 返回 `""` 表示未知，返回 JSON 则是捕获到的出厂曲线。热重启时它为空是正确的；
+> **关机再开机**后应变为本机真实出厂表。捕获机会每次冷启动只有一次。
 
 > **底层语义**（排查时有用）：命令 14 是**整表替换**。内核驱动会先读当前曲线、
 > 只合并你点名的通道，再整份下发，所以只改 CPU 不会碰 GPU。详见
@@ -265,11 +289,19 @@ cd .. && sudo packaging/install.sh --ui
 # 需要 Node + pnpm；首次会下载 Electron 运行时
 cd ui && pnpm install
 
-# 安装（缺产物会先构建：无壳后端 + 前端 + electron-builder --dir）
+# 安装（产物缺失或过期时先构建：无壳后端 + 前端 + electron-builder --dir）
 cd .. && sudo packaging/install.sh --electron
 ```
 
 Electron 版与 Tauri 版可**同时安装**，二进制名、桌面项、图标互不冲突。
+
+> **重复安装是安全的**：安装器会比较 `ui/release/linux-unpacked` 与前端源码
+> （`ui/src`、`ui/electron`、`index.html`、`package.json`）及无壳后端的时间，
+> 只在过期时重建；否则打印 `reusing the existing Electron build`。
+>
+> **应用正在运行时也能装**：安装器会先关掉它（否则 `cp` 覆盖正在执行的二进制
+> 会报 `文本文件 busy`），装完重开即可。Tauri 与 Electron 的匹配模式是分开的，
+> 装其中一个不会波及另一个。
 
 ### 分辨率的处理方式
 
@@ -453,6 +485,15 @@ cargo test --workspace                            # 无 session bus 时 D-Bus �
 cd ui && pnpm test && pnpm typecheck
 cd ui/src-tauri && cargo test
 make -C kernel/clevo-cc                            # 需内核 headers
+```
+
+安装器逻辑有一组**离线**回归脚本（不需要 root、不碰系统），`run-tests.sh` 会
+一并运行：
+
+```bash
+scripts/tests-install-restart.sh        # 覆盖安装时必须重启运行中的 clevod
+scripts/tests-install-driver-reload.sh  # srcversion 不匹配时重载旧模块
+scripts/tests-install-ui-replace.sh     # 覆盖前停掉运行中的 UI；陈旧构建要重建
 ```
 
 > Rust 与 UI 测试全部基于手写 fixture，**不会碰硬件**。`dbus-run-session`

@@ -60,6 +60,19 @@ object
 .BR /org/clevo/CC ,
 interface
 .BR org.clevo.CC .
+.PP
+Curve methods:
+.B GetCurve
+returns the current curve as JSON,
+.B SetCurve
+writes one (command 14) and selects
+.BR custom .
+The
+.B FactoryCurve
+property returns the curve the machine shipped with, or an empty string when it
+has not been captured. It is captured from the EC on a cold boot, before any
+write, because the firmware cannot restore it afterwards; a warm restart (where
+the EC still holds the daemon's own curve) is deliberately not captured.
 .SH FILES
 .TP
 .I /etc/clevo-cc/clevod.toml

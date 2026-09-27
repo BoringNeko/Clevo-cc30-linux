@@ -167,6 +167,15 @@ sudo packaging/install.sh --ui --electron       # 两个都装
 sudo packaging/uninstall.sh                     # 全部回滚
 ```
 
+`--electron` 会先停掉正在运行的 Electron 应用再复制：`cp` 无法覆盖正在执行的
+二进制（`ETXTBSY`），否则安装会在应用树复制到一半时失败。装完重开应用即可。
+
+构建判据是**新鲜度**：`ui/release/linux-unpacked` 比前端源码（`ui/src`、
+`ui/electron`、`index.html`、`package.json`）或无壳后端旧时会自动重建
+（`pnpm build` + `electron-builder --linux dir`），否则打印
+`reusing the existing Electron build`。改动过 UI 后直接重跑即可，不必手动删
+`ui/release/`。
+
 Electron 版安装到：
 - `/usr/bin/clevo-cc-ui-electron`（启动器）
 - `/usr/lib/clevo-cc-ui-electron/`（Electron 应用树）

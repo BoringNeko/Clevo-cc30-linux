@@ -23,8 +23,8 @@
 #   --bin-dir DIR    install prebuilt clevod/clevo-cc from DIR instead of building
 #   --no-driver      skip the kernel driver
 #   --no-udev        skip the udev rule and group
-#   --ui             install the Tauri 2 desktop UI (build it first if missing)
-#   --electron       install the Electron desktop UI (build it first if missing)
+#   --ui             install the Tauri 2 desktop UI (build it if missing or stale)
+#   --electron       install the Electron desktop UI (build it if missing or stale)
 #   --no-ui-build    with --ui/--electron, install an existing build without building
 #   --enable         enable + start clevod after installing
 #   --dry-run        print actions without changing anything

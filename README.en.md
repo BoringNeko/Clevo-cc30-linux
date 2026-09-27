@@ -28,6 +28,13 @@ UI added.
 - **Daemon**: `clevod` is the only long-lived process that touches the hardware.
   It serves `org.clevo.CC` on the system D-Bus, caches readings and persists
   choices.
+- **Survives a reboot**: after every successful write, `clevod` stores the fan
+  mode, performance mode and custom curve in `/etc/clevo-cc/clevod.toml` and
+  replays them on startup (the EC forgets on power loss; the curve is written
+  before `custom` is selected). "Restore default" uses the machine's **real
+  factory curve**, snapshotted from the EC on a cold boot before anything was
+  written — not a hardcoded table — and a warm restart is never mistaken for a
+  cold one.
 - **Desktop UI**: a React frontend that runs under either **Tauri 2** (default)
   or **Electron**, talking only over D-Bus; glass dashboard, custom title bar, an
   editable fan curve, light/dark themes, custom accent colour/logo/wallpaper, a
@@ -40,7 +47,7 @@ UI added.
 - **Safe by default**: writes are off by default; the `acpi_call` transport is
   read-only; unverified firmware constants are clearly marked.
 - **Offline-testable**: no hardware required, everything is tested against
-  hand-written fixtures (166 Rust + 28 UI-backend + 182 frontend tests).
+  hand-written fixtures (190 Rust + 40 UI-backend + 191 frontend tests).
 
 > Fan control (speed, temperature, curve read/write, fan and performance modes)
 > has been verified item by item on real hardware; the record is in
