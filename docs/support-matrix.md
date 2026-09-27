@@ -187,10 +187,10 @@ Electron 壳自带 Chromium，**不依赖 webkit2gtk**，因此更适合 WebKitG
       支持 `--dry-run`/`--purge`）。
 - [x] **Arch/CachyOS**：`packaging/arch/PKGBUILD` + `clevo-cc-linux.install`。
 - [x] **Debian/Ubuntu**：`packaging/debian/`（debhelper + `dh-sequence-dkms`，拆三个子包）。
+- [x] **Fedora/openSUSE**：`packaging/rpm/clevo-cc-linux.spec`（`packaging/build-packages.sh rpm`）。
 - [x] **udev 规则**：`packaging/udev/99-clevo-cc.rules`（`clevo-cc` 组，可选）。
 - [x] **文档**：`docs/install.md`（安装/升级/卸载/排障）。
 
-尚未做：
+尚未做（二期）：
 
-- [ ] rpm（Fedora/openSUSE）打包；可先用 `install.sh`。
 - [ ] 其他机型（C 级）的 DSDT 校对流程文档化。
