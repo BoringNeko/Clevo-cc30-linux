@@ -21,6 +21,9 @@ Thumbs.db
 # Local UI notes, deliberately not published.
 /docs/ui.md
 
+# Local phase-2 planning notes, deliberately not published.
+/docs/roadmap.md
+
 # Tauri UI
 /ui/node_modules/
 /ui/dist/
