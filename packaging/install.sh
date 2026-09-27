@@ -88,6 +88,28 @@ else
     RUSTUP_HOME_DIR="${HOME}/.rustup"
 fi
 
+# Stop a running desktop UI so its files can be replaced.
+#
+# `cp` cannot overwrite a binary that is currently executing: the write fails
+# with ETXTBSY ("text file busy"), and the install aborts partway through the
+# tree. Close the app instead of leaving a half-installed UI. `pkill` matches the
+# launcher name we install; the Electron backend child and its zygotes share the
+# path prefix and exit with the main process. Best effort: no process is fine.
+stop_running_ui() {
+    local pattern="$1" label="$2"
+    if ! pgrep -f "$pattern" >/dev/null 2>&1; then
+        return 0
+    fi
+    log "stopping the running $label so it can be replaced"
+    pkill -f "$pattern" 2>/dev/null || true
+    # Give it a moment to release the binaries before the copy.
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        pgrep -f "$pattern" >/dev/null 2>&1 || return 0
+        sleep 0.2
+    done
+    warn "$label is still running; the copy may fail with 'text file busy'"
+}
+
 find_cargo() {
     if command -v cargo >/dev/null 2>&1; then
         command -v cargo
@@ -396,11 +418,24 @@ ui_pnpm() {
 
 install_tauri_ui() {
     local ui_bin="${REPO_ROOT}/ui/src-tauri/target/release/clevo-cc-ui"
-    if [[ ! -x "$ui_bin" && "$UI_BUILD" == "1" ]]; then
-        log "building the Tauri desktop UI (pnpm tauri build)"
-        if (( DRY_RUN )); then
-            printf '  [dry-run] pnpm install && pnpm tauri build (in ui/)\n'
-        else
+    if [[ "$UI_BUILD" != "1" ]]; then
+        :
+    elif (( DRY_RUN )); then
+        printf '  [dry-run] pnpm install && pnpm tauri build (in ui/)\n'
+    else
+        # Rebuild when the binary is absent or older than its sources, so a
+        # backend/frontend change is not silently skipped (the old `! -x` guard
+        # reused a stale binary forever).
+        local ui_stale=0
+        if [[ ! -x "$ui_bin" ]]; then
+            ui_stale=1
+        elif [[ -n "$(find "${REPO_ROOT}/ui/src" "${REPO_ROOT}/ui/src-tauri/src" \
+                         "${REPO_ROOT}/ui/src-tauri/Cargo.toml" \
+                         -newer "$ui_bin" -print -quit 2>/dev/null)" ]]; then
+            ui_stale=1
+        fi
+        if (( ui_stale )); then
+            log "building the Tauri desktop UI (pnpm tauri build)"
             ui_pnpm "pnpm install --frozen-lockfile && pnpm tauri build --no-bundle" \
                 || die "Tauri UI build failed"
         fi
@@ -410,6 +445,10 @@ install_tauri_ui() {
         return
     fi
     log "installing the Tauri desktop UI"
+    if (( ! DRY_RUN )); then
+        # Anchored so it does not also match `clevo-cc-ui-electron`.
+        stop_running_ui "${PREFIX}/bin/clevo-cc-ui( |$)" "Tauri UI"
+    fi
     run install -Dm755 "$ui_bin" "${DESTDIR}${PREFIX}/bin/clevo-cc-ui"
     run install -Dm644 "${SCRIPT_DIR}/desktop/org.clevo.cc.ui.desktop" \
         "${DESTDIR}${APPS_DIR}/org.clevo.cc.ui.desktop"
@@ -425,11 +464,19 @@ install_electron_ui() {
     local backend="${REPO_ROOT}/ui/src-tauri/target/electron/release/clevo-cc-ui"
     local unpacked="${REPO_ROOT}/ui/release/linux-unpacked"
 
-    if [[ ! -x "$backend" && "$UI_BUILD" == "1" ]]; then
-        log "building the headless Electron backend"
-        if (( DRY_RUN )); then
-            printf '  [dry-run] cargo build --release --no-default-features (ui/src-tauri)\n'
-        else
+    if [[ "$UI_BUILD" == "1" && "$DRY_RUN" -eq 0 ]]; then
+        # Rebuild when the binary is absent or older than its sources. The old
+        # `! -x` guard meant a stale binary was reused forever, so a change to
+        # the backend never reached the installed app.
+        local backend_stale=0
+        if [[ ! -x "$backend" ]]; then
+            backend_stale=1
+        elif [[ -n "$(find "${REPO_ROOT}/ui/src-tauri/src" "${REPO_ROOT}/ui/src-tauri/Cargo.toml" \
+                         -newer "$backend" -print -quit 2>/dev/null)" ]]; then
+            backend_stale=1
+        fi
+        if (( backend_stale )); then
+            log "building the headless Electron backend"
             local cargo_bin
             cargo_bin="$(find_cargo)" || die "cargo not found; build ui/src-tauri first"
             if [[ -n "${SUDO_USER:-}" && "$SUDO_USER" != "root" ]]; then
@@ -446,17 +493,43 @@ install_electron_ui() {
         fi
     fi
 
-    if [[ ! -d "$unpacked" && "$UI_BUILD" == "1" ]]; then
-        log "building the Electron app (electron-builder --dir)"
+    # Decide whether the unpacked app must be (re)built.
+    #
+    # The old guard only built when the directory was missing, so once a tree
+    # existed a UI change never reached the installation - it silently shipped a
+    # stale frontend. What matters is whether the packed app is older than its
+    # inputs, not whether the directory exists.
+    local unpacked_stale=0 stale_reason=""
+    local packed="$unpacked/resources/app.asar"
+    if [[ ! -d "$unpacked" ]]; then
+        unpacked_stale=1
+        stale_reason="missing"
+    elif [[ ! -f "$packed" ]]; then
+        unpacked_stale=1
+        stale_reason="no packed app.asar"
+    else
+        stale_reason="$(find "${REPO_ROOT}/ui/src" "${REPO_ROOT}/ui/electron" \
+                              "${REPO_ROOT}/ui/index.html" "${REPO_ROOT}/ui/package.json" \
+                              "$backend" \
+                              -newer "$packed" -print -quit 2>/dev/null || true)"
+        if [[ -n "$stale_reason" ]]; then
+            unpacked_stale=1
+        fi
+    fi
+
+    if [[ "$UI_BUILD" == "1" ]]; then
         if (( DRY_RUN )); then
             printf '  [dry-run] pnpm install && pnpm build && electron-builder --dir (in ui/)\n'
-        else
+        elif (( unpacked_stale )); then
+            log "building the Electron app (${stale_reason})"
             # electron-builder takes the headless backend from
             # src-tauri/target/electron/release/ (see ui/package.json
             # extraResources). That path is exclusive to the no-Tauri build, so
             # it cannot collide with the Tauri binary in target/release/.
             ui_pnpm "pnpm install --frozen-lockfile && pnpm build && pnpm exec electron-builder --linux dir" \
                 || die "Electron build failed"
+        else
+            log "reusing the existing Electron build (up to date)"
         fi
     fi
 
@@ -465,12 +538,21 @@ install_electron_ui() {
         return
     fi
     log "installing the Electron desktop UI"
+    if (( ! DRY_RUN )); then
+        # A running Electron app holds its own executable open; without this the
+        # copy dies with ETXTBSY and leaves a partly-updated tree.
+        stop_running_ui "clevo-cc-ui-electron" "Electron UI"
+    fi
     # The unpacked app tree goes under lib/; a tiny launcher in bin/ starts it.
     run install -d "${DESTDIR}${PREFIX}/lib/clevo-cc-ui-electron"
     if (( DRY_RUN )); then
         printf '  [dry-run] copy %s -> %s\n' "$unpacked" "${PREFIX}/lib/clevo-cc-ui-electron"
     else
-        cp -a "$unpacked/." "${DESTDIR}${PREFIX}/lib/clevo-cc-ui-electron/"
+        # `--remove-destination` unlinks each target before writing, so a binary
+        # that is somehow still mapped does not fail the whole tree (plain `cp`
+        # would); it also guarantees the copy replaces rather than overwrites in
+        # place.
+        cp -a --remove-destination "$unpacked/." "${DESTDIR}${PREFIX}/lib/clevo-cc-ui-electron/"
     fi
     write_file "${DESTDIR}${PREFIX}/bin/clevo-cc-ui-electron" <<EOF
 #!/bin/sh

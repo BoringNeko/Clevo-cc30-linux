@@ -131,6 +131,11 @@ try scripts/tests-install-restart.sh
 step "Packaging: install.sh driver-reload logic"
 try scripts/tests-install-driver-reload.sh
 
+# A running desktop UI holds its own executable open; the installer must stop it
+# before copying, or the copy dies with ETXTBSY and leaves a half-updated tree.
+step "Packaging: install.sh UI-replace logic"
+try scripts/tests-install-ui-replace.sh
+
 if [ "$WANT_KERNEL" = 1 ]; then
     step "Kernel: build the clevo-cc module (from clean)"
     if [ -d "/lib/modules/$(uname -r)/build" ]; then
