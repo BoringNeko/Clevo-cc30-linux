@@ -26,6 +26,7 @@ SERVE_RS="$ROOT/ui/src-tauri/src/serve.rs"
 
 fail=0
 pass() { printf '  ok   %s\n' "$1"; }
+warn() { printf '  warn %s\n' "$1"; }
 bad()  { printf '  FAIL %s\n' "$1" >&2; fail=1; }
 
 for f in "$MAIN_JS" "$PRELOAD_JS" "$SERVE_RS"; do
@@ -179,6 +180,51 @@ if [[ -x "$BUNDLED" ]]; then
     fi
 else
     skip "no Electron app tree built; skipping bundled-backend check"
+fi
+
+# --- stale headless backend -------------------------------------------------
+# The Electron shell reuses a *prebuilt* backend binary; unlike Tauri (which
+# compiles from source on every `tauri dev`), it does not notice when a new
+# command is added to serve.rs. A backend built before the change then answers
+# `unknown command: <new>` at runtime, and the UI shows "unavailable" for a
+# feature that is actually implemented. This happened for the keyboard RGB
+# commands. Fail loudly here so the fix is "rebuild", not a debugging session.
+#
+# The invariant is an mtime one: the binary must be at least as new as the
+# backend sources. A string-presence check is not usable — the compiler merges
+# and drops string literals, so `load_wallpaper` is absent even from a current
+# binary alongside `save_wallpaper`.
+backend_newest_src=0
+for src in "$ROOT"/ui/src-tauri/src "$ROOT"/crates; do
+    [[ -d "$src" ]] || continue
+    while IFS= read -r f; do
+        t="$(stat -c %Y "$f" 2>/dev/null || echo 0)"
+        [[ "$t" -gt "$backend_newest_src" ]] && backend_newest_src="$t"
+    done < <(find "$src" -type f -name '*.rs' 2>/dev/null)
+done
+
+backends=(
+    "$ROOT/ui/src-tauri/target/electron/release/clevo-cc-ui"
+    "$ROOT/ui/release/linux-unpacked/resources/clevo-cc-ui"
+)
+built_any=0
+for bin in "${backends[@]}"; do
+    [[ -x "$bin" ]] || continue
+    built_any=1
+    bin_mtime="$(stat -c %Y "$bin" 2>/dev/null || echo 0)"
+    if [[ "$bin_mtime" -ge "$backend_newest_src" ]]; then
+        pass "headless backend is current (${bin#$ROOT/})"
+    elif [[ "$bin" == "$ROOT/ui/release/linux-unpacked/resources/clevo-cc-ui" ]]; then
+        # The packaged tree is an artifact, not the run target for `pnpm electron`
+        # (which uses target/electron). A stale one means "rebuild before
+        # packaging", not "the dev launch is broken" — warn without failing CI.
+        warn "packaged Electron tree has an older backend (${bin#$ROOT/}); rebuild before re-packaging"
+    else
+        bad "stale headless backend at ${bin#$ROOT/}: older than a backend source (rebuild: cd ui/src-tauri && CARGO_TARGET_DIR=target/electron cargo build --release --locked --no-default-features)"
+    fi
+done
+if [[ "$built_any" -eq 0 ]]; then
+    skip "no headless backend built yet; skipping staleness check"
 fi
 
 # If an AppImage exists, its generated desktop entry must match.
