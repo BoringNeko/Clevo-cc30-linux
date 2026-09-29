@@ -1,9 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SettingsDialog } from "./SettingsDialog";
 import { FALLBACK_PALETTE } from "../lib/color";
 import { DEFAULT_APPEARANCE } from "../theme";
+
+const getKeyboard = vi.fn();
+
+vi.mock("../api/daemon", async () => {
+  const actual = await vi.importActual<typeof import("../api/daemon")>("../api/daemon");
+  return {
+    ...actual,
+    getKeyboard: () => getKeyboard(),
+  };
+});
 
 function renderDialog() {
   return render(
@@ -57,5 +67,20 @@ describe("SettingsDialog", () => {
     expect(
       screen.getByText(/需要重启应用后生效/),
     ).toBeTruthy();
+  });
+
+  it("opens the keyboard section and reports an unavailable controller", async () => {
+    getKeyboard.mockResolvedValue({
+      available: false,
+      writable: false,
+      backend: "none",
+      mode: "off",
+      brightness: 0,
+      keys: [],
+    });
+    const user = userEvent.setup();
+    renderDialog();
+    await user.click(screen.getByRole("button", { name: "键盘灯" }));
+    expect(await screen.findByText(/未检测到可写的键盘灯控制器/)).toBeTruthy();
   });
 });

@@ -4,6 +4,7 @@ import Typography from "@mui/material/Typography";
 import BoltIcon from "@mui/icons-material/Bolt";
 import DashboardIcon from "@mui/icons-material/Dashboard";
 import AirIcon from "@mui/icons-material/Air";
+import WbIncandescentIcon from "@mui/icons-material/WbIncandescent";
 import SettingsIcon from "@mui/icons-material/Settings";
 import { rgbString, type ExtractedPalette } from "../lib/color";
 import { glassSx, type Appearance } from "../theme";
@@ -12,6 +13,7 @@ import { glassSx, type Appearance } from "../theme";
 export const NAV = [
   { id: "overview", label: "概览", Icon: DashboardIcon },
   { id: "fans", label: "风扇", Icon: AirIcon },
+  { id: "rgb", label: "RGB 灯效", Icon: WbIncandescentIcon },
 ] as const;
 
 interface SidebarProps {

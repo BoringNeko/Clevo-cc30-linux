@@ -19,6 +19,7 @@ import { Sidebar } from "./components/Sidebar";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { WindowControls } from "./components/WindowControls";
 import { FansCard } from "./components/FansCard";
+import { RgbPage } from "./components/RgbPage";
 import { DiskUsageCard, ResourceUsageCard } from "./components/ResourceUsageCard";
 import { FanModeCard } from "./components/FanModeCard";
 import { PerformanceCard } from "./components/PerformanceCard";
@@ -43,6 +44,20 @@ import { buildTheme, glassSx } from "./theme";
 
 const POLL_INTERVAL_MS = 2000;
 const HISTORY_LEN = 60;
+
+/** Pages the sidebar can select. */
+type PageId = "overview" | "fans" | "rgb";
+
+/** Header title per page. */
+const PAGE_TITLES: Record<PageId, string> = {
+  overview: "系统概览",
+  fans: "风扇",
+  rgb: "RGB 灯效",
+};
+
+function isPageId(id: string): id is PageId {
+  return id === "overview" || id === "fans" || id === "rgb";
+}
 
 /**
  * Glass dashboard over the daemon.
@@ -119,7 +134,7 @@ export default function App() {
   const [curve, setCurve] = useState<FanCurve | null>(null);
   const [factoryCurve, setFactoryCurve] = useState<FanCurve | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [active, setActive] = useState<"overview" | "fans">("overview");
+  const [active, setActive] = useState<PageId>("overview");
   const [cpuHistory, setCpuHistory] = useState<number[]>([]);
   const [gpuHistory, setGpuHistory] = useState<number[]>([]);
   const timer = useRef<number | null>(null);
@@ -196,7 +211,7 @@ export default function App() {
   }, [refresh]);
 
   const navigate = (id: string) => {
-    if (id === "overview" || id === "fans") setActive(id);
+    if (isPageId(id)) setActive(id);
   };
 
   return (
@@ -309,7 +324,7 @@ export default function App() {
                 data-tauri-drag-region
                 sx={{ fontSize: "1rem", fontWeight: 600, color: "text.primary" }}
               >
-                {active === "overview" ? "系统概览" : "风扇"}
+                {PAGE_TITLES[active]}
               </Typography>
               <WindowControls />
             </Box>
@@ -320,7 +335,21 @@ export default function App() {
               </Alert>
             )}
 
-            {snapshot ? (
+            {active === "rgb" ? (
+              <Box
+                key="rgb"
+                sx={{
+                  animation: enterAnimation(appearance.animationSpeed, appearance.animationsEnabled),
+                  willChange: "transform",
+                  display: "flex",
+                  flexDirection: "column",
+                  flex: 1,
+                  minHeight: 0,
+                }}
+              >
+                <RgbPage palette={accentPalette} />
+              </Box>
+            ) : snapshot ? (
               <Box
                 key={active}
                 sx={{

@@ -150,6 +150,23 @@ export async function setFanCurve(curve: FanCurve): Promise<void> {
   return invoke<void>("set_fan_curve", { curve });
 }
 
+/** Effect modes the daemon accepts for the keyboard backlight. */
+export const KEYBOARD_MODES = ["off", "static", "wave"] as const;
+export type KeyboardMode = (typeof KEYBOARD_MODES)[number];
+
+/**
+ * Logical keyboard zones.
+ *
+ * Only machines whose controller exposes independent zones use anything other
+ * than `all`; the daemon maps the others onto the single physical channel and
+ * the UI hides zones it cannot address.
+ */
+export const KEYBOARD_ZONES = ["all", "left", "middle", "right"] as const;
+export type KeyboardZone = (typeof KEYBOARD_ZONES)[number];
+
+/** Highest brightness level the daemon accepts (the vendor's 0..=4 scale). */
+export const KEYBOARD_BRIGHTNESS_MAX = 4;
+
 /** Keyboard RGB state returned by clevod. */
 export interface KeyboardState {
   available: boolean;
@@ -159,7 +176,7 @@ export interface KeyboardState {
   reason?: string;
   vendor_id?: number;
   product_id?: number;
-  mode: "off" | "static" | "wave";
+  mode: KeyboardMode;
   brightness: number;
   keys: number[][][];
 }
@@ -170,7 +187,7 @@ export async function getKeyboard(): Promise<KeyboardState> {
 }
 
 /** Set keyboard effect mode. */
-export async function setKeyboardMode(mode: KeyboardState["mode"]): Promise<void> {
+export async function setKeyboardMode(mode: KeyboardMode): Promise<void> {
   return invoke<void>("set_keyboard_mode", { mode });
 }
 
@@ -180,7 +197,7 @@ export async function setKeyboardBrightness(level: number): Promise<number> {
 }
 
 /** Apply one color to a logical keyboard zone. */
-export async function setKeyboardZone(zone: string, color: [number, number, number]): Promise<void> {
+export async function setKeyboardZone(zone: KeyboardZone, color: [number, number, number]): Promise<void> {
   return invoke<void>("set_keyboard_zone", { zone, color });
 }
 
