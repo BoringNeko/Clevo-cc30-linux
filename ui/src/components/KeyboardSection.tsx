@@ -106,7 +106,7 @@ export function KeyboardSection({ open }: { open: boolean }) {
         </FormControl>
       </SettingsRow>
 
-      <SettingsRow title="亮度" description={`厂商标定 0 – ${KEYBOARD_BRIGHTNESS_MAX} 档`}>
+      <SettingsRow title="亮度" description="百分比，0 = 关闭，100 = 最亮">
         <Slider
           value={state.brightness}
           min={0}

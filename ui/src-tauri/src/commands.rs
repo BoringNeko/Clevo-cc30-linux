@@ -72,7 +72,7 @@ pub fn set_keyboard_mode(mode: String) -> Result<(), String> {
     client()?.set_keyboard_mode(&mode).map_err(|e| e.message)
 }
 
-/// Set keyboard brightness in the vendor's 0..=4 scale.
+/// Set keyboard brightness as a percentage in 0..=100.
 pub fn set_keyboard_brightness(level: u8) -> Result<u8, String> {
     client()?.set_keyboard_brightness(level).map_err(|e| e.message)
 }

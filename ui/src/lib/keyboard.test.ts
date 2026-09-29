@@ -18,7 +18,7 @@ function state(patch: Partial<KeyboardState> = {}): KeyboardState {
     writable: true,
     backend: "usb-hid",
     mode: "static",
-    brightness: 3,
+    brightness: 75,
     keys: normaliseKeys(undefined),
     ...patch,
   };

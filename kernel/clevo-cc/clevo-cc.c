@@ -53,6 +53,8 @@
 #define CLEVO_KB_ZONE_RIGHT 0xF2
 #define CLEVO_KB_BRIGHTNESS_BASE 0xF4000000
 #define CLEVO_KB_BRIGHTNESS_MAX 191
+/* Percent scale exposed by the named keyboard_rgb interface (0..100). */
+#define CLEVO_KB_BRIGHTNESS_PERCENT_MAX 100
 #define CLEVO_KB_COLOR_FADE_STEPS 24
 #define CLEVO_KB_COLOR_FADE_DELAY_US 10000
 #define CLEVO_KB_WAVE 0xB0000000
@@ -110,7 +112,7 @@ struct clevo_cc {
 	struct led_classdev keyboard_led;
 	u8 keyboard_color[3][3];
 	bool keyboard_color_known[3];
-	/* Named keyboard_rgb keeps the vendor's 0..4 levels; LED class uses raw. */
+	/* keyboard_rgb keeps a 0..100 percentage; LED class uses the raw byte. */
 	u8 keyboard_brightness;
 	u8 keyboard_brightness_raw;
 	const char *keyboard_mode;
@@ -432,38 +434,34 @@ static int clevo_cc_set_keyboard_brightness_raw(struct clevo_cc *cc, u8 raw)
 					CLEVO_KB_BRIGHTNESS_BASE | raw);
 }
 
-static int clevo_cc_keyboard_level_raw(u8 level, u8 *raw)
+/*
+ * Map a 0..100 percentage to the RGB15 raw brightness byte (0..191).
+ *
+ * The channel is analog, so there is no need to quantise onto the vendor's five
+ * calibrated steps: 100% means the EC maximum, and every value in between is
+ * available. Rounding is nearest, so 50% -> 96 rather than truncating to 95.
+ */
+static u8 clevo_cc_keyboard_percent_raw(u8 percent)
 {
-	/* RGBKB exposes five calibrated levels over the raw 0..191 range. */
-	switch (level) {
-	case 0:
-		*raw = 0;
-		break;
-	case 1:
-		*raw = 47;
-		break;
-	case 2:
-		*raw = 95;
-		break;
-	case 3:
-		*raw = 143;
-		break;
-	case 4:
-		*raw = 191;
-		break;
-	default:
-		return -EINVAL;
-	}
-	return 0;
+	return (u8)(((unsigned int)percent * CLEVO_KB_BRIGHTNESS_MAX +
+		     CLEVO_KB_BRIGHTNESS_PERCENT_MAX / 2) /
+		    CLEVO_KB_BRIGHTNESS_PERCENT_MAX);
 }
 
-static int clevo_cc_set_keyboard_brightness(struct clevo_cc *cc, u8 level)
+/* Inverse of clevo_cc_keyboard_percent_raw, for reporting the cached percent. */
+static u8 clevo_cc_keyboard_raw_percent(u8 raw)
 {
-	u8 raw;
+	return (u8)(((unsigned int)raw * CLEVO_KB_BRIGHTNESS_PERCENT_MAX +
+		     CLEVO_KB_BRIGHTNESS_MAX / 2) /
+		    CLEVO_KB_BRIGHTNESS_MAX);
+}
 
-	if (clevo_cc_keyboard_level_raw(level, &raw))
+static int clevo_cc_set_keyboard_brightness_percent(struct clevo_cc *cc, u8 percent)
+{
+	if (percent > CLEVO_KB_BRIGHTNESS_PERCENT_MAX)
 		return -EINVAL;
-	return clevo_cc_set_keyboard_brightness_raw(cc, raw);
+	return clevo_cc_set_keyboard_brightness_raw(
+		cc, clevo_cc_keyboard_percent_raw(percent));
 }
 
 static int clevo_cc_set_keyboard_status(struct clevo_cc *cc, bool on)
@@ -491,7 +489,7 @@ static int clevo_cc_keyboard_led_set(struct led_classdev *led_cdev,
 
 	mutex_lock(&cc->keyboard_lock);
 	if (brightness == LED_OFF) {
-		err = clevo_cc_set_keyboard_brightness(cc, 0);
+		err = clevo_cc_set_keyboard_brightness_percent(cc, 0);
 		if (!err)
 			err = clevo_cc_set_keyboard_status(cc, false);
 	} else {
@@ -503,9 +501,7 @@ static int clevo_cc_keyboard_led_set(struct led_classdev *led_cdev,
 		err = clevo_cc_disable_keyboard_sleep_timer(cc);
 	if (!err) {
 		cc->keyboard_brightness_raw = brightness;
-		cc->keyboard_brightness = brightness ?
-			(unsigned int)(brightness * 4 + CLEVO_KB_BRIGHTNESS_MAX / 2) /
-			CLEVO_KB_BRIGHTNESS_MAX : 0;
+		cc->keyboard_brightness = clevo_cc_keyboard_raw_percent(brightness);
 		cc->keyboard_led.brightness = brightness;
 	}
 	mutex_unlock(&cc->keyboard_lock);
@@ -570,16 +566,20 @@ static int clevo_cc_parse_keyboard_color(const char *text, u8 color[3])
  *
  *   all 112233
  *   mode off | static | wave
- *   brightness 0..4
+ *   brightness 0..100
  *   raw-brightness 0..255
  *   probe 0..2 112233
  *
- * Colors are written as RRGGBB. This P15 23 has one physical RGB15 channel;
- * the legacy left/middle/right spellings remain accepted as aliases for
- * compatibility, but all of them address the same F0 channel. `probe` is an
- * experimental, uncached F0/F1/F2 diagnostic. `raw-brightness` is an
- * experimental, uncached brightness-byte diagnostic. Both should only be used
- * with the daemon stopped.
+ * Colors are written as RRGGBB. `brightness` is a percentage: the RGB15 channel
+ * is analog, so it is scaled onto the raw 0..191 byte (100% = EC maximum)
+ * rather than quantised onto the vendor's five calibrated steps. `raw-brightness`
+ * stays available as an experimental, uncached byte-level diagnostic.
+ *
+ * This P15 23 has one physical RGB15 channel; the legacy left/middle/right
+ * spellings remain accepted as aliases for compatibility, but all of them
+ * address the same F0 channel. `probe` is an experimental, uncached F0/F1/F2
+ * diagnostic. `raw-brightness` and `probe` should only be used with the daemon
+ * stopped.
  */
 static ssize_t keyboard_rgb_store(struct device *dev,
 					 struct device_attribute *attr,
@@ -619,7 +619,7 @@ static ssize_t keyboard_rgb_store(struct device *dev,
 	mutex_lock(&cc->keyboard_lock);
 	if (!strcmp(op, "mode")) {
 		if (!strcmp(value, "off")) {
-			err = clevo_cc_set_keyboard_brightness(cc, 0);
+			err = clevo_cc_set_keyboard_brightness_percent(cc, 0);
 			if (!err)
 				err = clevo_cc_set_keyboard_status(cc, false);
 			if (!err)
@@ -672,20 +672,27 @@ static ssize_t keyboard_rgb_store(struct device *dev,
 			}
 		}
 	} else if (!strcmp(op, "brightness")) {
-		unsigned int level;
+		unsigned int percent;
 
-		if (!kstrtouint(value, 10, &level) && level <= 4)
-			err = clevo_cc_set_keyboard_brightness(cc, level);
-		if (!err && level == 0)
-			err = clevo_cc_set_keyboard_status(cc, level != 0);
-		if (!err && level != 0)
+		/*
+		 * Named brightness is a percentage (0..100). `raw-brightness`
+		 * below remains the uncached 0..191 byte for diagnostics.
+		 */
+		if (!kstrtouint(value, 10, &percent) &&
+		    percent <= CLEVO_KB_BRIGHTNESS_PERCENT_MAX)
+			err = clevo_cc_set_keyboard_brightness_percent(cc,
+								       percent);
+		if (!err && percent == 0)
+			err = clevo_cc_set_keyboard_status(cc, false);
+		if (!err && percent != 0)
 			err = clevo_cc_disable_keyboard_sleep_timer(cc);
 		if (!err)
-			cc->keyboard_brightness = level;
+			cc->keyboard_brightness = percent;
 		if (!err) {
-			clevo_cc_keyboard_level_raw(level,
-						   &cc->keyboard_brightness_raw);
-			cc->keyboard_led.brightness = cc->keyboard_brightness_raw;
+			cc->keyboard_brightness_raw =
+				clevo_cc_keyboard_percent_raw(percent);
+			cc->keyboard_led.brightness =
+				cc->keyboard_brightness_raw;
 		}
 	} else if (!strcmp(op, "raw-brightness")) {
 		unsigned int raw;
@@ -1468,7 +1475,7 @@ static int clevo_cc_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	cc->adev = adev;
 	mutex_init(&cc->keyboard_lock);
-	cc->keyboard_brightness = 4;
+	cc->keyboard_brightness = 100;
 	cc->keyboard_brightness_raw = CLEVO_KB_BRIGHTNESS_MAX;
 	cc->keyboard_mode = "unknown";
 	cc->keyboard_led.name = "clevo::kbd_backlight";

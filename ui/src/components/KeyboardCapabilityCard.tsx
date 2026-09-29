@@ -89,7 +89,7 @@ export function KeyboardCapabilityCard({ state }: KeyboardCapabilityCardProps) {
           <Row label="灯区" value={zones} />
           <Row label="固件 kb_type" value={firmware} />
           <Row label="USB ID" value={usb} />
-          <Row label="亮度档位" value="0 – 4（厂商标定）" />
+          <Row label="亮度档位" value="0 – 100（百分比）" />
         </Box>
       )}
     </GlassCard>

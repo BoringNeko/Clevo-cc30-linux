@@ -27,7 +27,7 @@ function keyboardState(patch: Partial<KeyboardState> = {}): KeyboardState {
     backend: "acpi-dchu",
     firmware_kb_type: 6,
     mode: "static",
-    brightness: 3,
+    brightness: 75,
     keys: Array.from({ length: 6 }, () => Array.from({ length: 20 }, () => [255, 0, 0])),
     ...patch,
   };
@@ -37,7 +37,7 @@ describe("RgbPage", () => {
   beforeEach(() => {
     getKeyboard.mockReset();
     setKeyboardMode.mockReset().mockResolvedValue(undefined);
-    setKeyboardBrightness.mockReset().mockResolvedValue(3);
+    setKeyboardBrightness.mockReset().mockResolvedValue(75);
     setKeyboardZone.mockReset().mockResolvedValue(undefined);
   });
 

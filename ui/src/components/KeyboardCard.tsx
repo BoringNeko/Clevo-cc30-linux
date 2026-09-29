@@ -40,10 +40,10 @@ interface KeyboardCardProps {
 
 const BRIGHTNESS_MARKS = [
   { value: 0, label: "0" },
-  { value: 1, label: "1" },
-  { value: 2, label: "2" },
-  { value: 3, label: "3" },
-  { value: 4, label: "4" },
+  { value: 25, label: "25" },
+  { value: 50, label: "50" },
+  { value: 75, label: "75" },
+  { value: 100, label: "100" },
 ];
 
 /** The colour currently shown by the keyboard, or a sensible default. */
@@ -144,7 +144,7 @@ export function KeyboardCard({ palette, state, busy, onMode, onBrightness, onCol
           <Typography
             sx={{ fontSize: "0.75rem", color: "text.disabled", fontVariantNumeric: "tabular-nums" }}
           >
-            {brightness} / {KEYBOARD_BRIGHTNESS_MAX}
+            {brightness}%
           </Typography>
         </Box>
         <Slider

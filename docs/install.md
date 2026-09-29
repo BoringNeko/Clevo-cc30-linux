@@ -102,7 +102,7 @@ clevo-cc --transport dbus doctor
 sudo systemctl stop clevod
 K=/sys/devices/platform/CLV0001:00/keyboard_rgb
 echo 'all ff0000' | sudo tee "$K"       # 整块键盘红
-echo 'brightness 2' | sudo tee "$K"
+echo 'brightness 100' | sudo tee "$K"
 echo 'mode static' | sudo tee "$K"
 cat "$K"
 # 静态模式保持 35 秒，确认不会被固件睡眠定时器关闭。
@@ -120,7 +120,8 @@ sudo systemctl start clevod
 持久化页。
 
 内核同时注册标准 LED class 设备，供 KDE/PowerDevil 等桌面组件调节亮度。
-该接口使用 RGB15 原始亮度字节，范围是 `0..191`，比原厂五档接口更细：
+该接口使用 RGB15 原始亮度字节，范围是 `0..191`；命名接口 `keyboard_rgb`
+用的是更直观的 `0..100` 百分比，映射到同一条模拟通道（`100` = EC 上限 `191`）：
 
 ```bash
 ls -l /sys/class/leds/clevo::kbd_backlight
@@ -151,7 +152,7 @@ systemctl status clevod --no-pager
 sudo systemctl stop clevod
 K=/sys/devices/platform/CLV0001:00/keyboard_rgb
 echo 'mode static' | sudo tee "$K"
-echo 'brightness 2' | sudo tee "$K"
+echo 'brightness 100' | sudo tee "$K"
 echo 'probe 0 ff0000' | sudo tee "$K"   # F0
 sleep 2
 echo 'probe 1 00ff00' | sudo tee "$K"   # F1

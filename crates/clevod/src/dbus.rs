@@ -255,17 +255,17 @@ impl CcDaemon {
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
 
-    /// Set keyboard brightness in the vendor's 0..=4 scale.
+    /// Set keyboard brightness as a percentage in `0..=100`.
     async fn set_keyboard_brightness(
         &self,
         #[zbus(header)] header: Header<'_>,
         #[zbus(signal_context)] emitter: SignalEmitter<'_>,
-        level: u8,
+        percent: u8,
     ) -> zbus::fdo::Result<u8> {
         self.require(header.sender(), &emitter, policy::ACTION_KEYBOARD)
             .await?;
         self.service
-            .set_keyboard_brightness(level)
+            .set_keyboard_brightness(percent)
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
 

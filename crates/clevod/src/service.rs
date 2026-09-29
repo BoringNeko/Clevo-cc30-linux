@@ -303,11 +303,11 @@ impl Service {
         Ok(())
     }
 
-    /// Set keyboard brightness in the vendor's 0..=4 scale.
-    pub fn set_keyboard_brightness(&self, level: u8) -> Result<u8, ServiceError> {
-        self.keyboard()?.set_brightness(level)?;
+    /// Set keyboard brightness as a percentage in `0..=100`.
+    pub fn set_keyboard_brightness(&self, percent: u8) -> Result<u8, ServiceError> {
+        self.keyboard()?.set_brightness(percent)?;
         self.persist();
-        Ok(level)
+        Ok(percent)
     }
 
     /// Apply a color to a logical keyboard zone.

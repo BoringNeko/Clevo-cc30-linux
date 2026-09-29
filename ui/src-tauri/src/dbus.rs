@@ -235,7 +235,7 @@ impl DaemonClient {
         Ok(())
     }
 
-    /// Set keyboard brightness in the vendor's 0..=4 scale.
+    /// Set keyboard brightness as a percentage in 0..=100.
     pub fn set_keyboard_brightness(&self, level: u8) -> Result<u8, UiError> {
         let reply = self
             .proxy()?

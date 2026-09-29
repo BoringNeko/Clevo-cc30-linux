@@ -20,7 +20,10 @@ use clevo_transport::{Color, KeyboardMode, KeyboardSnapshot, KEYBOARD_COLS, KEYB
 use serde::{Deserialize, Serialize};
 
 /// Current on-disk schema version.
-pub const SCHEMA_VERSION: u32 = 4;
+///
+/// Version 5 changed `keyboard.brightness` from the vendor's 0..4 scale to a
+/// 0..100 percentage; v4 files are migrated on load.
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// A fan-curve point in the versioned configuration file.
 ///
@@ -93,7 +96,7 @@ pub struct KeyboardConfig {
     /// Last selected controller mode (`off`, `static`, or `wave`).
     #[serde(default = "default_keyboard_mode")]
     pub mode: String,
-    /// Last brightness level in the vendor's 0..=4 scale.
+    /// Last brightness as a percentage in `0..=100`.
     #[serde(default = "default_keyboard_brightness")]
     pub brightness: u8,
     /// Non-black keys written by the user.
@@ -248,7 +251,7 @@ fn default_keyboard_mode() -> String {
 }
 
 fn default_keyboard_brightness() -> u8 {
-    4
+    100
 }
 
 fn current_schema_version() -> u32 {
@@ -309,6 +312,15 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
     let mut config: Config = toml::from_str(text).map_err(ConfigError::Parse)?;
     if config.schema_version > SCHEMA_VERSION {
         return Err(ConfigError::UnsupportedVersion(config.schema_version));
+    }
+    // Schema 4 stored keyboard brightness on the vendor's 0..4 scale; v5 uses a
+    // 0..100 percentage. The two are indistinguishable by range once written
+    // (a v5 "4" is 4%), so the version is the only reliable signal: scale a v4
+    // value up before the version is normalised.
+    if config.schema_version < 5 {
+        if let Some(keyboard) = config.keyboard.as_mut() {
+            keyboard.brightness = keyboard.brightness.min(4) * 25;
+        }
     }
     // Missing fields already deserialize to `None`; normalizing the version
     // makes a subsequent save an explicit migration without changing the
@@ -391,7 +403,7 @@ mod tests {
             }),
             keyboard: Some(KeyboardConfig {
                 mode: "static".into(),
-                brightness: 3,
+                brightness: 75,
                 keys: vec![KeyboardKeyWire {
                     row: 1,
                     col: 2,
@@ -502,6 +514,31 @@ duty_pct = 0
             parse(&text),
             Err(ConfigError::UnsupportedVersion(_))
         ));
+    }
+
+    #[test]
+    fn v4_brightness_is_migrated_to_percent() {
+        // v4 stored the vendor's 0..4 level; v5 uses 0..100. A v4 file must be
+        // scaled, because "4" would otherwise be read as 4%.
+        let text = "\
+schema_version = 4
+[keyboard]
+mode = \"wave\"
+brightness = 4
+";
+        let parsed = parse(text).unwrap();
+        assert_eq!(parsed.schema_version, SCHEMA_VERSION);
+        assert_eq!(parsed.keyboard.expect("keyboard kept").brightness, 100);
+
+        // A v4 file with a mid level maps proportionally.
+        let text = "\
+schema_version = 4
+[keyboard]
+mode = \"static\"
+brightness = 2
+";
+        let parsed = parse(text).unwrap();
+        assert_eq!(parsed.keyboard.unwrap().brightness, 50);
     }
 
     #[test]

@@ -164,13 +164,13 @@ mod tests {
             Service::new(mock(FIXTURE)).with_keyboard(Some(Box::new(MockKeyboard::new())));
         let red = Color { r: 255, g: 0, b: 0 };
         service.set_keyboard_mode("static").unwrap();
-        service.set_keyboard_brightness(2).unwrap();
+        service.set_keyboard_brightness(80).unwrap();
         service.set_keyboard_zone("left", red).unwrap();
         service.set_keyboard_key(5, 19, red).unwrap();
 
         let saved = service.to_config().keyboard.expect("keyboard config");
         assert_eq!(saved.mode, "static");
-        assert_eq!(saved.brightness, 2);
+        assert_eq!(saved.brightness, 80);
         assert!(saved.keys.iter().any(|key| key.row == 5 && key.col == 19));
 
         let snapshot = service.keyboard_snapshot().unwrap();
@@ -189,7 +189,7 @@ mod tests {
         let mut config = config::Config::default();
         config.keyboard = Some(config::KeyboardConfig {
             mode: "wave".into(),
-            brightness: 3,
+            brightness: 60,
             keys: vec![
                 config::KeyboardKeyWire {
                     row: 0,
@@ -212,7 +212,7 @@ mod tests {
         assert!(service.apply_saved(&config).is_empty());
         let snapshot = service.keyboard_snapshot().unwrap();
         assert_eq!(snapshot.mode, KeyboardMode::Wave);
-        assert_eq!(snapshot.brightness, 3);
+        assert_eq!(snapshot.brightness, 60);
         assert_eq!(snapshot.keys[0][2], Color { r: 255, g: 0, b: 0 });
         assert_eq!(snapshot.keys[0][8], Color { r: 255, g: 0, b: 0 });
         assert_eq!(snapshot.keys[0][19], Color { r: 255, g: 0, b: 0 });

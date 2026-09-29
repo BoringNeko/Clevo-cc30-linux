@@ -1052,10 +1052,12 @@ feature report：
 
 - 单键静态颜色：`command=1`，`key=(row << 5) | col`，后跟 RGB；
 - 静态/波浪模式：`command=0`，模式数据 `12` / `4`；
-- 亮度：`command=9`，等级 `0..4` 映射到 `0,2,4,6,10`；
+- 亮度：`command=9`，厂商工具只用过 `0,2,4,6,10` 五个字节；统一的 `0..100`
+  百分比按最近值吸附到这五个字节，不会驱动到厂商未用过的值；
 - 清除/关闭：`command=9,data=0`；
 - USB HID 机型支持 6×20 单键布局和左/中/右/全部分区；
-- 配置写入 `/etc/clevo-cc/clevod.toml`，schema version 为 `4`；
+- 配置写入 `/etc/clevo-cc/clevod.toml`，schema version 为 `5`（v4 的 `0..4`
+  亮度会在加载时迁移为百分比）；
 - `99-clevo-cc.rules` 给 `hidraw` 设备添加 `uaccess`，规则号保持在 73 之前。
 
 本机实测补充（2026-09-28）：`clevo-cc fan curve` 报告 `kb_type=6`，对应原厂
@@ -1071,8 +1073,10 @@ feature report：
 `0xE0071007`，关闭值为 `0xE0000007`。内核驱动现通过命名的 `keyboard_rgb`
 sysfs 节点暴露单区操作；它不暴露任意 `_DSM` 整数写入。
 同时注册标准 LED class 节点 `clevo::kbd_backlight`，让 KDE/PowerDevil 等
-桌面组件可以通过标准 `brightness` 文件调节原始 `0..191` 亮度；原厂 daemon
-接口仍保留校准的 `0..4` 五档。RGB 颜色和灯效仍使用 `keyboard_rgb` 命名操作。
+桌面组件可以通过标准 `brightness` 文件调节原始 `0..191` 亮度；命名 `keyboard_rgb`
+接口与 daemon/D-Bus 使用统一的 `0..100` 百分比（`100` = EC 上限 `191`），因为该
+RGB15 通道是模拟量，不必再量化成厂商的五档。RGB 颜色和灯效仍使用 `keyboard_rgb`
+命名操作。
 实测直接发送 `192..255` 与 `191` 亮度相同，确认该机 EC 的有效亮度上限为 `191`。
 正式颜色写入还会在 F0 单区上执行 24 步、约 0.3 秒的软件渐变；这不改变单区硬件
 能力，也不影响 `probe` 原始诊断命令。

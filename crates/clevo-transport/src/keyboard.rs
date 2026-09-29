@@ -28,6 +28,15 @@ pub const REPORT_LEN: usize = 16;
 pub const KEYBOARD_ROWS: usize = 6;
 /// Columns in the verified static-color layout.
 pub const KEYBOARD_COLS: usize = 20;
+/// Highest brightness the UI, daemon and D-Bus accept, as a percentage.
+///
+/// A single 0..=100 scale is used across every backend; it is converted to the
+/// backend's native representation at the hardware boundary. The analog RGB15
+/// channel is driven with the raw 0..=191 byte, so 100% means the EC maximum
+/// rather than the vendor's calibrated step 4.
+pub const BRIGHTNESS_PERCENT_MAX: u8 = 100;
+/// Raw RGB15 brightness byte accepted by the EC (the hardware maximum).
+pub const BRIGHTNESS_RAW_MAX: u16 = 191;
 
 /// An RGB color.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -131,7 +140,7 @@ pub struct KeyboardSnapshot {
     pub writable: bool,
     /// Last successfully selected mode.
     pub mode: KeyboardMode,
-    /// Brightness level in the vendor's 0..=4 scale.
+    /// Brightness as a percentage in `0..=100`.
     pub brightness: u8,
     /// Last successfully written per-key colors.
     pub keys: [[Color; KEYBOARD_COLS]; KEYBOARD_ROWS],
@@ -169,6 +178,9 @@ impl fmt::Display for KeyboardError {
 impl std::error::Error for KeyboardError {}
 
 /// A keyboard backend. Implementations are safe to share between D-Bus calls.
+///
+/// Brightness is a percentage in `0..=100` on every backend; each converts it to
+/// its native representation (the RGB15 raw byte, the HID controller's step).
 pub trait Keyboard: Send + Sync {
     /// Current device and cached state.
     fn snapshot(&self) -> KeyboardSnapshot;
@@ -178,12 +190,12 @@ pub trait Keyboard: Send + Sync {
     fn set_zone(&self, zone: KeyboardZone, color: Color) -> Result<(), KeyboardError>;
     /// Apply a color to one key in the 6x20 layout.
     fn set_per_key(&self, row: u8, col: u8, color: Color) -> Result<(), KeyboardError>;
-    /// Return the cached brightness level.
+    /// Return the cached brightness percentage.
     fn brightness(&self) -> Result<u8, KeyboardError> {
         Ok(self.snapshot().brightness)
     }
-    /// Set brightness in the vendor's 0..=4 scale.
-    fn set_brightness(&self, level: u8) -> Result<(), KeyboardError>;
+    /// Set brightness as a percentage in `0..=100`.
+    fn set_brightness(&self, percent: u8) -> Result<(), KeyboardError>;
 }
 
 /// Build the 16-byte `SetLEDStatus` feature report.
@@ -204,16 +216,27 @@ pub fn build_get_feature_report(command: u8, data0: u8) -> [u8; REPORT_LEN] {
     build_feature_report(command, data0, 0, 0, 0)
 }
 
-/// Map the vendor UI's brightness level to the controller byte.
-pub const fn brightness_raw(level: u8) -> Option<u8> {
-    match level {
-        0 => Some(0),
-        1 => Some(2),
-        2 => Some(4),
-        3 => Some(6),
-        4 => Some(10),
-        _ => None,
+/// Map a brightness percentage to the ITE controller's byte.
+///
+/// The vendor utility only ever sent five calibrated bytes (0, 2, 4, 6, 10), so
+/// a percentage is snapped to the nearest verified value rather than being driven
+/// beyond what the vendor used. Returns `None` above 100%.
+pub const fn brightness_raw(percent: u8) -> Option<u8> {
+    if percent > BRIGHTNESS_PERCENT_MAX {
+        return None;
     }
+    // Midpoints between the vendor's five levels (0, 25, 50, 75, 100%).
+    Some(if percent < 13 {
+        0
+    } else if percent < 38 {
+        2
+    } else if percent < 63 {
+        4
+    } else if percent < 88 {
+        6
+    } else {
+        10
+    })
 }
 
 /// HID-backed keyboard implementation.
@@ -256,7 +279,7 @@ impl HidKeyboard {
                 info,
                 writable: true,
                 mode: KeyboardMode::Static,
-                brightness: 4,
+                brightness: 100,
                 keys: [[Color::default(); KEYBOARD_COLS]; KEYBOARD_ROWS],
             }),
         }))
@@ -332,13 +355,13 @@ impl Keyboard for HidKeyboard {
         Ok(())
     }
 
-    fn set_brightness(&self, level: u8) -> Result<(), KeyboardError> {
-        let raw = brightness_raw(level).ok_or_else(|| {
-            KeyboardError::Invalid(format!("brightness {level} is outside 0..=4"))
+    fn set_brightness(&self, percent: u8) -> Result<(), KeyboardError> {
+        let raw = brightness_raw(percent).ok_or_else(|| {
+            KeyboardError::Invalid(format!("brightness {percent} is outside 0..=100"))
         })?;
         self.send(&build_feature_report(9, raw, 0, 0, 0))?;
         if let Ok(mut state) = self.state.lock() {
-            state.brightness = level;
+            state.brightness = percent;
         }
         Ok(())
     }
@@ -379,7 +402,7 @@ impl AcpiKeyboard {
                 },
                 writable: true,
                 mode: KeyboardMode::Static,
-                brightness: 4,
+                brightness: 100,
                 keys: [[Color::default(); KEYBOARD_COLS]; KEYBOARD_ROWS],
             }),
             path,
@@ -460,15 +483,15 @@ impl Keyboard for AcpiKeyboard {
         self.set_zone(KeyboardZone::All, color)
     }
 
-    fn set_brightness(&self, level: u8) -> Result<(), KeyboardError> {
-        if level > 4 {
+    fn set_brightness(&self, percent: u8) -> Result<(), KeyboardError> {
+        if percent > BRIGHTNESS_PERCENT_MAX {
             return Err(KeyboardError::Invalid(format!(
-                "brightness {level} is outside 0..=4"
+                "brightness {percent} is outside 0..=100"
             )));
         }
-        self.write_operation(&format!("brightness {level}"))?;
+        self.write_operation(&format!("brightness {percent}"))?;
         if let Ok(mut state) = self.state.lock() {
-            state.brightness = level;
+            state.brightness = percent;
         }
         Ok(())
     }
@@ -498,7 +521,7 @@ impl MockKeyboard {
                 },
                 writable: true,
                 mode: KeyboardMode::Static,
-                brightness: 4,
+                brightness: 100,
                 keys: [[Color::default(); KEYBOARD_COLS]; KEYBOARD_ROWS],
             }),
         }
@@ -555,11 +578,11 @@ impl Keyboard for MockKeyboard {
         Ok(())
     }
 
-    fn set_brightness(&self, level: u8) -> Result<(), KeyboardError> {
-        brightness_raw(level).ok_or_else(|| {
-            KeyboardError::Invalid(format!("brightness {level} is outside 0..=4"))
+    fn set_brightness(&self, percent: u8) -> Result<(), KeyboardError> {
+        brightness_raw(percent).ok_or_else(|| {
+            KeyboardError::Invalid(format!("brightness {percent} is outside 0..=100"))
         })?;
-        self.state()?.brightness = level;
+        self.state()?.brightness = percent;
         Ok(())
     }
 }
@@ -591,13 +614,18 @@ mod tests {
     }
 
     #[test]
-    fn brightness_mapping_is_explicit() {
+    fn brightness_mapping_snaps_to_vendor_levels() {
+        // The five bytes the vendor utility used, at their percentage points.
         assert_eq!(brightness_raw(0), Some(0));
-        assert_eq!(brightness_raw(1), Some(2));
-        assert_eq!(brightness_raw(2), Some(4));
-        assert_eq!(brightness_raw(3), Some(6));
-        assert_eq!(brightness_raw(4), Some(10));
-        assert_eq!(brightness_raw(5), None);
+        assert_eq!(brightness_raw(25), Some(2));
+        assert_eq!(brightness_raw(50), Some(4));
+        assert_eq!(brightness_raw(75), Some(6));
+        assert_eq!(brightness_raw(100), Some(10));
+        // Snapped to the nearest verified byte, never beyond them.
+        assert_eq!(brightness_raw(13), Some(2));
+        assert_eq!(brightness_raw(80), Some(6));
+        assert_eq!(brightness_raw(101), None);
+        assert_eq!(brightness_raw(255), None);
     }
 
     #[test]
@@ -628,15 +656,15 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "all 0000ff\n");
         keyboard.set_mode(KeyboardMode::Wave).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "mode wave\n");
-        keyboard.set_brightness(3).unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "brightness 3\n");
+        keyboard.set_brightness(60).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "brightness 60\n");
 
         let state = keyboard.snapshot();
         assert_eq!(state.info.backend, "acpi-dchu");
         assert_eq!(state.keys[0][19], blue);
         assert_eq!(state.keys[0][12], blue);
         assert_eq!(state.mode, KeyboardMode::Wave);
-        assert_eq!(state.brightness, 3);
+        assert_eq!(state.brightness, 60);
         let _ = std::fs::remove_file(path);
     }
 

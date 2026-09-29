@@ -164,8 +164,8 @@ export type KeyboardMode = (typeof KEYBOARD_MODES)[number];
 export const KEYBOARD_ZONES = ["all", "left", "middle", "right"] as const;
 export type KeyboardZone = (typeof KEYBOARD_ZONES)[number];
 
-/** Highest brightness level the daemon accepts (the vendor's 0..=4 scale). */
-export const KEYBOARD_BRIGHTNESS_MAX = 4;
+/** Highest brightness the daemon accepts, as a percentage. */
+export const KEYBOARD_BRIGHTNESS_MAX = 100;
 
 /** Keyboard RGB state returned by clevod. */
 export interface KeyboardState {
@@ -191,7 +191,7 @@ export async function setKeyboardMode(mode: KeyboardMode): Promise<void> {
   return invoke<void>("set_keyboard_mode", { mode });
 }
 
-/** Set keyboard brightness in the vendor's 0..=4 scale. */
+/** Set keyboard brightness as a percentage in 0..=100. */
 export async function setKeyboardBrightness(level: number): Promise<number> {
   return invoke<number>("set_keyboard_brightness", { level });
 }

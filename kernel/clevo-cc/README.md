@@ -23,7 +23,7 @@ exposes fan monitoring and fan-mode control through `hwmon` and sysfs.
 | `sysfs fan_curve` | rw | read (command 13) and write (command 14) |
 | `sysfs raw_status` / `raw_curve` | read | diagnostic hex dumps (for re-verifying offsets) |
 | `sysfs perf_mode` | rw | `quiet` / `pwrsaving` / `performance` / `entertainment` |
-| `sysfs keyboard_rgb` | rw | RGB15 single-zone color, mode and brightness |
+| `sysfs keyboard_rgb` | rw | RGB15 single-zone color, mode and brightness (percent) |
 | LED class `clevo::kbd_backlight` | rw | standard raw keyboard brightness (`0..191`) |
 
 `fan_mode` values map to `121/1`: `auto`=0, `max`=1, `maxq`=5, `custom`=6,
@@ -39,15 +39,16 @@ back:
 
 ```bash
 echo "all ff0000" | sudo tee /sys/devices/platform/CLV0001:00/keyboard_rgb
-echo "brightness 4" | sudo tee /sys/devices/platform/CLV0001:00/keyboard_rgb
+echo "brightness 100" | sudo tee /sys/devices/platform/CLV0001:00/keyboard_rgb
 echo "mode static" | sudo tee /sys/devices/platform/CLV0001:00/keyboard_rgb
 cat /sys/devices/platform/CLV0001:00/keyboard_rgb
 ```
 
-Colors are `RRGGBB`. On the verified COLORFUL P15 23 firmware, `kb_type=6`
-has one physical RGB15 channel, so the whole keyboard changes together. The
-legacy `left`, `middle`, and `right` spellings are accepted as aliases for
-`all`; they are not independent zones.
+Colors are `RRGGBB`, and `brightness` is a **percentage** (`0..100`). On the
+verified COLORFUL P15 23 firmware, `kb_type=6` has one physical RGB15 channel,
+so the whole keyboard changes together. The legacy `left`, `middle`, and
+`right` spellings are accepted as aliases for `all`; they are not independent
+zones. Colors, and the `brightness` percentage, are reported back by `cat`.
 
 Color writes through `all RRGGBB` use a short software fade with 24 intermediate
 steps; the transition takes about 0.3 seconds and remains a single physical
@@ -56,9 +57,10 @@ channel.
 The LED class device is available at
 `/sys/class/leds/clevo::kbd_backlight/brightness`. It exposes the raw
 `0..191` brightness byte accepted by the RGB15 command, giving desktop
-power-management tools 192 requested levels. The original named
-`keyboard_rgb` interface keeps the vendor's calibrated `0..4` levels. RGB
-color and effect selection remain on `keyboard_rgb`.
+power-management tools 192 requested levels. The named `keyboard_rgb`
+interface uses a friendlier `0..100` percentage over the same analog channel
+(`100` = the EC maximum `191`). RGB color and effect selection remain on
+`keyboard_rgb`.
 
 For a direct hardware experiment only, stop `clevod` and use `probe 0..2` to
 send the vendor's raw F0/F1/F2 selectors without updating the cached state:
