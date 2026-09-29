@@ -14,8 +14,8 @@ pkgdesc="Clevo (蓝天) control center: fan and performance mode control (DCHU/A
 arch=('x86_64')
 url="https://github.com/BoringNeko/Clevo-cc30-linux"
 license=('MIT' 'Apache' 'GPL2')
-depends=('dbus' 'polkit' 'glibc' 'gcc-libs')
-makedepends=('cargo' 'rust' 'dkms' 'nodejs' 'npm' 'openssl' 'clang' 'llvm')
+depends=('dbus' 'polkit' 'glibc' 'gcc-libs' 'hidapi')
+makedepends=('cargo' 'rust' 'dkms' 'nodejs' 'npm' 'openssl' 'clang' 'llvm' 'pkgconf')
 optdepends=(
   'acpi_call-dkms: read-only fallback backend when the clevo-cc driver is absent'
   'webkit2gtk-4.1: desktop UI'

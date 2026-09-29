@@ -16,10 +16,11 @@
 use std::path::{Path, PathBuf};
 
 use clevo_proto::fan_curve::{FanCurve, FanPoint, CURVE_POINTS};
+use clevo_transport::{Color, KeyboardMode, KeyboardSnapshot, KEYBOARD_COLS, KEYBOARD_ROWS};
 use serde::{Deserialize, Serialize};
 
 /// Current on-disk schema version.
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// A fan-curve point in the versioned configuration file.
 ///
@@ -42,6 +43,86 @@ pub struct FanCurveWire {
     pub gpu1: [FanPointWire; CURVE_POINTS],
     /// GPU2 fan curve.
     pub gpu2: [FanPointWire; CURVE_POINTS],
+}
+
+/// An RGB color in the daemon's TOML schema.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyboardColorWire {
+    /// Red component.
+    pub r: u8,
+    /// Green component.
+    pub g: u8,
+    /// Blue component.
+    pub b: u8,
+}
+
+impl From<Color> for KeyboardColorWire {
+    fn from(color: Color) -> Self {
+        Self {
+            r: color.r,
+            g: color.g,
+            b: color.b,
+        }
+    }
+}
+
+impl From<KeyboardColorWire> for Color {
+    fn from(color: KeyboardColorWire) -> Self {
+        Self {
+            r: color.r,
+            g: color.g,
+            b: color.b,
+        }
+    }
+}
+
+/// One persisted non-black keyboard key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyboardKeyWire {
+    /// Row in the verified 6x20 layout.
+    pub row: u8,
+    /// Column in the verified 6x20 layout.
+    pub col: u8,
+    /// Color last applied to this key.
+    pub color: KeyboardColorWire,
+}
+
+/// Persisted keyboard RGB preferences.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyboardConfig {
+    /// Last selected controller mode (`off`, `static`, or `wave`).
+    #[serde(default = "default_keyboard_mode")]
+    pub mode: String,
+    /// Last brightness level in the vendor's 0..=4 scale.
+    #[serde(default = "default_keyboard_brightness")]
+    pub brightness: u8,
+    /// Non-black keys written by the user.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keys: Vec<KeyboardKeyWire>,
+}
+
+impl KeyboardConfig {
+    /// Convert the successful in-memory writes into a compact TOML value.
+    pub fn from_snapshot(snapshot: &KeyboardSnapshot) -> Self {
+        let mut keys = Vec::new();
+        for row in 0..KEYBOARD_ROWS {
+            for col in 0..KEYBOARD_COLS {
+                let color = snapshot.keys[row][col];
+                if color != Color::default() {
+                    keys.push(KeyboardKeyWire {
+                        row: row as u8,
+                        col: col as u8,
+                        color: color.into(),
+                    });
+                }
+            }
+        }
+        Self {
+            mode: snapshot.mode.as_str().to_string(),
+            brightness: snapshot.brightness,
+            keys,
+        }
+    }
 }
 
 impl FanCurveWire {
@@ -100,6 +181,9 @@ pub struct Config {
     /// factory table, and there is no command that restores it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub factory_curve: Option<FanCurveWire>,
+    /// Last keyboard RGB preferences, when a compatible HID controller exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keyboard: Option<KeyboardConfig>,
     /// TDP class override for the raw CPU temperature byte.
     ///
     /// One of `35W`, `47W`, `65W`, `84W` or `91W`, matching the vendor's
@@ -159,6 +243,14 @@ fn default_true() -> bool {
     true
 }
 
+fn default_keyboard_mode() -> String {
+    KeyboardMode::Static.as_str().to_string()
+}
+
+fn default_keyboard_brightness() -> u8 {
+    4
+}
+
 fn current_schema_version() -> u32 {
     SCHEMA_VERSION
 }
@@ -171,6 +263,7 @@ impl Default for Config {
             perf_mode: None,
             fan_curve: None,
             factory_curve: None,
+            keyboard: None,
             cpu_tdp_class: None,
             apply_on_start: true,
         }
@@ -217,9 +310,9 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
     if config.schema_version > SCHEMA_VERSION {
         return Err(ConfigError::UnsupportedVersion(config.schema_version));
     }
-    // Schema v1 had no curve field. Missing fields already deserialize to
-    // `None`; normalizing the version makes a subsequent save an explicit v2
-    // migration without changing the user's modes.
+    // Missing fields already deserialize to `None`; normalizing the version
+    // makes a subsequent save an explicit migration without changing the
+    // user's existing modes or curve.
     if config.schema_version < SCHEMA_VERSION {
         config.schema_version = SCHEMA_VERSION;
     }
@@ -296,6 +389,15 @@ mod tests {
                     duty_pct: 0,
                 }; CURVE_POINTS],
             }),
+            keyboard: Some(KeyboardConfig {
+                mode: "static".into(),
+                brightness: 3,
+                keys: vec![KeyboardKeyWire {
+                    row: 1,
+                    col: 2,
+                    color: KeyboardColorWire { r: 1, g: 2, b: 3 },
+                }],
+            }),
             cpu_tdp_class: Some("47W".to_string()),
             apply_on_start: true,
         };
@@ -323,6 +425,7 @@ mod tests {
         assert_eq!(parsed.perf_mode, Some(2));
         assert!(parsed.fan_curve.is_none());
         assert!(parsed.factory_curve.is_none());
+        assert!(parsed.keyboard.is_none());
     }
 
     #[test]

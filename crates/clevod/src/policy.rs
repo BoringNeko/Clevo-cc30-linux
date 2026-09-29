@@ -28,6 +28,8 @@ pub const ACTION_FAN_MODE: &str = "org.clevo.CC.set-fan-mode";
 pub const ACTION_PERF_MODE: &str = "org.clevo.CC.set-perf-mode";
 /// PolicyKit action for custom fan-curve writes.
 pub const ACTION_FAN_CURVE: &str = "org.clevo.CC.set-fan-curve";
+/// PolicyKit action for keyboard RGB writes.
+pub const ACTION_KEYBOARD: &str = "org.clevo.CC.set-keyboard";
 
 /// Identity of the process requesting a write.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

@@ -24,6 +24,10 @@
   存进 `/etc/clevo-cc/clevod.toml`，启动时重放（EC 断电即忘，重放先下发曲线再
   切 `custom`）。「还原默认」用的是守护进程在**冷启动、写入之前**从 EC 快照到
   的**本机真实出厂曲线**，不是硬编码表；热重启时不会把用户曲线误当成出厂值。
+- **键盘 RGB**：根据硬件启用 ITE `048d:8910` USB HID 逐键控制，或本机
+  RGB15 ACPI-DCHU 单区控制；本机同时提供 KDE/PowerDevil 可识别的
+  `clevo::kbd_backlight` 标准亮度接口（原始范围 `0..191`），颜色切换带约
+  0.3 秒的软件渐变，配置由 `clevod` 持久化。
 - **守护进程**：`clevod` 是唯一接触硬件的长期进程，在系统 D-Bus 上提供
   `org.clevo.CC`，缓存读数并持久化用户选择。
 - **桌面 UI**：React 前端，Tauri 2（默认）或 Electron 两个壳均可运行，只经 D-Bus

@@ -23,7 +23,10 @@ use clevo_proto::fan_curve::{encode_curve, parse_curve, FanCurve, FanPoint};
 use clevo_proto::fan_status::parse_fan_status;
 use clevo_proto::message::{build_subcommand_payload, empty_payload, payload_from_slice};
 use clevo_proto::response::response_first_record;
-use clevo_transport::{Transport, TransportError};
+use clevo_transport::{
+    Color, Keyboard, KeyboardError, KeyboardMode, KeyboardSnapshot, KeyboardZone, Transport,
+    TransportError,
+};
 
 use crate::config;
 use crate::state::{DaemonState, Freshness};
@@ -104,6 +107,11 @@ impl Clock for SystemClock {
 /// The daemon core.
 pub struct Service {
     transport: Box<dyn Transport>,
+    keyboard: Option<Box<dyn Keyboard>>,
+    /// Keyboard type reported by the firmware's fan-curve capability record.
+    /// This is separate from `keyboard`: the firmware can advertise RGB15
+    /// even when Linux has no verified write transport for it.
+    keyboard_firmware_type: std::sync::atomic::AtomicU8,
     state: Shared,
     clock: Box<dyn Clock>,
     /// Last applied fan mode, mirrored for persistence.
@@ -124,6 +132,7 @@ pub struct Service {
 
 /// Sentinel for "no mode applied yet" in the atomics above.
 const UNSET: u64 = u64::MAX;
+const UNKNOWN_KEYBOARD_TYPE: u8 = u8::MAX;
 
 /// A write request rejected by policy before reaching the hardware.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -138,6 +147,8 @@ pub enum ServiceError {
     Transport(String),
     /// A response was malformed.
     Protocol(String),
+    /// The keyboard RGB capability is absent or rejected a request.
+    Keyboard(String),
 }
 
 impl std::fmt::Display for ServiceError {
@@ -148,6 +159,7 @@ impl std::fmt::Display for ServiceError {
             Self::Unsupported(m) => write!(f, "unsupported: {m}"),
             Self::Transport(m) => write!(f, "transport error: {m}"),
             Self::Protocol(m) => write!(f, "protocol error: {m}"),
+            Self::Keyboard(m) => write!(f, "keyboard error: {m}"),
         }
     }
 }
@@ -170,11 +182,19 @@ impl From<clevo_proto::ProtoError> for ServiceError {
     }
 }
 
+impl From<KeyboardError> for ServiceError {
+    fn from(value: KeyboardError) -> Self {
+        Self::Keyboard(value.to_string())
+    }
+}
+
 impl Service {
     /// Create a service around `transport`.
     pub fn new(transport: Box<dyn Transport>) -> Self {
         Self {
             transport,
+            keyboard: None,
+            keyboard_firmware_type: std::sync::atomic::AtomicU8::new(UNKNOWN_KEYBOARD_TYPE),
             state: Arc::new(Mutex::new(DaemonState::default())),
             clock: Box::new(SystemClock::default()),
             last_fan_mode: AtomicU64::new(UNSET),
@@ -186,6 +206,12 @@ impl Service {
             baseline: Mutex::new(config::Config::default()),
             applying: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// Attach an optionally discovered keyboard RGB backend.
+    pub fn with_keyboard(mut self, keyboard: Option<Box<dyn Keyboard>>) -> Self {
+        self.keyboard = keyboard;
+        self
     }
 
     /// Persist user choices to `path` on every successful write.
@@ -239,6 +265,65 @@ impl Service {
     /// The transport kind.
     pub fn kind(&self) -> clevo_transport::TransportKind {
         self.transport.kind()
+    }
+
+    /// Return the keyboard snapshot when a compatible controller was found.
+    pub fn keyboard_snapshot(&self) -> Option<KeyboardSnapshot> {
+        self.keyboard.as_ref().map(|keyboard| keyboard.snapshot())
+    }
+
+    /// Record the keyboard type reported by the firmware, when available.
+    pub fn set_keyboard_firmware_type(&self, keyboard_type: Option<u8>) {
+        self.keyboard_firmware_type.store(
+            keyboard_type.unwrap_or(UNKNOWN_KEYBOARD_TYPE),
+            Ordering::Relaxed,
+        );
+    }
+
+    /// Return the firmware keyboard type (`6` is RGB15Color).
+    pub fn keyboard_firmware_type(&self) -> Option<u8> {
+        match self.keyboard_firmware_type.load(Ordering::Relaxed) {
+            UNKNOWN_KEYBOARD_TYPE => None,
+            value => Some(value),
+        }
+    }
+
+    fn keyboard(&self) -> Result<&dyn Keyboard, ServiceError> {
+        self.keyboard.as_deref().ok_or_else(|| {
+            ServiceError::Unsupported("no compatible keyboard RGB controller".into())
+        })
+    }
+
+    /// Set a keyboard effect mode.
+    pub fn set_keyboard_mode(&self, mode: &str) -> Result<(), ServiceError> {
+        let mode = KeyboardMode::parse(mode)
+            .ok_or_else(|| ServiceError::UnknownMode(format!("keyboard mode {mode:?}")))?;
+        self.keyboard()?.set_mode(mode)?;
+        self.persist();
+        Ok(())
+    }
+
+    /// Set keyboard brightness in the vendor's 0..=4 scale.
+    pub fn set_keyboard_brightness(&self, level: u8) -> Result<u8, ServiceError> {
+        self.keyboard()?.set_brightness(level)?;
+        self.persist();
+        Ok(level)
+    }
+
+    /// Apply a color to a logical keyboard zone.
+    pub fn set_keyboard_zone(&self, zone: &str, color: Color) -> Result<(), ServiceError> {
+        let zone = KeyboardZone::parse(zone)
+            .ok_or_else(|| ServiceError::Unsupported(format!("unknown keyboard zone {zone:?}")))?;
+        self.keyboard()?.set_zone(zone, color)?;
+        self.persist();
+        Ok(())
+    }
+
+    /// Apply a color to one key in the verified 6x20 layout.
+    pub fn set_keyboard_key(&self, row: u8, col: u8, color: Color) -> Result<(), ServiceError> {
+        self.keyboard()?.set_per_key(row, col, color)?;
+        self.persist();
+        Ok(())
     }
 
     /// Poll fan status (command 12) and the curve (command 13, for fan count).
@@ -482,7 +567,7 @@ impl Service {
         // `capture_factory_curve` runs before `applying` is set.
         self.capture_factory_curve();
 
-        if !config.apply_on_start || !self.transport.writable() {
+        if !config.apply_on_start {
             return Vec::new();
         }
 
@@ -503,58 +588,105 @@ impl Service {
         // `custom`). Normal modes must not rewrite the EC curve on startup.
         let mut curve_applied = false;
         let mut curve_invalid = false;
-        if let Some(wire) = config.fan_curve {
-            let curve = wire.to_curve();
-            if let Err(err) = encode_curve(&curve) {
-                curve_invalid = true;
-                failures.push(format!("fan_curve: {err}"));
-            } else {
-                self.state.lock().unwrap().saved_curve = Some(curve);
-                let mode_uses_curve = config.fan_mode.is_none() || config.fan_mode == Some(6);
-                if mode_uses_curve {
-                    match self.set_curve(&curve) {
-                        Ok(()) => curve_applied = true,
-                        Err(err) => failures.push(format!("fan_curve: {err}")),
+        if self.transport.writable() {
+            if let Some(wire) = config.fan_curve {
+                let curve = wire.to_curve();
+                if let Err(err) = encode_curve(&curve) {
+                    curve_invalid = true;
+                    failures.push(format!("fan_curve: {err}"));
+                } else {
+                    self.state.lock().unwrap().saved_curve = Some(curve);
+                    let mode_uses_curve = config.fan_mode.is_none() || config.fan_mode == Some(6);
+                    if mode_uses_curve {
+                        match self.set_curve(&curve) {
+                            Ok(()) => curve_applied = true,
+                            Err(err) => failures.push(format!("fan_curve: {err}")),
+                        }
                     }
+                }
+            }
+
+            if let Some(value) = config.fan_mode {
+                match fan_mode_name(value) {
+                    Some(name) => {
+                        if value == 6 && config.fan_curve.is_some() {
+                            // `set_curve` performs command 14 followed by the
+                            // custom-mode write. Never select custom after a
+                            // failed or invalid curve restore.
+                            if curve_applied {
+                                // Already applied by set_curve.
+                            } else if curve_invalid {
+                                failures.push(
+                                    "fan_mode 6: skipped because the saved curve is invalid"
+                                        .to_string(),
+                                );
+                            } else {
+                                failures.push(
+                                "fan_mode 6: skipped because the saved curve could not be written"
+                                    .to_string(),
+                            );
+                            }
+                        } else if let Err(e) = self.set_fan_mode(name) {
+                            failures.push(format!("fan_mode {value}: {e}"));
+                        }
+                    }
+                    None => failures.push(format!("fan_mode {value}: no such mode")),
+                }
+            }
+            if let Some(value) = config.perf_mode {
+                match perf_mode_name(value) {
+                    Some(name) => {
+                        if let Err(e) = self.set_perf_mode(name) {
+                            failures.push(format!("perf_mode {value}: {e}"));
+                        }
+                    }
+                    None => failures.push(format!("perf_mode {value}: no such mode")),
                 }
             }
         }
 
-        if let Some(value) = config.fan_mode {
-            match fan_mode_name(value) {
-                Some(name) => {
-                    if value == 6 && config.fan_curve.is_some() {
-                        // `set_curve` performs command 14 followed by the
-                        // custom-mode write. Never select custom after a
-                        // failed or invalid curve restore.
-                        if curve_applied {
-                            // Already applied by set_curve.
-                        } else if curve_invalid {
-                            failures.push(
-                                "fan_mode 6: skipped because the saved curve is invalid"
-                                    .to_string(),
-                            );
-                        } else {
-                            failures.push(
-                                "fan_mode 6: skipped because the saved curve could not be written"
-                                    .to_string(),
-                            );
+        if let (Some(keyboard), Some(saved)) = (self.keyboard.as_ref(), config.keyboard.as_ref()) {
+            if keyboard.snapshot().info.backend == "acpi-dchu" {
+                // This machine's RGB15 path has one physical channel. Restore
+                // one representative persisted color; replaying left/middle/
+                // right in sequence would make the last color overwrite the
+                // entire keyboard. Restore colors and brightness before the
+                // mode because applying colors after `wave` can switch the EC
+                // back to static mode.
+                if let Some(key) = saved.keys.first() {
+                    if let Err(err) = keyboard.set_zone(KeyboardZone::All, key.color.into()) {
+                        failures.push(format!("keyboard zone All: {err}"));
+                    }
+                }
+
+                if let Err(err) = keyboard.set_brightness(saved.brightness) {
+                    failures.push(format!("keyboard brightness: {err}"));
+                }
+                match KeyboardMode::parse(&saved.mode) {
+                    Some(mode) => {
+                        if let Err(err) = keyboard.set_mode(mode) {
+                            failures.push(format!("keyboard mode: {err}"));
                         }
-                    } else if let Err(e) = self.set_fan_mode(name) {
-                        failures.push(format!("fan_mode {value}: {e}"));
+                    }
+                    None => failures.push(format!("keyboard mode {:?}: unknown mode", saved.mode)),
+                }
+            } else {
+                match KeyboardMode::parse(&saved.mode) {
+                    Some(mode) => {
+                        if let Err(err) = keyboard.set_mode(mode) {
+                            failures.push(format!("keyboard mode: {err}"));
+                        }
+                    }
+                    None => failures.push(format!("keyboard mode {:?}: unknown mode", saved.mode)),
+                }
+                if let Err(err) = keyboard.set_brightness(saved.brightness) {
+                    failures.push(format!("keyboard brightness: {err}"));
+                }
+                for key in &saved.keys {
+                    if let Err(err) = keyboard.set_per_key(key.row, key.col, key.color.into()) {
+                        failures.push(format!("keyboard key ({},{}): {err}", key.row, key.col));
                     }
                 }
-                None => failures.push(format!("fan_mode {value}: no such mode")),
-            }
-        }
-        if let Some(value) = config.perf_mode {
-            match perf_mode_name(value) {
-                Some(name) => {
-                    if let Err(e) = self.set_perf_mode(name) {
-                        failures.push(format!("perf_mode {value}: {e}"));
-                    }
-                }
-                None => failures.push(format!("perf_mode {value}: no such mode")),
             }
         }
         failures
@@ -583,6 +715,10 @@ impl Service {
         let curve = self.state.lock().unwrap().saved_curve;
         if curve.is_some() {
             config.fan_curve = curve.as_ref().map(config::FanCurveWire::from_curve);
+        }
+
+        if let Some(snapshot) = self.keyboard_snapshot() {
+            config.keyboard = Some(config::KeyboardConfig::from_snapshot(&snapshot));
         }
 
         config

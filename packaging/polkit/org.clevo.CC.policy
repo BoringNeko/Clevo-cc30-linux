@@ -43,4 +43,14 @@
       <allow_active>auth_admin_keep</allow_active>
     </defaults>
   </action>
+
+  <action id="org.clevo.CC.set-keyboard">
+    <description>Set keyboard RGB lighting</description>
+    <message>Authentication is required to change keyboard RGB lighting</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+  </action>
 </policyconfig>

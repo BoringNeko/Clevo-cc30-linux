@@ -12,7 +12,7 @@ use clevo_proto::fan_curve::{encode_curve, parse_curve, FanCurve, FanPoint};
 use clevo_proto::fan_status::parse_fan_status;
 use clevo_proto::message::{build_subcommand_payload, empty_payload, payload_from_slice};
 use clevo_proto::response::response_first_record;
-use clevo_transport::Transport;
+use clevo_transport::{AcpiKeyboard, HidKeyboard, Keyboard, Transport, TransportKind};
 
 use crate::snapshot::{format_json, format_row, FanSnapshot};
 use crate::{CliError, FanCommand, ProfileCommand};
@@ -449,6 +449,36 @@ pub fn run_doctor(transport: &dyn Transport, out: &mut dyn Write) -> Result<(), 
             _ => "not in use (mock transport)",
         }
     )?;
+    let firmware_kb_type = read_fan_curve(transport).ok().map(|info| info.kb_type);
+    let keyboard = if transport.kind() == TransportKind::Mock {
+        "not probed (mock transport)".to_string()
+    } else if !cfg!(target_os = "linux") {
+        "unavailable (Linux keyboard backends only)".to_string()
+    } else {
+        match AcpiKeyboard::discover() {
+            Ok(Some(device)) => format!(
+                "available (backend=acpi-dchu, path={})",
+                device.snapshot().info.path
+            ),
+            Ok(None) | Err(_) => match HidKeyboard::discover() {
+                Ok(Some(device)) => format!(
+                    "available (backend={}, VID={:04x}, PID={:04x}, path={})",
+                    device.snapshot().info.backend,
+                    device.snapshot().info.vendor_id,
+                    device.snapshot().info.product_id,
+                    device.snapshot().info.path
+                ),
+                Ok(None) => match firmware_kb_type {
+                    Some(6) => "firmware advertises RGB15 (kb_type=6); keyboard_rgb sysfs node missing".into(),
+                    Some(22) => "firmware advertises RGB15 custom (kb_type=22); keyboard_rgb sysfs node missing".into(),
+                    Some(value) => format!("firmware kb_type={value}; no verified Linux write transport"),
+                    None => "missing (no verified keyboard RGB transport)".into(),
+                },
+                Err(err) => format!("error ({err})"),
+            },
+        }
+    };
+    writeln!(out, "keyboard_rgb : {keyboard}")?;
     writeln!(out, "no changes were made.")?;
     Ok(())
 }
@@ -474,6 +504,17 @@ pub fn run_dbus(
             writeln!(out, "transport    : Dbus ({})", crate::dbus::DBUS_NAME)?;
             let status = client.status()?;
             writeln!(out, "writable     : {}", status.writable)?;
+            let keyboard = if client.keyboard_available()? {
+                "available".to_string()
+            } else {
+                match client.keyboard_firmware_type()? {
+                    6 => "firmware advertises RGB15 (kb_type=6); no verified Linux write transport".into(),
+                    22 => "firmware advertises RGB15 custom (kb_type=22); no verified Linux write transport".into(),
+                    255 => "missing (no verified keyboard RGB transport)".into(),
+                    value => format!("firmware kb_type={value}; no verified Linux write transport"),
+                }
+            };
+            writeln!(out, "keyboard_rgb : {keyboard}")?;
             writeln!(out, "os           : {}", std::env::consts::OS)?;
             writeln!(out, "no changes were made.")?;
             Ok(())

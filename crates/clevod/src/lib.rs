@@ -40,7 +40,10 @@ mod tests {
     use clevo_proto::command::{CMD_FAN_CURVE_WRITE, CMD_MAIN, SUB_FAN_MODE};
     use clevo_proto::constants::PAYLOAD_LEN;
     use clevo_proto::fan_curve::{FanCurve, FanPoint};
-    use clevo_transport::{MockTransport, Transport, TransportError, TransportKind};
+    use clevo_transport::{
+        AcpiKeyboard, Color, KeyboardMode, MockKeyboard, MockTransport, Transport, TransportError,
+        TransportKind,
+    };
     use std::sync::{Arc, Mutex};
 
     fn mock(fixture: &str) -> Box<dyn clevo_transport::Transport> {
@@ -153,6 +156,68 @@ mod tests {
         let cfg = service.to_config();
         assert_eq!(cfg.fan_mode, Some(1));
         assert_eq!(cfg.perf_mode, Some(2));
+    }
+
+    #[test]
+    fn keyboard_writes_are_cached_and_persistable() {
+        let service =
+            Service::new(mock(FIXTURE)).with_keyboard(Some(Box::new(MockKeyboard::new())));
+        let red = Color { r: 255, g: 0, b: 0 };
+        service.set_keyboard_mode("static").unwrap();
+        service.set_keyboard_brightness(2).unwrap();
+        service.set_keyboard_zone("left", red).unwrap();
+        service.set_keyboard_key(5, 19, red).unwrap();
+
+        let saved = service.to_config().keyboard.expect("keyboard config");
+        assert_eq!(saved.mode, "static");
+        assert_eq!(saved.brightness, 2);
+        assert!(saved.keys.iter().any(|key| key.row == 5 && key.col == 19));
+
+        let snapshot = service.keyboard_snapshot().unwrap();
+        assert_eq!(snapshot.mode, KeyboardMode::Static);
+        assert_eq!(snapshot.keys[0][0], red);
+        assert_eq!(snapshot.keys[5][19], red);
+    }
+
+    #[test]
+    fn rgb15_keyboard_restore_writes_one_physical_zone() {
+        let path = std::env::temp_dir().join(format!("clevo-daemon-rgb15-{}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        std::fs::write(&path, "").unwrap();
+        let keyboard = AcpiKeyboard::with_path(&path);
+        let service = Service::new(mock(FIXTURE)).with_keyboard(Some(Box::new(keyboard)));
+        let mut config = config::Config::default();
+        config.keyboard = Some(config::KeyboardConfig {
+            mode: "wave".into(),
+            brightness: 3,
+            keys: vec![
+                config::KeyboardKeyWire {
+                    row: 0,
+                    col: 2,
+                    color: config::KeyboardColorWire { r: 255, g: 0, b: 0 },
+                },
+                config::KeyboardKeyWire {
+                    row: 0,
+                    col: 8,
+                    color: config::KeyboardColorWire { r: 0, g: 255, b: 0 },
+                },
+                config::KeyboardKeyWire {
+                    row: 0,
+                    col: 19,
+                    color: config::KeyboardColorWire { r: 0, g: 0, b: 255 },
+                },
+            ],
+        });
+
+        assert!(service.apply_saved(&config).is_empty());
+        let snapshot = service.keyboard_snapshot().unwrap();
+        assert_eq!(snapshot.mode, KeyboardMode::Wave);
+        assert_eq!(snapshot.brightness, 3);
+        assert_eq!(snapshot.keys[0][2], Color { r: 255, g: 0, b: 0 });
+        assert_eq!(snapshot.keys[0][8], Color { r: 255, g: 0, b: 0 });
+        assert_eq!(snapshot.keys[0][19], Color { r: 255, g: 0, b: 0 });
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "mode wave\n");
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

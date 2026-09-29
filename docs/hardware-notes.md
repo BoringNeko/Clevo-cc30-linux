@@ -1034,3 +1034,57 @@ the UI's launch environment or to its WebKit/Tauri dependencies.
 - **Waiting for the children before exiting.** They crash on their own schedule,
   and waiting made it worse (2 crashes vs 0 when cut short).
 
+## 16. 键盘 RGB HID / RGB15（实现与本机探测结论）
+
+二期键盘 RGB 按硬件分成两条后端。存在 ITE 829x 控制器时，
+`clevo-transport::keyboard` 走 USB HID；本机 COLORFUL P15 23 的内置键盘则由
+ACPI/DCHU RGB15 后端控制。USB HID 后端按 `048d:8910` 枚举设备，并发送 16 字节
+feature report：
+
+```text
+[0] = 0xcc       report id
+[1] = command
+[2..5] = command data
+[6..15] = 0
+```
+
+已根据 `ControlCenter-RE/native/perkey_api.c` 和 `PerkeyKB.cs` 实现并测试：
+
+- 单键静态颜色：`command=1`，`key=(row << 5) | col`，后跟 RGB；
+- 静态/波浪模式：`command=0`，模式数据 `12` / `4`；
+- 亮度：`command=9`，等级 `0..4` 映射到 `0,2,4,6,10`；
+- 清除/关闭：`command=9,data=0`；
+- USB HID 机型支持 6×20 单键布局和左/中/右/全部分区；
+- 配置写入 `/etc/clevo-cc/clevod.toml`，schema version 为 `4`；
+- `99-clevo-cc.rules` 给 `hidraw` 设备添加 `uaccess`，规则号保持在 73 之前。
+
+本机实测补充（2026-09-28）：`clevo-cc fan curve` 报告 `kb_type=6`，对应原厂
+枚举 `RGB15Color`；但 `lsusb` 中没有 `048d:8910`，内置键盘由 i8042 提供，现有
+`hidraw` 设备也没有 ITE 829x 控制器。因此本机不是前述 USB HID 路线。
+
+原厂 `RGBKB` 的持久化颜色、模式、亮度仍位于 `AppSettings page 2`，Windows
+通过 `InsydeDCHU.dll` 导出的 `ReadAppSettings` / `WriteAppSettings`，底层调用
+`DeviceIoControl(0x32240C)`。本机 DSDT 的 `SCMD(0x67)`（十进制 103）还包含
+实时 RGB15 写入分支，支持 `0xF0/0xF1/0xF2 + BGR` 路径；但本机 `kb_type=6`
+只有一个物理 RGB 通道，实际只有 `0xF0` 生效，`0xF1/0xF2` 不对应可独立控制的
+灯区。`0xB0000000` 对应波浪，`0xF40000xx` 对应亮度/关闭；原厂状态开启值为
+`0xE0071007`，关闭值为 `0xE0000007`。内核驱动现通过命名的 `keyboard_rgb`
+sysfs 节点暴露单区操作；它不暴露任意 `_DSM` 整数写入。
+同时注册标准 LED class 节点 `clevo::kbd_backlight`，让 KDE/PowerDevil 等
+桌面组件可以通过标准 `brightness` 文件调节原始 `0..191` 亮度；原厂 daemon
+接口仍保留校准的 `0..4` 五档。RGB 颜色和灯效仍使用 `keyboard_rgb` 命名操作。
+实测直接发送 `192..255` 与 `191` 亮度相同，确认该机 EC 的有效亮度上限为 `191`。
+正式颜色写入还会在 F0 单区上执行 24 步、约 0.3 秒的软件渐变；这不改变单区硬件
+能力，也不影响 `probe` 原始诊断命令。
+在进入 `static` / `wave` 或写入非零亮度、颜色时，驱动还发送原厂的
+`121/24 = 0` 关闭 RGB 睡眠定时器，避免固件中已有的 30 秒定时器把实时灯效关闭；
+该操作不等价于 AppSettings 持久化写入。
+
+daemon 现在单独报告固件 `kb_type` 与实际可写后端：使用 `--driver` 且内核模块
+提供 `keyboard_rgb` 时，本机启用 `acpi-dchu` 单区控制；没有该节点时仍明确报告
+“固件支持 RGB15、没有已验证 Linux 写入通道”。发现真实 `048d:8910` 时则启用
+USB HID 逐键控制。
+
+截至 2026-09-29，本机已确认命令会使整块键盘变色；这符合该机型单区 RGB15
+硬件，而不是三区协议失败。按 `docs/install.md` 完成的可逆手测中，静态红色保持
+35 秒未熄灭，说明实时 RGB15 控制和睡眠定时器关闭路径均已验证。

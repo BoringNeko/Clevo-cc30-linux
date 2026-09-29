@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 clevo-proto.workspace = true
+hidapi.workspace = true
 
 [lints]
 workspace = true

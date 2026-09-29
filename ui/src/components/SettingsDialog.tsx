@@ -12,7 +12,9 @@ import PaletteIcon from "@mui/icons-material/Palette";
 import TuneIcon from "@mui/icons-material/Tune";
 import MonitorIcon from "@mui/icons-material/Monitor";
 import PowerSettingsNewIcon from "@mui/icons-material/PowerSettingsNew";
+import KeyboardIcon from "@mui/icons-material/Keyboard";
 import { CompatibilitySection } from "./CompatibilitySection";
+import { KeyboardSection } from "./KeyboardSection";
 import { ApplicationSection } from "./ApplicationSection";
 import { DisplaySection } from "./DisplaySection";
 import { PersonalizationSection } from "./PersonalizationSection";
@@ -27,6 +29,7 @@ const SECTIONS = [
   { id: "personalization", label: "个性化", Icon: PaletteIcon },
   { id: "display", label: "显示", Icon: MonitorIcon },
   { id: "compatibility", label: "兼容性", Icon: TuneIcon },
+  { id: "keyboard", label: "键盘灯", Icon: KeyboardIcon },
   { id: "application", label: "应用程序", Icon: PowerSettingsNewIcon },
 ] as const;
 
@@ -240,6 +243,8 @@ export function SettingsDialog({
                     compatibility={compatibility}
                     onCompatibilityChange={onCompatibilityChange}
                   />
+                ) : active === "keyboard" ? (
+                  <KeyboardSection open={open} />
                 ) : (
                   <ApplicationSection onQuit={onClose} />
                 )}

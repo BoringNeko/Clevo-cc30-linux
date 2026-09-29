@@ -17,7 +17,10 @@ use std::time::Duration;
 use clap::Parser;
 use tracing::{info, warn};
 
-use clevo_transport::{AcpiCallTransport, DriverTransport, MockTransport, Transport};
+use clevo_transport::{
+    AcpiCallTransport, AcpiKeyboard, DriverTransport, HidKeyboard, Keyboard, MockTransport,
+    Transport,
+};
 use clevod::dbus::CcDaemon;
 use clevod::{config, DBUS_NAME, DBUS_PATH};
 
@@ -110,7 +113,54 @@ async fn main() -> ExitCode {
     } else {
         Some(args.config.clone())
     };
-    let service = Arc::new(clevod::Service::new(transport).with_config_path(persist_path));
+    let service = clevod::Service::new(transport).with_config_path(persist_path);
+    let firmware_curve = service.read_curve().ok();
+    let firmware_keyboard_type = firmware_curve.as_ref().map(|curve| curve.kb_type);
+    if let Some(curve) = firmware_curve {
+        service.set_keyboard_firmware_type(Some(curve.kb_type));
+        info!(
+            kb_type = curve.kb_type,
+            "firmware keyboard capability detected"
+        );
+    } else {
+        service.set_keyboard_firmware_type(None);
+    }
+    let keyboard = if args.mock.is_some() {
+        None
+    } else if args.driver && matches!(firmware_keyboard_type, Some(6 | 22)) {
+        match AcpiKeyboard::discover() {
+            Ok(Some(keyboard)) => {
+                info!(path = %keyboard.snapshot().info.path, "ACPI-DCHU RGB15 keyboard backend found");
+                Some(Box::new(keyboard) as Box<dyn Keyboard>)
+            }
+            Ok(None) => {
+                warn!(
+                    "firmware advertises RGB15 but the clevo-cc keyboard_rgb sysfs node is missing"
+                );
+                None
+            }
+            Err(err) => {
+                warn!(%err, "could not probe ACPI-DCHU keyboard RGB backend");
+                None
+            }
+        }
+    } else {
+        match HidKeyboard::discover() {
+            Ok(Some(keyboard)) => {
+                info!("ITE 048d:8910 keyboard RGB controller found");
+                Some(Box::new(keyboard) as Box<dyn Keyboard>)
+            }
+            Ok(None) => {
+                warn!("no compatible keyboard RGB controller found; RGB controls disabled");
+                None
+            }
+            Err(err) => {
+                warn!(%err, "could not probe keyboard RGB controller; RGB controls disabled");
+                None
+            }
+        }
+    };
+    let service = Arc::new(service.with_keyboard(keyboard));
     info!(
         kind = ?service.kind(),
         writable = service.writable(),

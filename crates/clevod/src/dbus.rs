@@ -9,9 +9,12 @@
 //! ```text
 //! /org/clevo/CC
 //!   properties: FanMode, PerfMode, Writable, FanFreshness, CpuRpm, GpuRpm,
-//!               CpuTempRaw, GpuTempRaw, CpuDuty, GpuDuty, FanCount
+//!               CpuTempRaw, GpuTempRaw, CpuDuty, GpuDuty, FanCount,
+//!               KeyboardAvailable, KeyboardFirmwareType, KeyboardState
 //!   methods:    SetFanMode(s) -> u8     (PolicyKit)
 //!               SetPerfMode(s) -> u8    (PolicyKit)
+//!               SetKeyboardMode(s), SetKeyboardBrightness(y),
+//!               SetKeyboardZone(s,yyy), SetKeyboardKey(yyyyy) (PolicyKit)
 //!               GetCurve() -> s
 //!               Poll()
 //!   signals:    FanChanged(u, u)  Error(s)
@@ -29,6 +32,7 @@ use zbus::object_server::SignalEmitter;
 
 use crate::policy::{self, Authorizer, PolicyKitAuthorizer};
 use crate::service::Service;
+use clevo_transport::Color;
 
 /// D-Bus object implementation.
 pub struct CcDaemon {
@@ -237,6 +241,93 @@ impl CcDaemon {
         }
     }
 
+    /// Set a verified keyboard mode.
+    async fn set_keyboard_mode(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(signal_context)] emitter: SignalEmitter<'_>,
+        mode: &str,
+    ) -> zbus::fdo::Result<()> {
+        self.require(header.sender(), &emitter, policy::ACTION_KEYBOARD)
+            .await?;
+        self.service
+            .set_keyboard_mode(mode)
+            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+    }
+
+    /// Set keyboard brightness in the vendor's 0..=4 scale.
+    async fn set_keyboard_brightness(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(signal_context)] emitter: SignalEmitter<'_>,
+        level: u8,
+    ) -> zbus::fdo::Result<u8> {
+        self.require(header.sender(), &emitter, policy::ACTION_KEYBOARD)
+            .await?;
+        self.service
+            .set_keyboard_brightness(level)
+            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+    }
+
+    /// Apply one color to a logical keyboard zone.
+    async fn set_keyboard_zone(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(signal_context)] emitter: SignalEmitter<'_>,
+        zone: &str,
+        red: u8,
+        green: u8,
+        blue: u8,
+    ) -> zbus::fdo::Result<()> {
+        self.require(header.sender(), &emitter, policy::ACTION_KEYBOARD)
+            .await?;
+        self.service
+            .set_keyboard_zone(
+                zone,
+                Color {
+                    r: red,
+                    g: green,
+                    b: blue,
+                },
+            )
+            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+    }
+
+    /// Apply one color to a key in the verified 6x20 layout.
+    #[allow(clippy::too_many_arguments)]
+    async fn set_keyboard_key(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(signal_context)] emitter: SignalEmitter<'_>,
+        row: u8,
+        col: u8,
+        red: u8,
+        green: u8,
+        blue: u8,
+    ) -> zbus::fdo::Result<()> {
+        self.require(header.sender(), &emitter, policy::ACTION_KEYBOARD)
+            .await?;
+        self.service
+            .set_keyboard_key(
+                row,
+                col,
+                Color {
+                    r: red,
+                    g: green,
+                    b: blue,
+                },
+            )
+            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+    }
+
+    /// Return keyboard capability and cached state as JSON.
+    async fn get_keyboard(&self) -> zbus::fdo::Result<String> {
+        Ok(keyboard_to_json(
+            self.service.keyboard_snapshot(),
+            self.service.keyboard_firmware_type(),
+        ))
+    }
+
     /// Current fan mode value (`121/1`), or `255` if never set this session.
     #[zbus(property)]
     fn fan_mode(&self) -> u8 {
@@ -350,6 +441,27 @@ impl CcDaemon {
             .map(|curve| fan_curve_to_json(&curve))
             .unwrap_or_default()
     }
+
+    /// Whether a supported keyboard RGB backend was discovered.
+    #[zbus(property)]
+    fn keyboard_available(&self) -> bool {
+        self.service.keyboard_snapshot().is_some()
+    }
+
+    /// Keyboard type reported by firmware (`255` means unknown).
+    #[zbus(property)]
+    fn keyboard_firmware_type(&self) -> u8 {
+        self.service.keyboard_firmware_type().unwrap_or(255)
+    }
+
+    /// Keyboard state as JSON. An unavailable device is represented explicitly.
+    #[zbus(property)]
+    fn keyboard_state(&self) -> String {
+        keyboard_to_json(
+            self.service.keyboard_snapshot(),
+            self.service.keyboard_firmware_type(),
+        )
+    }
 }
 
 fn freshness_str(freshness: crate::state::Freshness) -> String {
@@ -401,4 +513,50 @@ pub fn fan_curve_to_json(curve: &clevo_proto::FanCurve) -> String {
         points(&curve.gpu1),
         points(&curve.gpu2),
     )
+}
+
+fn keyboard_to_json(
+    snapshot: Option<clevo_transport::KeyboardSnapshot>,
+    firmware_type: Option<u8>,
+) -> String {
+    let Some(snapshot) = snapshot else {
+        let reason = if firmware_type.is_some() {
+            "firmware capability is advertised, but no verified Linux keyboard write transport was found"
+        } else {
+            "no verified Linux keyboard write transport was found"
+        };
+        return serde_json::json!({
+            "available": false,
+            "writable": false,
+            "firmware_kb_type": firmware_type,
+            "backend": "none",
+            "reason": reason,
+            "mode": "off",
+            "brightness": 0,
+            "keys": [],
+        })
+        .to_string();
+    };
+    let keys = snapshot
+        .keys
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|color| serde_json::json!([color.r, color.g, color.b]))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "available": true,
+        "writable": snapshot.writable,
+        "firmware_kb_type": firmware_type,
+        "backend": snapshot.info.backend,
+        "reason": null,
+        "vendor_id": snapshot.info.vendor_id,
+        "product_id": snapshot.info.product_id,
+        "mode": snapshot.mode.as_str(),
+        "brightness": snapshot.brightness,
+        "keys": keys,
+    })
+    .to_string()
 }

@@ -91,6 +91,24 @@ pub struct FanCurve {
     pub gpu2: Vec<CurvePoint>,
 }
 
+/// Keyboard RGB capability and the last state written this session.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct KeyboardState {
+    pub available: bool,
+    pub writable: bool,
+    #[serde(default)]
+    pub firmware_kb_type: Option<u8>,
+    #[serde(default)]
+    pub backend: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+    pub vendor_id: Option<u16>,
+    pub product_id: Option<u16>,
+    pub mode: String,
+    pub brightness: u8,
+    pub keys: Vec<Vec<[u8; 3]>>,
+}
+
 /// The shape of the daemon's `GetCurve` JSON string.
 ///
 /// The machine metadata is optional: `GetCurve` includes it, but the
@@ -197,6 +215,51 @@ impl DaemonClient {
     /// curve comes back as a D-Bus error.
     pub fn set_curve(&self, curve_json: &str) -> Result<(), UiError> {
         self.proxy()?.call_method("SetCurve", &(curve_json,))?;
+        Ok(())
+    }
+
+    /// Read keyboard RGB capability and cached state.
+    pub fn keyboard(&self) -> Result<KeyboardState, UiError> {
+        let json: String = self
+            .proxy()?
+            .call_method("GetKeyboard", &())?
+            .body()
+            .deserialize()
+            .map_err(|e| UiError { message: format!("could not decode keyboard reply: {e}") })?;
+        Ok(serde_json::from_str(&json)?)
+    }
+
+    /// Set keyboard mode.
+    pub fn set_keyboard_mode(&self, mode: &str) -> Result<(), UiError> {
+        self.proxy()?.call_method("SetKeyboardMode", &(mode,))?;
+        Ok(())
+    }
+
+    /// Set keyboard brightness in the vendor's 0..=4 scale.
+    pub fn set_keyboard_brightness(&self, level: u8) -> Result<u8, UiError> {
+        let reply = self
+            .proxy()?
+            .call_method("SetKeyboardBrightness", &(level,))?;
+        reply.body().deserialize().map_err(|e| UiError {
+            message: format!("could not decode keyboard brightness reply: {e}"),
+        })
+    }
+
+    /// Set one logical keyboard zone.
+    pub fn set_keyboard_zone(&self, zone: &str, color: [u8; 3]) -> Result<(), UiError> {
+        self.proxy()?.call_method(
+            "SetKeyboardZone",
+            &(zone, color[0], color[1], color[2]),
+        )?;
+        Ok(())
+    }
+
+    /// Set one key in the verified 6x20 layout.
+    pub fn set_keyboard_key(&self, row: u8, col: u8, color: [u8; 3]) -> Result<(), UiError> {
+        self.proxy()?.call_method(
+            "SetKeyboardKey",
+            &(row, col, color[0], color[1], color[2]),
+        )?;
         Ok(())
     }
 

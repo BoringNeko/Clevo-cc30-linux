@@ -141,6 +141,33 @@ fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
             commands::set_fan_curve(curve)?;
             Ok(Value::Null)
         }
+        "get_keyboard" => ok(commands::get_keyboard()? ),
+        "set_keyboard_mode" => {
+            commands::set_keyboard_mode(str_arg(args, "mode")?)?;
+            Ok(Value::Null)
+        }
+        "set_keyboard_brightness" => {
+            let level = args
+                .get("level")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| "missing argument: level".to_string())?;
+            if level > u64::from(u8::MAX) {
+                return Err("level is outside u8 range".into());
+            }
+            ok(commands::set_keyboard_brightness(level as u8)? )
+        }
+        "set_keyboard_zone" => {
+            let color = rgb_arg(args)?;
+            commands::set_keyboard_zone(str_arg(args, "zone")?, color)?;
+            Ok(Value::Null)
+        }
+        "set_keyboard_key" => {
+            let row = u8_arg(args, "row")?;
+            let col = u8_arg(args, "col")?;
+            let color = rgb_arg(args)?;
+            commands::set_keyboard_key(row, col, color)?;
+            Ok(Value::Null)
+        }
         "get_launch_prefs" => ok(commands::get_launch_prefs()),
         "set_launch_prefs" => {
             let prefs = args
@@ -174,6 +201,29 @@ fn str_arg(args: &Value, key: &str) -> Result<String, String> {
         .and_then(Value::as_str)
         .map(str::to_string)
         .ok_or_else(|| format!("missing argument: {key}"))
+}
+
+fn u8_arg(args: &Value, key: &str) -> Result<u8, String> {
+    let value = args
+        .get(key)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| format!("missing argument: {key}"))?;
+    u8::try_from(value).map_err(|_| format!("argument {key} is outside u8 range"))
+}
+
+fn rgb_arg(args: &Value) -> Result<[u8; 3], String> {
+    let value = args
+        .get("color")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "missing argument: color".to_string())?;
+    if value.len() != 3 {
+        return Err("color must contain exactly three components".into());
+    }
+    Ok([
+        value[0].as_u64().and_then(|v| u8::try_from(v).ok()).ok_or_else(|| "invalid red component".to_string())?,
+        value[1].as_u64().and_then(|v| u8::try_from(v).ok()).ok_or_else(|| "invalid green component".to_string())?,
+        value[2].as_u64().and_then(|v| u8::try_from(v).ok()).ok_or_else(|| "invalid blue component".to_string())?,
+    ])
 }
 
 /// Infallible variant for values that always serialise (plain scalars, `null`,

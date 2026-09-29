@@ -86,6 +86,111 @@ systemctl status clevod
 clevo-cc --transport dbus fan status
 ```
 
+### 键盘 RGB 手动测试（COLORFUL P15 23）
+
+先确认固件类型和驱动节点：
+
+```bash
+clevo-cc --transport driver fan curve
+ls -l /sys/devices/platform/CLV0001:00/keyboard_rgb
+clevo-cc --transport dbus doctor
+```
+
+`kb_type=6` 且存在 `keyboard_rgb` 时，先停止 daemon，避免它把保存的旧配置重放回来：
+
+```bash
+sudo systemctl stop clevod
+K=/sys/devices/platform/CLV0001:00/keyboard_rgb
+echo 'all ff0000' | sudo tee "$K"       # 整块键盘红
+echo 'brightness 2' | sudo tee "$K"
+echo 'mode static' | sudo tee "$K"
+cat "$K"
+# 静态模式保持 35 秒，确认不会被固件睡眠定时器关闭。
+sleep 35
+# 确认整块键盘仍亮着后再测试动态效果；不要在观察前写 mode off。
+echo 'mode wave' | sudo tee "$K"
+sleep 10
+echo 'mode off' | sudo tee "$K"         # 收尾关闭
+sudo systemctl start clevod
+```
+
+本机 `kb_type=6` 是单区 RGB15；`mode static` / `mode wave` 会重新开启整块键盘、
+再写入颜色，并通过 `121/24 = 0`
+关闭固件的键盘灯睡眠定时器；这只影响当前运行状态，不写入 Windows 的 AppSettings
+持久化页。
+
+内核同时注册标准 LED class 设备，供 KDE/PowerDevil 等桌面组件调节亮度。
+该接口使用 RGB15 原始亮度字节，范围是 `0..191`，比原厂五档接口更细：
+
+```bash
+ls -l /sys/class/leds/clevo::kbd_backlight
+cat /sys/class/leds/clevo::kbd_backlight/max_brightness
+echo 96 | sudo tee /sys/class/leds/clevo::kbd_backlight/brightness
+cat /sys/class/leds/clevo::kbd_backlight/brightness
+```
+
+该标准接口只负责亮度；颜色和 `static` / `wave` 模式仍通过
+`/sys/devices/platform/CLV0001:00/keyboard_rgb` 控制。通过 `all RRGGBB` 写入新颜色
+时，驱动会用 24 个中间颜色做约 0.3 秒的软件渐变；这不是硬件原生渐变，但所有
+调用路径都能得到相同效果。
+
+直接写 sysfs 时，`clevod` 会在启动时按 `/etc/clevo-cc/clevod.toml` 重放已保存状态；
+如果该文件保存的是 `mode=off` 或 `brightness=0`，灯光会在 daemon 启动后被关闭，这是预期的配置重放，不是硬件超时。
+
+如果直接写 sysfs 成功但键盘无变化，保留以下信息再排查：
+
+```bash
+sudo dmesg | tail -n 80
+systemctl status clevod --no-pager
+```
+
+如需验证固件是否隐藏支持 F0/F1/F2 分区，必须先停止 daemon，避免保存配置覆盖
+实验结果：
+
+```bash
+sudo systemctl stop clevod
+K=/sys/devices/platform/CLV0001:00/keyboard_rgb
+echo 'mode static' | sudo tee "$K"
+echo 'brightness 2' | sudo tee "$K"
+echo 'probe 0 ff0000' | sudo tee "$K"   # F0
+sleep 2
+echo 'probe 1 00ff00' | sudo tee "$K"   # F1
+sleep 2
+echo 'probe 2 0000ff' | sudo tee "$K"   # F2
+sleep 2
+cat "$K"
+sudo systemctl start clevod
+```
+
+观察最后一次写入后：如果整块键盘都是蓝色，就是单区硬件；如果能同时看到红、绿、
+蓝三个物理区域，才说明该机型可以启用三区实现。`probe` 不写入 daemon 配置，
+但实验结束仍应执行 `mode off` 或重新启动 daemon。
+
+测试亮度原始字节是否支持超过 `191`：
+
+```bash
+sudo systemctl stop clevod
+K=/sys/devices/platform/CLV0001:00/keyboard_rgb
+echo 'mode static' | sudo tee "$K"
+for v in 192 208 224 240 255; do
+  echo "raw-brightness $v" | sudo tee "$K"
+  sleep 1
+done
+echo 'raw-brightness 191' | sudo tee "$K"
+sudo systemctl start clevod
+```
+
+`raw-brightness` 不更新缓存，也不会改变 KDE 的正式 `max_brightness=191`。
+本机实测 `192..255` 与 `191` 亮度相同，确认 EC 在 `191` 处封顶，因此不扩展
+标准 LED 上限。
+
+也可以经 daemon 测试 UI/D-Bus 路径；systemd 单元已经使用 `--driver`：
+
+```bash
+sudo systemctl restart clevod
+clevo-cc --transport dbus doctor
+```
+
 ### CPU 温度（默认不需要换算）
 
 命令 12 的 CPU 温度在偏移 `[18]`。原厂会用 CPU 型号去 `cpu.ini` 查 TDP 档位

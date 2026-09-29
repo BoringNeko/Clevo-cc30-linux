@@ -23,6 +23,8 @@ exposes fan monitoring and fan-mode control through `hwmon` and sysfs.
 | `sysfs fan_curve` | rw | read (command 13) and write (command 14) |
 | `sysfs raw_status` / `raw_curve` | read | diagnostic hex dumps (for re-verifying offsets) |
 | `sysfs perf_mode` | rw | `quiet` / `pwrsaving` / `performance` / `entertainment` |
+| `sysfs keyboard_rgb` | rw | RGB15 single-zone color, mode and brightness |
+| LED class `clevo::kbd_backlight` | rw | standard raw keyboard brightness (`0..191`) |
 
 `fan_mode` values map to `121/1`: `auto`=0, `max`=1, `maxq`=5, `custom`=6,
 `quiet`=8. `perf_mode` values map to `121/25`: quiet=0, pwrsaving=1,
@@ -31,6 +33,56 @@ performance=2, entertainment=3.
 `fan_mode`/`perf_mode` report the last value written this session (fan_mode
 defaults to `auto`, perf_mode to `unknown`); the firmware does not report the
 current mode reliably.
+
+`keyboard_rgb` accepts named operations and keeps the last values in its read
+back:
+
+```bash
+echo "all ff0000" | sudo tee /sys/devices/platform/CLV0001:00/keyboard_rgb
+echo "brightness 4" | sudo tee /sys/devices/platform/CLV0001:00/keyboard_rgb
+echo "mode static" | sudo tee /sys/devices/platform/CLV0001:00/keyboard_rgb
+cat /sys/devices/platform/CLV0001:00/keyboard_rgb
+```
+
+Colors are `RRGGBB`. On the verified COLORFUL P15 23 firmware, `kb_type=6`
+has one physical RGB15 channel, so the whole keyboard changes together. The
+legacy `left`, `middle`, and `right` spellings are accepted as aliases for
+`all`; they are not independent zones.
+
+Color writes through `all RRGGBB` use a short software fade with 24 intermediate
+steps; the transition takes about 0.3 seconds and remains a single physical
+channel.
+
+The LED class device is available at
+`/sys/class/leds/clevo::kbd_backlight/brightness`. It exposes the raw
+`0..191` brightness byte accepted by the RGB15 command, giving desktop
+power-management tools 192 requested levels. The original named
+`keyboard_rgb` interface keeps the vendor's calibrated `0..4` levels. RGB
+color and effect selection remain on `keyboard_rgb`.
+
+For a direct hardware experiment only, stop `clevod` and use `probe 0..2` to
+send the vendor's raw F0/F1/F2 selectors without updating the cached state:
+
+```bash
+echo "probe 0 ff0000" | sudo tee /sys/devices/platform/CLV0001:00/keyboard_rgb
+echo "probe 1 00ff00" | sudo tee /sys/devices/platform/CLV0001:00/keyboard_rgb
+echo "probe 2 0000ff" | sudo tee /sys/devices/platform/CLV0001:00/keyboard_rgb
+```
+
+This is diagnostic-only. If the last command makes the entire keyboard blue,
+the hardware is single-zone; if separate physical areas remain red, green, and
+blue, the model has usable multi-zone selectors and the normal driver can be
+extended accordingly.
+
+The raw brightness byte can also be tested without changing the cached state:
+
+```bash
+echo "raw-brightness 192" | sudo tee /sys/devices/platform/CLV0001:00/keyboard_rgb
+echo "raw-brightness 224" | sudo tee /sys/devices/platform/CLV0001:00/keyboard_rgb
+echo "raw-brightness 255" | sudo tee /sys/devices/platform/CLV0001:00/keyboard_rgb
+```
+
+Stop at the first abnormal result and restore `191` or use `mode off`.
 
 ### Temperatures
 
@@ -107,8 +159,16 @@ cat /sys/class/hwmon/hwmon*/fan2_input              # GPU1 rpm
 cat /sys/class/hwmon/hwmon*/temp1_input             # GPU temperature (m°C)
 cat /sys/devices/platform/CLV0001:00/raw_status     # raw cmd-12 bytes
 echo max | sudo tee /sys/devices/platform/CLV0001:00/fan_mode
+echo "all ff0000" | sudo tee /sys/devices/platform/CLV0001:00/keyboard_rgb
+echo "mode wave" | sudo tee /sys/devices/platform/CLV0001:00/keyboard_rgb
+cat /sys/devices/platform/CLV0001:00/keyboard_rgb
+echo "mode off" | sudo tee /sys/devices/platform/CLV0001:00/keyboard_rgb
 sudo rmmod clevo_cc
 ```
+
+The RGB15 status word enables the available keyboard channel together with the
+color and brightness commands. `mode off` is the reversible cleanup operation;
+it does not change the cached color or brightness level.
 
 If `_DSM` returns `0x80000002` the probe still loads but reads return
 `-EOPNOTSUPP`; check `dmesg`.

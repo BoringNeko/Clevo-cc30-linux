@@ -35,6 +35,11 @@ UI added.
   factory curve**, snapshotted from the EC on a cold boot before anything was
   written — not a hardcoded table — and a warm restart is never mistaken for a
   cold one.
+- **Keyboard RGB**: hardware-selects either per-key ITE `048d:8910` USB HID
+  control or the verified single-zone RGB15 ACPI-DCHU path. The local path also
+  exposes the standard `clevo::kbd_backlight` LED class device for KDE and
+  PowerDevil, with raw brightness `0..191` and an approximately 0.3-second
+  software colour fade; `clevod` persists the user configuration.
 - **Desktop UI**: a React frontend that runs under either **Tauri 2** (default)
   or **Electron**, talking only over D-Bus; glass dashboard, custom title bar, an
   editable fan curve, light/dark themes, custom accent colour/logo/wallpaper, a

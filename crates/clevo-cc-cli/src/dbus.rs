@@ -214,6 +214,16 @@ impl DbusClient {
             curve_writable: self.prop("CurveWritable")?,
         })
     }
+
+    /// Whether clevod found the compatible ITE keyboard RGB controller.
+    pub fn keyboard_available(&self) -> Result<bool, DbusError> {
+        self.prop("KeyboardAvailable")
+    }
+
+    /// Keyboard type reported by firmware (`255` means unknown).
+    pub fn keyboard_firmware_type(&self) -> Result<u8, DbusError> {
+        self.prop("KeyboardFirmwareType")
+    }
 }
 
 /// Map a zbus error to a [`DbusError`], distinguishing policy denials.

@@ -47,7 +47,8 @@
 | **出厂曲线快照** | ✅ 已验证 | 冷启动捕获值与本机原始出厂值逐点一致（含 gpu2 的 0,1%/0,2%）；热重启正确判为"未知"不误捕获 |
 | 安装器：旧模块重载 / 陈旧构建重建 / 运行中 UI 替换 | ✅ 已验证 | 真机 `install.sh` + `scripts/tests-install-*.sh` |
 | 内核稳定性（写入路径） | ✅ 已验证 | 无 `BUG`/`Oops`/`usercopy_abort` |
-| 键盘 RGB / 充电阈值 / 超频 | ❌ 未实现 | 一期范围外 |
+| 键盘 RGB | ✅ 已验证，单区 RGB | 本机 `kb_type=6` 通过内核 `keyboard_rgb` 节点走命令 103；整块键盘共用一个 RGB 通道，静态红色已实测保持 35 秒不熄灭，EC 有效亮度范围确认是 `0..191`。无该节点时明确显示不可写，`048d:8910` 设备使用 USB HID |
+| 充电阈值 / 超频 | ❌ 未实现 | 二期后续工作包 |
 
 > 写入相关的语义细节（整表替换、read-modify-write、成功码 `0x14`）见
 > `hardware-notes.md` §7.2；**写入实际存了什么**（只写中间两点、duty 单位、
@@ -59,8 +60,8 @@
 
 | 发行版 | 安装命令 |
 |---|---|
-| Arch / CachyOS | `sudo pacman -S --needed dbus polkit` |
-| Debian / Ubuntu | `sudo apt install dbus polkitd` |
+| Arch / CachyOS | `sudo pacman -S --needed dbus polkit hidapi` |
+| Debian / Ubuntu | `sudo apt install dbus polkitd libhidapi-dev` |
 | Fedora / RHEL | `sudo dnf install dbus polkit` |
 | openSUSE | `sudo zypper install dbus-1 polkit` |
 

@@ -12,11 +12,18 @@ use crate::error::TransportResult;
 pub mod acpi_call;
 pub mod driver;
 pub mod error;
+pub mod keyboard;
 pub mod mock;
 
 pub use acpi_call::AcpiCallTransport;
 pub use driver::DriverTransport;
 pub use error::TransportError;
+pub use keyboard::{
+    brightness_raw, build_feature_report, build_get_feature_report, AcpiKeyboard, Color,
+    HidKeyboard, Keyboard, KeyboardError, KeyboardInfo, KeyboardMode, KeyboardSnapshot,
+    KeyboardZone, MockKeyboard, DEFAULT_ACPI_KEYBOARD_PATH, ITE_PRODUCT_ID, ITE_USAGE,
+    ITE_USAGE_PAGE, ITE_VENDOR_ID, KEYBOARD_COLS, KEYBOARD_ROWS,
+};
 pub use mock::{Fixture, FixtureEntry, FixtureMeta, MockTransport};
 
 /// Which backend a transport is.

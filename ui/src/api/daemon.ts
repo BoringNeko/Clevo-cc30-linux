@@ -150,6 +150,49 @@ export async function setFanCurve(curve: FanCurve): Promise<void> {
   return invoke<void>("set_fan_curve", { curve });
 }
 
+/** Keyboard RGB state returned by clevod. */
+export interface KeyboardState {
+  available: boolean;
+  writable: boolean;
+  firmware_kb_type?: number;
+  backend?: string;
+  reason?: string;
+  vendor_id?: number;
+  product_id?: number;
+  mode: "off" | "static" | "wave";
+  brightness: number;
+  keys: number[][][];
+}
+
+/** Read keyboard RGB capability and cached state. */
+export async function getKeyboard(): Promise<KeyboardState> {
+  return invoke<KeyboardState>("get_keyboard");
+}
+
+/** Set keyboard effect mode. */
+export async function setKeyboardMode(mode: KeyboardState["mode"]): Promise<void> {
+  return invoke<void>("set_keyboard_mode", { mode });
+}
+
+/** Set keyboard brightness in the vendor's 0..=4 scale. */
+export async function setKeyboardBrightness(level: number): Promise<number> {
+  return invoke<number>("set_keyboard_brightness", { level });
+}
+
+/** Apply one color to a logical keyboard zone. */
+export async function setKeyboardZone(zone: string, color: [number, number, number]): Promise<void> {
+  return invoke<void>("set_keyboard_zone", { zone, color });
+}
+
+/** Apply one color to a key in the verified 6x20 layout. */
+export async function setKeyboardKey(
+  row: number,
+  col: number,
+  color: [number, number, number],
+): Promise<void> {
+  return invoke<void>("set_keyboard_key", { row, col, color });
+}
+
 /**
  * Fan modes the UI offers, in display order.
  *

@@ -23,7 +23,7 @@ LLVM ?= $(shell \
 .PHONY: all clean
 
 all:
-	$(MAKE) -C $(KDIR) M=$(PWD) $(if $(LLVM),LLVM=$(LLVM)) modules
+	$(MAKE) -C $(KDIR) M=$(CURDIR) $(if $(LLVM),LLVM=$(LLVM)) modules
 
 clean:
-	$(MAKE) -C $(KDIR) M=$(PWD) clean
+	$(MAKE) -C $(KDIR) M=$(CURDIR) clean

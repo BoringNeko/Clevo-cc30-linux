@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * clevo-cc - read-only ACPI platform driver for Clevo DCHU devices.
+ * clevo-cc - ACPI platform driver for Clevo DCHU devices.
  *
  * This is slice S6a: it binds ACPI\CLV0001, evaluates the firmware `_DSM`
  * method using a real ACPI Package argument (which acpi_call cannot build),
@@ -9,16 +9,20 @@
  *   fan1_input  - CPU fan speed in rpm
  *   fan2_input  - GPU1 fan speed in rpm
  *
- * Only read commands are issued. The 256-byte payload is sent as Arg3 =
- * Package { Buffer(256) } as required by the DSDT.
+ * Read commands use Arg3 = Package { Buffer(256) }; verified command-121
+ * scalar writes use Package { Integer(value) }, while command-103 RGB writes
+ * use Package { Buffer(256) } to match the vendor's byte-array call.
  *
  * Verified against a COLORFUL P15 23; see docs/hardware-notes.md.
  */
 
 #include <linux/acpi.h>
+#include <linux/delay.h>
 #include <linux/hwmon.h>
 #include <linux/hwmon-sysfs.h>
+#include <linux/leds.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/platform_device.h>
 
 #define CLEVO_DSM_GUID "93F224E4-FBDC-4BBF-ADD6-DB71BDC0AFAD"
@@ -35,9 +39,32 @@
 #define CLEVO_CMD_FAN_CURVE 13
 #define CLEVO_CMD_FAN_CURVE_WRITE 14
 #define CLEVO_CMD_MAIN 121
+#define CLEVO_CMD_KEYBOARD_RGB 103
+
+/*
+ * RGB15 command-103 selector used by the COLORFUL P15 23.  The vendor
+ * utility contains F0/F1/F2 paths for models with multiple zones, but this
+ * machine's kb_type=6 firmware only has one physical RGB channel.  F1/F2 are
+ * accepted by ACPI yet do not address any LEDs, which made the old interface
+ * look like it was changing a zone while the whole keyboard stayed on F0.
+ */
+#define CLEVO_KB_ZONE_SINGLE 0xF0
+#define CLEVO_KB_ZONE_MIDDLE 0xF1
+#define CLEVO_KB_ZONE_RIGHT 0xF2
+#define CLEVO_KB_BRIGHTNESS_BASE 0xF4000000
+#define CLEVO_KB_BRIGHTNESS_MAX 191
+#define CLEVO_KB_COLOR_FADE_STEPS 24
+#define CLEVO_KB_COLOR_FADE_DELAY_US 10000
+#define CLEVO_KB_WAVE 0xB0000000
+/* Vendor RGB15 status word with the available keyboard channel enabled. */
+#define CLEVO_KB_STATUS_ON 0xE0071007
+#define CLEVO_KB_STATUS_OFF 0xE0000007
 
 /* CLEVO_CMD_MAIN sub-command for fan mode. */
 #define CLEVO_SUB_FAN_MODE 1
+
+/* CLEVO_CMD_MAIN sub-command used by RGBKB to control the LED sleep timer. */
+#define CLEVO_SUB_KB_SLEEP_TIMER 24
 
 /* CLEVO_CMD_MAIN sub-command for performance mode (0..3). */
 #define CLEVO_SUB_PERF_MODE 25
@@ -79,6 +106,14 @@ struct clevo_cc {
 	enum clevo_fan_mode fan_mode;
 	enum clevo_perf_mode perf_mode;
 	bool perf_mode_set;
+	struct mutex keyboard_lock;
+	struct led_classdev keyboard_led;
+	u8 keyboard_color[3][3];
+	bool keyboard_color_known[3];
+	/* Named keyboard_rgb keeps the vendor's 0..4 levels; LED class uses raw. */
+	u8 keyboard_brightness;
+	u8 keyboard_brightness_raw;
+	const char *keyboard_mode;
 };
 
 /*
@@ -234,9 +269,10 @@ static int clevo_cc_dsm_payload(struct clevo_cc *cc, u32 function, const u8 *in,
  * large Buffer cannot be converted to an Integer.)
  */
 static int clevo_cc_dsm_scalar(struct clevo_cc *cc, u32 function, u32 value,
-			       u8 *out, size_t out_cap, size_t *out_len)
+				       u8 *out, size_t out_cap, size_t *out_len)
 {
 	union acpi_object pkg;
+	int err;
 
 	pkg.type = ACPI_TYPE_PACKAGE;
 	pkg.package.count = 1;
@@ -246,7 +282,9 @@ static int clevo_cc_dsm_scalar(struct clevo_cc *cc, u32 function, u32 value,
 	pkg.package.elements[0].type = ACPI_TYPE_INTEGER;
 	pkg.package.elements[0].integer.value = value;
 
-	return clevo_cc_dsm_call(cc, function, &pkg, out, out_cap, out_len);
+	err = clevo_cc_dsm_call(cc, function, &pkg, out, out_cap, out_len);
+	kfree(pkg.package.elements);
+	return err;
 }
 
 /*
@@ -287,6 +325,414 @@ static int clevo_cc_set_perf_mode(struct clevo_cc *cc, u32 mode)
 		return -EINVAL;
 	return clevo_cc_main_cmd(cc, CLEVO_SUB_PERF_MODE, mode);
 }
+
+/*
+ * Send one of the vendor RGB15 command-103 words.
+ *
+ * Unlike command 121, the vendor sends command 103 as a Package containing
+ * a 256-byte Buffer.  The first four bytes contain the little-endian word;
+ * the remaining bytes are zero-filled by InsydeDCHU.dll.
+ */
+static int clevo_cc_keyboard_command(struct clevo_cc *cc, u32 value)
+{
+	u8 payload[CLEVO_PAYLOAD_LEN] = { 0 };
+	u8 out[8];
+	size_t len = 0;
+
+	payload[0] = value & 0xff;
+	payload[1] = (value >> 8) & 0xff;
+	payload[2] = (value >> 16) & 0xff;
+	payload[3] = (value >> 24) & 0xff;
+	return clevo_cc_dsm_payload(cc, CLEVO_CMD_KEYBOARD_RGB, payload, out,
+				    sizeof(out), &len);
+}
+
+/* Encode a COLORREF-like RGB value used by RGBKB.cs: B, R, G in the low word. */
+static u32 clevo_cc_keyboard_color_word(u8 selector, const u8 color[3])
+{
+	u32 rgb = ((u32)color[2] << 16) | ((u32)color[0] << 8) | color[1];
+
+	/* Vendor firmware reserves this RGB15 palette entry. */
+	if (color[0] == 0 && color[1] == 255 && color[2] == 127)
+		rgb = 0x460000 | ((u32)color[0] << 8) | color[1];
+
+	return ((u32)selector << 24) | rgb;
+}
+
+static int clevo_cc_set_keyboard_color(struct clevo_cc *cc, int zone,
+					       const u8 color[3])
+{
+	if (zone < 0 || zone >= 3)
+		return -EINVAL;
+
+	return clevo_cc_keyboard_command(
+		cc, clevo_cc_keyboard_color_word(CLEVO_KB_ZONE_SINGLE, color));
+}
+
+/* Software fade for the single physical RGB15 channel. */
+static int clevo_cc_transition_keyboard_color(struct clevo_cc *cc,
+						 const u8 target[3])
+{
+	u8 from[3];
+	u8 color[3];
+	unsigned int step;
+
+	if (!cc->keyboard_color_known[0])
+		return clevo_cc_set_keyboard_color(cc, 0, target);
+
+	memcpy(from, cc->keyboard_color[0], sizeof(from));
+	for (step = 1; step <= CLEVO_KB_COLOR_FADE_STEPS; step++) {
+		int component;
+		int err;
+
+		for (component = 0; component < 3; component++) {
+			int delta = (int)target[component] - from[component];
+			color[component] = from[component] +
+				(delta * (int)step) / CLEVO_KB_COLOR_FADE_STEPS;
+		}
+
+		err = clevo_cc_set_keyboard_color(cc, 0, color);
+		if (err)
+			return err;
+		if (step != CLEVO_KB_COLOR_FADE_STEPS)
+			usleep_range(CLEVO_KB_COLOR_FADE_DELAY_US,
+				     CLEVO_KB_COLOR_FADE_DELAY_US + 2000);
+	}
+
+	return 0;
+}
+
+/* Send a raw RGB15 selector for hardware probing; this never updates cache. */
+static int clevo_cc_probe_keyboard_color(struct clevo_cc *cc, int zone,
+						 const u8 color[3])
+{
+	u8 selector;
+
+	switch (zone) {
+	case 0:
+		selector = CLEVO_KB_ZONE_SINGLE;
+		break;
+	case 1:
+		selector = CLEVO_KB_ZONE_MIDDLE;
+		break;
+	case 2:
+		selector = CLEVO_KB_ZONE_RIGHT;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	return clevo_cc_keyboard_command(
+		cc, clevo_cc_keyboard_color_word(selector, color));
+}
+
+static int clevo_cc_set_keyboard_brightness_raw(struct clevo_cc *cc, u8 raw)
+{
+	return clevo_cc_keyboard_command(cc,
+					CLEVO_KB_BRIGHTNESS_BASE | raw);
+}
+
+static int clevo_cc_keyboard_level_raw(u8 level, u8 *raw)
+{
+	/* RGBKB exposes five calibrated levels over the raw 0..191 range. */
+	switch (level) {
+	case 0:
+		*raw = 0;
+		break;
+	case 1:
+		*raw = 47;
+		break;
+	case 2:
+		*raw = 95;
+		break;
+	case 3:
+		*raw = 143;
+		break;
+	case 4:
+		*raw = 191;
+		break;
+	default:
+		return -EINVAL;
+	}
+	return 0;
+}
+
+static int clevo_cc_set_keyboard_brightness(struct clevo_cc *cc, u8 level)
+{
+	u8 raw;
+
+	if (clevo_cc_keyboard_level_raw(level, &raw))
+		return -EINVAL;
+	return clevo_cc_set_keyboard_brightness_raw(cc, raw);
+}
+
+static int clevo_cc_set_keyboard_status(struct clevo_cc *cc, bool on)
+{
+	return clevo_cc_keyboard_command(
+		cc, on ? CLEVO_KB_STATUS_ON : CLEVO_KB_STATUS_OFF);
+}
+
+/* RGBKB.SetSleepTimerTriggerOff(): command 121/24 with value 0. */
+static int clevo_cc_disable_keyboard_sleep_timer(struct clevo_cc *cc)
+{
+	return clevo_cc_main_cmd(cc, CLEVO_SUB_KB_SLEEP_TIMER, 0);
+}
+
+/* Standard LED-class bridge used by KDE/PowerDevil for keyboard brightness. */
+static int clevo_cc_keyboard_led_set(struct led_classdev *led_cdev,
+					     enum led_brightness brightness)
+{
+	struct clevo_cc *cc = container_of(led_cdev, struct clevo_cc,
+					   keyboard_led);
+	int err;
+
+	if (brightness > CLEVO_KB_BRIGHTNESS_MAX)
+		return -EINVAL;
+
+	mutex_lock(&cc->keyboard_lock);
+	if (brightness == LED_OFF) {
+		err = clevo_cc_set_keyboard_brightness(cc, 0);
+		if (!err)
+			err = clevo_cc_set_keyboard_status(cc, false);
+	} else {
+		err = clevo_cc_set_keyboard_status(cc, true);
+		if (!err)
+			err = clevo_cc_set_keyboard_brightness_raw(cc, brightness);
+	}
+	if (!err)
+		err = clevo_cc_disable_keyboard_sleep_timer(cc);
+	if (!err) {
+		cc->keyboard_brightness_raw = brightness;
+		cc->keyboard_brightness = brightness ?
+			(unsigned int)(brightness * 4 + CLEVO_KB_BRIGHTNESS_MAX / 2) /
+			CLEVO_KB_BRIGHTNESS_MAX : 0;
+		cc->keyboard_led.brightness = brightness;
+	}
+	mutex_unlock(&cc->keyboard_lock);
+	return err;
+}
+
+static enum led_brightness
+clevo_cc_keyboard_led_get(struct led_classdev *led_cdev)
+{
+	struct clevo_cc *cc = container_of(led_cdev, struct clevo_cc,
+					   keyboard_led);
+	enum led_brightness brightness;
+
+	mutex_lock(&cc->keyboard_lock);
+	brightness = cc->keyboard_led.brightness;
+	mutex_unlock(&cc->keyboard_lock);
+	return brightness;
+}
+
+static const char *clevo_cc_keyboard_mode_name(const struct clevo_cc *cc)
+{
+	return cc->keyboard_mode ?: "unknown";
+}
+
+static ssize_t keyboard_rgb_show(struct device *dev,
+					struct device_attribute *attr, char *buf)
+{
+	struct clevo_cc *cc = dev_get_drvdata(dev);
+	ssize_t n;
+
+	mutex_lock(&cc->keyboard_lock);
+	n = sysfs_emit(buf,
+		       "mode=%s brightness=%u raw_brightness=%u zones=1 color=%02x%02x%02x\n",
+		       clevo_cc_keyboard_mode_name(cc), cc->keyboard_brightness,
+		       cc->keyboard_brightness_raw,
+		       cc->keyboard_color[0][0], cc->keyboard_color[0][1],
+		       cc->keyboard_color[0][2]);
+	mutex_unlock(&cc->keyboard_lock);
+	return n;
+}
+
+static int clevo_cc_parse_keyboard_color(const char *text, u8 color[3])
+{
+	unsigned int r, g, b;
+	int consumed;
+
+	if (strlen(text) != 6 ||
+	    sscanf(text, "%2x%2x%2x%n", &r, &g, &b, &consumed) != 3 ||
+	    text[consumed] != '\0' || r > 0xFF || g > 0xFF || b > 0xFF)
+		return -EINVAL;
+	color[0] = (u8)r;
+	color[1] = (u8)g;
+	color[2] = (u8)b;
+	return 0;
+}
+
+/*
+ * sysfs: keyboard_rgb
+ *
+ * This is deliberately a small, named interface instead of exposing arbitrary
+ * command-103 words. The accepted forms are:
+ *
+ *   all 112233
+ *   mode off | static | wave
+ *   brightness 0..4
+ *   raw-brightness 0..255
+ *   probe 0..2 112233
+ *
+ * Colors are written as RRGGBB. This P15 23 has one physical RGB15 channel;
+ * the legacy left/middle/right spellings remain accepted as aliases for
+ * compatibility, but all of them address the same F0 channel. `probe` is an
+ * experimental, uncached F0/F1/F2 diagnostic. `raw-brightness` is an
+ * experimental, uncached brightness-byte diagnostic. Both should only be used
+ * with the daemon stopped.
+ */
+static ssize_t keyboard_rgb_store(struct device *dev,
+					 struct device_attribute *attr,
+					 const char *buf, size_t count)
+{
+	struct clevo_cc *cc = dev_get_drvdata(dev);
+	char *input, *copy, *op, *value, *extra, *probe_zone = NULL;
+	u8 color[3];
+	int err = -EINVAL;
+
+	input = kstrdup(buf, GFP_KERNEL);
+	if (!input)
+		return -ENOMEM;
+	copy = input;
+	op = strsep(&copy, " \t\n");
+	while (op && *op == '\0')
+		op = strsep(&copy, " \t\n");
+	value = strsep(&copy, " \t\n");
+	while (value && *value == '\0')
+		value = strsep(&copy, " \t\n");
+	if (!op || !value)
+		goto out;
+	if (!strcmp(op, "probe")) {
+		probe_zone = value;
+		value = strsep(&copy, " \t\n");
+		while (value && *value == '\0')
+			value = strsep(&copy, " \t\n");
+		if (!value)
+			goto out;
+	}
+	extra = strsep(&copy, " \t\n");
+	while (extra && *extra == '\0')
+		extra = strsep(&copy, " \t\n");
+	if (extra)
+		goto out;
+
+	mutex_lock(&cc->keyboard_lock);
+	if (!strcmp(op, "mode")) {
+		if (!strcmp(value, "off")) {
+			err = clevo_cc_set_keyboard_brightness(cc, 0);
+			if (!err)
+				err = clevo_cc_set_keyboard_status(cc, false);
+			if (!err)
+				err = clevo_cc_disable_keyboard_sleep_timer(cc);
+			if (!err) {
+				cc->keyboard_mode = "off";
+				cc->keyboard_led.brightness = LED_OFF;
+			}
+		} else if (!strcmp(value, "static")) {
+			int zone;
+
+			/* Re-enable first; color writes then replace any persisted colors. */
+			err = clevo_cc_set_keyboard_status(cc, true);
+			if (err)
+				goto unlock;
+			err = clevo_cc_set_keyboard_brightness_raw(
+				cc, cc->keyboard_brightness_raw);
+			for (zone = 0; zone < 1 && !err; zone++) {
+				if (cc->keyboard_color_known[zone])
+					err = clevo_cc_set_keyboard_color(
+						cc, zone, cc->keyboard_color[zone]);
+			}
+			if (!err)
+				err = clevo_cc_disable_keyboard_sleep_timer(cc);
+			if (!err) {
+				cc->keyboard_mode = "static";
+				cc->keyboard_led.brightness = cc->keyboard_brightness_raw;
+			}
+		} else if (!strcmp(value, "wave")) {
+			int zone;
+
+			/* Re-enable first; color writes then replace any persisted colors. */
+			err = clevo_cc_set_keyboard_status(cc, true);
+			if (err)
+				goto unlock;
+			err = clevo_cc_set_keyboard_brightness_raw(
+				cc, cc->keyboard_brightness_raw);
+			for (zone = 0; zone < 1 && !err; zone++) {
+				if (cc->keyboard_color_known[zone])
+					err = clevo_cc_set_keyboard_color(
+						cc, zone, cc->keyboard_color[zone]);
+			}
+			if (!err)
+				err = clevo_cc_keyboard_command(cc, CLEVO_KB_WAVE);
+			if (!err)
+				err = clevo_cc_disable_keyboard_sleep_timer(cc);
+			if (!err) {
+				cc->keyboard_mode = "wave";
+				cc->keyboard_led.brightness = cc->keyboard_brightness_raw;
+			}
+		}
+	} else if (!strcmp(op, "brightness")) {
+		unsigned int level;
+
+		if (!kstrtouint(value, 10, &level) && level <= 4)
+			err = clevo_cc_set_keyboard_brightness(cc, level);
+		if (!err && level == 0)
+			err = clevo_cc_set_keyboard_status(cc, level != 0);
+		if (!err && level != 0)
+			err = clevo_cc_disable_keyboard_sleep_timer(cc);
+		if (!err)
+			cc->keyboard_brightness = level;
+		if (!err) {
+			clevo_cc_keyboard_level_raw(level,
+						   &cc->keyboard_brightness_raw);
+			cc->keyboard_led.brightness = cc->keyboard_brightness_raw;
+		}
+	} else if (!strcmp(op, "raw-brightness")) {
+		unsigned int raw;
+
+		if (kstrtouint(value, 10, &raw) || raw > 255)
+			goto unlock;
+		err = clevo_cc_set_keyboard_status(cc, true);
+		if (!err)
+			err = clevo_cc_set_keyboard_brightness_raw(cc, raw);
+		if (!err)
+			err = clevo_cc_disable_keyboard_sleep_timer(cc);
+	} else if (!strcmp(op, "all") || !strcmp(op, "left") ||
+		   !strcmp(op, "middle") || !strcmp(op, "right")) {
+		int zone;
+
+		err = clevo_cc_parse_keyboard_color(value, color);
+		if (err)
+			goto unlock;
+		err = clevo_cc_transition_keyboard_color(cc, color);
+		if (!err) {
+			err = clevo_cc_disable_keyboard_sleep_timer(cc);
+		}
+		if (!err) {
+			for (zone = 0; zone < 3; zone++) {
+				memcpy(cc->keyboard_color[zone], color, sizeof(color));
+				cc->keyboard_color_known[zone] = true;
+			}
+		}
+	} else if (!strcmp(op, "probe")) {
+		unsigned int zone;
+
+		if (!probe_zone || kstrtouint(probe_zone, 10, &zone) || zone >= 3)
+			goto unlock;
+		err = clevo_cc_parse_keyboard_color(value, color);
+		if (err)
+			goto unlock;
+		err = clevo_cc_probe_keyboard_color(cc, zone, color);
+		if (!err)
+			err = clevo_cc_disable_keyboard_sleep_timer(cc);
+	}
+unlock:
+	mutex_unlock(&cc->keyboard_lock);
+out:
+	kfree(input);
+	return err ? err : count;
+}
+static DEVICE_ATTR_RW(keyboard_rgb);
 
 static const char *clevo_cc_perf_name(enum clevo_perf_mode mode)
 {
@@ -1001,6 +1447,7 @@ static struct attribute *clevo_cc_attrs[] = {
 	&dev_attr_perf_mode.attr,
 	&dev_attr_raw_status.attr,
 	&dev_attr_raw_curve.attr,
+	&dev_attr_keyboard_rgb.attr,
 	NULL
 };
 ATTRIBUTE_GROUPS(clevo_cc);
@@ -1020,6 +1467,22 @@ static int clevo_cc_probe(struct platform_device *pdev)
 	if (!cc)
 		return -ENOMEM;
 	cc->adev = adev;
+	mutex_init(&cc->keyboard_lock);
+	cc->keyboard_brightness = 4;
+	cc->keyboard_brightness_raw = CLEVO_KB_BRIGHTNESS_MAX;
+	cc->keyboard_mode = "unknown";
+	cc->keyboard_led.name = "clevo::kbd_backlight";
+	cc->keyboard_led.max_brightness = CLEVO_KB_BRIGHTNESS_MAX;
+	cc->keyboard_led.brightness = CLEVO_KB_BRIGHTNESS_MAX;
+	cc->keyboard_led.flags = LED_CORE_SUSPENDRESUME;
+	cc->keyboard_led.brightness_set_blocking = clevo_cc_keyboard_led_set;
+	cc->keyboard_led.brightness_get = clevo_cc_keyboard_led_get;
+	status = devm_led_classdev_register(&pdev->dev, &cc->keyboard_led);
+	if (status) {
+		dev_err(&pdev->dev, "failed to register keyboard backlight LED: %d\n",
+			status);
+		return status;
+	}
 
 	status = acpi_get_handle(adev->handle, "_DSM", &h);
 	if (ACPI_FAILURE(status)) {
@@ -1039,7 +1502,7 @@ static int clevo_cc_probe(struct platform_device *pdev)
 	if (IS_ERR(hwmon))
 		return PTR_ERR(hwmon);
 
-	dev_info(&pdev->dev, "clevo-cc read-only fan monitoring registered\n");
+	dev_info(&pdev->dev, "clevo-cc fan and RGB15 control registered\n");
 	return 0;
 }
 
@@ -1060,5 +1523,5 @@ static struct platform_driver clevo_cc_driver = {
 module_platform_driver(clevo_cc_driver);
 
 MODULE_AUTHOR("clevo-cc-linux");
-MODULE_DESCRIPTION("Clevo DCHU fan monitoring and fan-mode control (ACPI _DSM)");
+MODULE_DESCRIPTION("Clevo DCHU fan and RGB15 control (ACPI _DSM)");
 MODULE_LICENSE("GPL");

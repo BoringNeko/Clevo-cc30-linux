@@ -10,7 +10,7 @@
 //! the localhost bridge (see [`crate::serve`]). Only the window/tray lifecycle
 //! at the bottom is Tauri-specific and lives behind the `tauri-shell` feature.
 
-use crate::dbus::{DaemonClient, FanCurve, FanSnapshot};
+use crate::dbus::{DaemonClient, FanCurve, FanSnapshot, KeyboardState};
 
 fn client() -> Result<DaemonClient, String> {
     DaemonClient::system().map_err(|e| e.message)
@@ -60,6 +60,31 @@ pub fn set_perf_mode(mode: String) -> Result<u8, String> {
 pub fn set_fan_curve(curve: crate::dbus::FanCurve) -> Result<(), String> {
     let json = curve_to_json(&curve);
     client()?.set_curve(&json).map_err(|e| e.message)
+}
+
+/// Read keyboard RGB capability and cached state.
+pub fn get_keyboard() -> Result<KeyboardState, String> {
+    client()?.keyboard().map_err(|e| e.message)
+}
+
+/// Set keyboard effect mode.
+pub fn set_keyboard_mode(mode: String) -> Result<(), String> {
+    client()?.set_keyboard_mode(&mode).map_err(|e| e.message)
+}
+
+/// Set keyboard brightness in the vendor's 0..=4 scale.
+pub fn set_keyboard_brightness(level: u8) -> Result<u8, String> {
+    client()?.set_keyboard_brightness(level).map_err(|e| e.message)
+}
+
+/// Set one logical keyboard zone.
+pub fn set_keyboard_zone(zone: String, color: [u8; 3]) -> Result<(), String> {
+    client()?.set_keyboard_zone(&zone, color).map_err(|e| e.message)
+}
+
+/// Set one key in the verified 6x20 layout.
+pub fn set_keyboard_key(row: u8, col: u8, color: [u8; 3]) -> Result<(), String> {
+    client()?.set_keyboard_key(row, col, color).map_err(|e| e.message)
 }
 
 /// Serialize a curve back into the daemon's JSON wire shape.
@@ -221,6 +246,31 @@ pub mod tauri_commands {
     #[tauri::command]
     pub fn set_fan_curve(curve: FanCurve) -> Result<(), String> {
         super::set_fan_curve(curve)
+    }
+
+    #[tauri::command]
+    pub fn get_keyboard() -> Result<KeyboardState, String> {
+        super::get_keyboard()
+    }
+
+    #[tauri::command]
+    pub fn set_keyboard_mode(mode: String) -> Result<(), String> {
+        super::set_keyboard_mode(mode)
+    }
+
+    #[tauri::command]
+    pub fn set_keyboard_brightness(level: u8) -> Result<u8, String> {
+        super::set_keyboard_brightness(level)
+    }
+
+    #[tauri::command]
+    pub fn set_keyboard_zone(zone: String, color: [u8; 3]) -> Result<(), String> {
+        super::set_keyboard_zone(zone, color)
+    }
+
+    #[tauri::command]
+    pub fn set_keyboard_key(row: u8, col: u8, color: [u8; 3]) -> Result<(), String> {
+        super::set_keyboard_key(row, col, color)
     }
 
     #[tauri::command]

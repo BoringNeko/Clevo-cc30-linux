@@ -20,3 +20,9 @@ SUBSYSTEM=="platform", KERNEL=="CLV0001:*", ACTION=="add", \
 # hwmon nodes (fan1_input/fan2_input) are read-only; make them group-readable.
 SUBSYSTEM=="hwmon", DRIVERS=="clevo-cc", ACTION=="add", \
     RUN+="/bin/sh -c 'chgrp -R clevo-cc /sys%p 2>/dev/null; chmod -R g+r /sys%p 2>/dev/null'"
+
+# ITE 829x per-key RGB controller used by the CC30 (048d:8910).
+# Keep this rule below seat setup rules so uaccess can add the active-session
+# ACL; the file name intentionally remains below 73-seat-late.rules.
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="048d", ATTRS{idProduct}=="8910", \
+    TAG+="uaccess", GROUP="clevo-cc", MODE="0660"
