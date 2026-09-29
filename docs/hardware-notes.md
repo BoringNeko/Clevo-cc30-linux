@@ -1051,7 +1051,8 @@ feature report：
 已根据 `ControlCenter-RE/native/perkey_api.c` 和 `PerkeyKB.cs` 实现并测试：
 
 - 单键静态颜色：`command=1`，`key=(row << 5) | col`，后跟 RGB；
-- 静态/波浪模式：`command=0`，模式数据 `12` / `4`；
+- 静态/波浪模式：`command=0`，模式数据 `12` / `4`；其他效果字尚未还原，因此
+  USB HID 后端只上报 `off`/`static`/`wave`，不猜测未验证的模式；
 - 亮度：`command=9`，厂商工具只用过 `0,2,4,6,10` 五个字节；统一的 `0..100`
   百分比按最近值吸附到这五个字节，不会驱动到厂商未用过的值；
 - 清除/关闭：`command=9,data=0`；
@@ -1072,6 +1073,12 @@ feature report：
 灯区。`0xB0000000` 对应波浪，`0xF40000xx` 对应亮度/关闭；原厂状态开启值为
 `0xE0071007`，关闭值为 `0xE0000007`。内核驱动现通过命名的 `keyboard_rgb`
 sysfs 节点暴露单区操作；它不暴露任意 `_DSM` 整数写入。
+`RGBKB.SetMode()` 的 `kb_type=6/22` 分支还给出了一整套原生灯效字：`random`
+= `0x70000000`、`dance` = `0x80000000`、`tempo` = `0x90000000`、`flash`
+= `0xA0000000`、`wave` = `0xB0000000`、`breath` = `0x1002A000`、`cycle`
+= `0x33010000`；`static`（Mode 1/8）不发送灯效字，只是重新写入持久化颜色。
+驱动把这七个字与 `off`/`static` 一起放进 `keyboard_rgb mode` 命名操作，并由
+`clevod` 按后端实际能力上报给 UI，避免把硬件不支持的效果显示成可写控件。
 同时注册标准 LED class 节点 `clevo::kbd_backlight`，让 KDE/PowerDevil 等
 桌面组件可以通过标准 `brightness` 文件调节原始 `0..191` 亮度；命名 `keyboard_rgb`
 接口与 daemon/D-Bus 使用统一的 `0..100` 百分比（`100` = EC 上限 `191`），因为该

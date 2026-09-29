@@ -14,7 +14,6 @@ import { ColorPicker } from "./ColorPicker";
 import { SettingsRow } from "./SettingsRow";
 import {
   KEYBOARD_BRIGHTNESS_MAX,
-  KEYBOARD_MODES,
   KEYBOARD_ZONES,
   setKeyboardBrightness,
   setKeyboardMode,
@@ -25,6 +24,7 @@ import {
 import {
   isSingleZone,
   keyboardModeLabel,
+  keyboardSupportedModes,
   keyboardUnavailableMessage,
   keyboardWritable,
   keyboardZoneLabel,
@@ -48,6 +48,7 @@ export function KeyboardSection({ open }: { open: boolean }) {
   const writable = keyboardWritable(state);
   const disabled = !writable || busy;
   const singleZone = state ? isSingleZone(state) : true;
+  const modes = keyboardSupportedModes(state);
   const keys: KeyboardKeys = normaliseKeys(state?.keys);
   // The last colour the hardware shows, used until the user picks another one.
   const colorsOnKeyboard = (() => {
@@ -97,7 +98,7 @@ export function KeyboardSection({ open }: { open: boolean }) {
             disabled={disabled}
             aria-label="键盘灯效"
           >
-            {KEYBOARD_MODES.map((mode) => (
+            {modes.map((mode) => (
               <MenuItem key={mode} value={mode}>
                 {keyboardModeLabel(mode)}
               </MenuItem>

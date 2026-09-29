@@ -546,6 +546,12 @@ fn keyboard_to_json(
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
+    let modes = snapshot
+        .info
+        .modes
+        .iter()
+        .map(|mode| mode.as_str())
+        .collect::<Vec<_>>();
     serde_json::json!({
         "available": true,
         "writable": snapshot.writable,
@@ -555,8 +561,43 @@ fn keyboard_to_json(
         "vendor_id": snapshot.info.vendor_id,
         "product_id": snapshot.info.product_id,
         "mode": snapshot.mode.as_str(),
+        "modes": modes,
         "brightness": snapshot.brightness,
         "keys": keys,
     })
     .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clevo_transport::{Keyboard, MockKeyboard};
+
+    fn snapshot() -> clevo_transport::KeyboardSnapshot {
+        MockKeyboard::new().snapshot()
+    }
+
+    #[test]
+    fn keyboard_json_reports_the_backend_effect_list() {
+        let json = keyboard_to_json(Some(snapshot()), Some(6));
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["available"], true);
+        assert_eq!(value["backend"], "mock");
+        // The UI reads this list to decide which effect cards to render.
+        let modes = value["modes"].as_array().expect("modes array");
+        let names: Vec<_> = modes.iter().map(|m| m.as_str().unwrap()).collect();
+        assert!(names.contains(&"breath"));
+        assert!(names.contains(&"random"));
+        assert!(names.contains(&"off"));
+    }
+
+    #[test]
+    fn unavailable_keyboard_json_is_explicit() {
+        let json = keyboard_to_json(None, Some(6));
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["available"], false);
+        assert_eq!(value["writable"], false);
+        assert_eq!(value["backend"], "none");
+        assert!(value["reason"].as_str().unwrap().contains("no verified"));
+    }
 }

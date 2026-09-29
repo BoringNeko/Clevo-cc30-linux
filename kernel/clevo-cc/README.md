@@ -23,7 +23,7 @@ exposes fan monitoring and fan-mode control through `hwmon` and sysfs.
 | `sysfs fan_curve` | rw | read (command 13) and write (command 14) |
 | `sysfs raw_status` / `raw_curve` | read | diagnostic hex dumps (for re-verifying offsets) |
 | `sysfs perf_mode` | rw | `quiet` / `pwrsaving` / `performance` / `entertainment` |
-| `sysfs keyboard_rgb` | rw | RGB15 single-zone color, mode and brightness (percent) |
+| `sysfs keyboard_rgb` | rw | RGB15 single-zone color, effect, mode and brightness (percent) |
 | LED class `clevo::kbd_backlight` | rw | standard raw keyboard brightness (`0..191`) |
 
 `fan_mode` values map to `121/1`: `auto`=0, `max`=1, `maxq`=5, `custom`=6,
@@ -162,7 +162,7 @@ cat /sys/class/hwmon/hwmon*/temp1_input             # GPU temperature (m°C)
 cat /sys/devices/platform/CLV0001:00/raw_status     # raw cmd-12 bytes
 echo max | sudo tee /sys/devices/platform/CLV0001:00/fan_mode
 echo "all ff0000" | sudo tee /sys/devices/platform/CLV0001:00/keyboard_rgb
-echo "mode wave" | sudo tee /sys/devices/platform/CLV0001:00/keyboard_rgb
+echo "mode breath" | sudo tee /sys/devices/platform/CLV0001:00/keyboard_rgb
 cat /sys/devices/platform/CLV0001:00/keyboard_rgb
 echo "mode off" | sudo tee /sys/devices/platform/CLV0001:00/keyboard_rgb
 sudo rmmod clevo_cc
@@ -171,6 +171,24 @@ sudo rmmod clevo_cc
 The RGB15 status word enables the available keyboard channel together with the
 color and brightness commands. `mode off` is the reversible cleanup operation;
 it does not change the cached color or brightness level.
+
+`keyboard_rgb` also exposes the firmware's own RGB15 effects. `static` re-applies
+the persisted colour (no effect word); the rest send the word the vendor's
+`RGBKB.SetMode` uses for `kb_type` 6/22:
+
+| `mode` | Vendor `Mode` | Effect |
+| --- | --- | --- |
+| `random` | 0 | random sparkle |
+| `breath` | 2 | single-colour breathing |
+| `cycle` | 3 | colour cycling |
+| `wave` | 4 | flowing wave |
+| `dance` | 5 | rhythmic dance |
+| `tempo` | 6 | tempo pulse |
+| `flash` | 7 | strobe |
+
+The daemon only offers the effects the detected backend reports, and the UI
+mirrors that list, so a machine whose controller cannot drive an effect never
+shows it.
 
 If `_DSM` returns `0x80000002` the probe still loads but reads return
 `-EOPNOTSUPP`; check `dmesg`.

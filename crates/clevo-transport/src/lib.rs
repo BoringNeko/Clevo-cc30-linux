@@ -21,8 +21,9 @@ pub use error::TransportError;
 pub use keyboard::{
     brightness_raw, build_feature_report, build_get_feature_report, AcpiKeyboard, Color,
     HidKeyboard, Keyboard, KeyboardError, KeyboardInfo, KeyboardMode, KeyboardSnapshot,
-    KeyboardZone, MockKeyboard, DEFAULT_ACPI_KEYBOARD_PATH, ITE_PRODUCT_ID, ITE_USAGE,
-    ITE_USAGE_PAGE, ITE_VENDOR_ID, KEYBOARD_COLS, KEYBOARD_ROWS,
+    KeyboardZone, MockKeyboard, ACPI_KEYBOARD_MODES, ALL_KEYBOARD_MODES, BRIGHTNESS_PERCENT_MAX,
+    DEFAULT_ACPI_KEYBOARD_PATH, ITE_PRODUCT_ID, ITE_USAGE, ITE_USAGE_PAGE, ITE_VENDOR_ID,
+    KEYBOARD_COLS, KEYBOARD_ROWS, USB_HID_KEYBOARD_MODES,
 };
 pub use mock::{Fixture, FixtureEntry, FixtureMeta, MockTransport};
 

@@ -57,8 +57,41 @@ describe("RgbPage", () => {
     render(<RgbPage palette={FALLBACK_PALETTE} />);
 
     await waitFor(() => expect(screen.getByText("ACPI-DCHU RGB15 · 单区")).toBeTruthy());
-    expect(screen.getByText("6")).toBeTruthy();
+    // `6` now also appears on the keyboard preview, so scope to the value row.
+    expect(screen.getAllByText("6").length).toBeGreaterThan(0);
     expect(screen.getByText("是")).toBeTruthy();
+  });
+
+  it("offers every effect the controller reports", async () => {
+    getKeyboard.mockResolvedValue(
+      keyboardState({ modes: ["off", "static", "breath", "cycle", "wave", "dance", "tempo", "flash", "random"] }),
+    );
+    render(<RgbPage palette={FALLBACK_PALETTE} />);
+
+    await waitFor(() => expect(screen.getByText("键盘灯效")).toBeTruthy());
+    for (const label of ["关闭", "静态", "呼吸", "循环", "波浪", "舞动", "节奏", "闪烁", "随机"]) {
+      expect(screen.getByRole("button", { name: label })).toBeTruthy();
+    }
+  });
+
+  it("does not offer effects the controller cannot drive", async () => {
+    getKeyboard.mockResolvedValue(keyboardState({ modes: ["off", "static", "wave"] }));
+    render(<RgbPage palette={FALLBACK_PALETTE} />);
+
+    await waitFor(() => expect(screen.getByText("键盘灯效")).toBeTruthy());
+    expect(screen.getByRole("button", { name: "波浪" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "呼吸" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "随机" })).toBeNull();
+  });
+
+  it("writes a native RGB15 effect through the daemon", async () => {
+    getKeyboard.mockResolvedValue(
+      keyboardState({ modes: ["off", "static", "breath", "cycle", "wave"] }),
+    );
+    render(<RgbPage palette={FALLBACK_PALETTE} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "呼吸" }));
+    await waitFor(() => expect(setKeyboardMode).toHaveBeenCalledWith("breath"));
   });
 
   it("writes the chosen effect mode through the daemon", async () => {

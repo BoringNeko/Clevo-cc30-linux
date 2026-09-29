@@ -150,8 +150,23 @@ export async function setFanCurve(curve: FanCurve): Promise<void> {
   return invoke<void>("set_fan_curve", { curve });
 }
 
-/** Effect modes the daemon accepts for the keyboard backlight. */
-export const KEYBOARD_MODES = ["off", "static", "wave"] as const;
+/**
+ * Effect modes the daemon can accept for the keyboard backlight.
+ *
+ * This is the union across backends; an individual controller advertises the
+ * subset it can actually drive through `KeyboardState.modes`.
+ */
+export const KEYBOARD_MODES = [
+  "off",
+  "static",
+  "breath",
+  "cycle",
+  "wave",
+  "dance",
+  "tempo",
+  "flash",
+  "random",
+] as const;
 export type KeyboardMode = (typeof KEYBOARD_MODES)[number];
 
 /**
@@ -177,6 +192,8 @@ export interface KeyboardState {
   vendor_id?: number;
   product_id?: number;
   mode: KeyboardMode;
+  /** Effects this controller can actually drive; absent when unavailable. */
+  modes?: KeyboardMode[];
   brightness: number;
   keys: number[][][];
 }

@@ -13,12 +13,49 @@ export type KeyboardKeys = number[][][];
 const MODE_LABELS: Record<KeyboardMode, string> = {
   off: "关闭",
   static: "静态",
+  breath: "呼吸",
+  cycle: "循环",
   wave: "波浪",
+  dance: "舞动",
+  tempo: "节奏",
+  flash: "闪烁",
+  random: "随机",
+};
+
+/** Short English subtitle for each effect, shown under the name. */
+const MODE_SUBTITLES: Record<KeyboardMode, string> = {
+  off: "Off",
+  static: "Static",
+  breath: "Breathing",
+  cycle: "Color Cycle",
+  wave: "Wave",
+  dance: "Dance",
+  tempo: "Tempo",
+  flash: "Flash",
+  random: "Random",
 };
 
 /** Human-readable effect mode. */
 export function keyboardModeLabel(mode: KeyboardMode): string {
   return MODE_LABELS[mode] ?? mode;
+}
+
+/** English subtitle for an effect mode. */
+export function keyboardModeSubtitle(mode: KeyboardMode): string {
+  return MODE_SUBTITLES[mode] ?? mode;
+}
+
+/**
+ * The effects a controller can actually drive.
+ *
+ * The daemon reports the backend's own list; when it is absent (an older daemon
+ * or an unavailable controller) fall back to the three modes every backend
+ * implements, never to the full union.
+ */
+export function keyboardSupportedModes(state: KeyboardState | null): KeyboardMode[] {
+  const modes = state?.modes;
+  if (modes && modes.length > 0) return modes;
+  return ["off", "static", "wave"];
 }
 
 /** Zone display names. */

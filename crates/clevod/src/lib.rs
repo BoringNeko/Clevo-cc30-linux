@@ -180,6 +180,55 @@ mod tests {
     }
 
     #[test]
+    fn acpi_service_offers_and_applies_native_effects() {
+        let path =
+            std::env::temp_dir().join(format!("clevo-daemon-effects-{}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        std::fs::write(&path, "").unwrap();
+        let keyboard = AcpiKeyboard::with_path(&path);
+        let service = Service::new(mock(FIXTURE)).with_keyboard(Some(Box::new(keyboard)));
+
+        let snapshot = service.keyboard_snapshot().unwrap();
+        assert!(snapshot.info.modes.contains(&KeyboardMode::Breath));
+        assert!(snapshot.info.modes.contains(&KeyboardMode::Random));
+
+        service.set_keyboard_mode("breath").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "mode breath\n");
+        assert_eq!(
+            service.keyboard_snapshot().unwrap().mode,
+            KeyboardMode::Breath
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn unknown_keyboard_effect_is_rejected() {
+        let service =
+            Service::new(mock(FIXTURE)).with_keyboard(Some(Box::new(MockKeyboard::new())));
+        assert!(matches!(
+            service.set_keyboard_mode("spectrum"),
+            Err(service::ServiceError::UnknownMode(_))
+        ));
+    }
+
+    #[test]
+    fn supported_modes_are_advertised_per_backend() {
+        // The mock stands in for the ACPI-DCHU path and advertises the RGB15
+        // effect set, so the UI can render exactly the cards that work.
+        let service =
+            Service::new(mock(FIXTURE)).with_keyboard(Some(Box::new(MockKeyboard::new())));
+        let modes = service.keyboard_snapshot().unwrap().info.modes;
+        assert!(modes.contains(&KeyboardMode::Off));
+        assert!(modes.contains(&KeyboardMode::Static));
+        assert!(modes.contains(&KeyboardMode::Breath));
+        assert!(modes.contains(&KeyboardMode::Cycle));
+        assert!(modes.contains(&KeyboardMode::Dance));
+        assert!(modes.contains(&KeyboardMode::Tempo));
+        assert!(modes.contains(&KeyboardMode::Flash));
+        assert!(modes.contains(&KeyboardMode::Random));
+    }
+
+    #[test]
     fn rgb15_keyboard_restore_writes_one_physical_zone() {
         let path = std::env::temp_dir().join(format!("clevo-daemon-rgb15-{}", std::process::id()));
         let _ = std::fs::remove_file(&path);

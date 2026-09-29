@@ -298,7 +298,15 @@ impl Service {
     pub fn set_keyboard_mode(&self, mode: &str) -> Result<(), ServiceError> {
         let mode = KeyboardMode::parse(mode)
             .ok_or_else(|| ServiceError::UnknownMode(format!("keyboard mode {mode:?}")))?;
-        self.keyboard()?.set_mode(mode)?;
+        let keyboard = self.keyboard()?;
+        // Refuse effects this backend cannot drive instead of letting the
+        // hardware layer reject them with a less specific message.
+        if !keyboard.snapshot().info.modes.contains(&mode) {
+            return Err(ServiceError::Unsupported(format!(
+                "keyboard effect {mode:?} is not available on this controller"
+            )));
+        }
+        keyboard.set_mode(mode)?;
         self.persist();
         Ok(())
     }

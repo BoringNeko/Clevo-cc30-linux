@@ -105,6 +105,9 @@ pub struct KeyboardState {
     pub vendor_id: Option<u16>,
     pub product_id: Option<u16>,
     pub mode: String,
+    /// Effects this controller can drive; absent on older daemons.
+    #[serde(default)]
+    pub modes: Vec<String>,
     pub brightness: u8,
     pub keys: Vec<Vec<[u8; 3]>>,
 }

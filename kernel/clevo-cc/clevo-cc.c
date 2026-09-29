@@ -57,7 +57,18 @@
 #define CLEVO_KB_BRIGHTNESS_PERCENT_MAX 100
 #define CLEVO_KB_COLOR_FADE_STEPS 24
 #define CLEVO_KB_COLOR_FADE_DELAY_US 10000
+/*
+ * Native RGB15 effect words from the vendor's RGBKB.SetMode(), which is the
+ * class the firmware selects for kb_type 6/22. `static` has no effect word: it
+ * is just the persisted per-channel colors.
+ */
+#define CLEVO_KB_RANDOM 0x70000000
+#define CLEVO_KB_DANCE 0x80000000
+#define CLEVO_KB_TEMPO 0x90000000
+#define CLEVO_KB_FLASH 0xA0000000
 #define CLEVO_KB_WAVE 0xB0000000
+#define CLEVO_KB_BREATH 0x1002A000
+#define CLEVO_KB_CYCLE 0x33010000
 /* Vendor RGB15 status word with the available keyboard channel enabled. */
 #define CLEVO_KB_STATUS_ON 0xE0071007
 #define CLEVO_KB_STATUS_OFF 0xE0000007
@@ -526,6 +537,23 @@ static const char *clevo_cc_keyboard_mode_name(const struct clevo_cc *cc)
 	return cc->keyboard_mode ?: "unknown";
 }
 
+/*
+ * Native RGB15 effects exposed by the named interfaces. `static` is not in the
+ * table because it has no effect word; it re-applies the persisted colors.
+ */
+static const struct {
+	const char *name;
+	u32 word;
+} clevo_cc_keyboard_effects[] = {
+	{ "random", CLEVO_KB_RANDOM },
+	{ "breath", CLEVO_KB_BREATH },
+	{ "cycle",  CLEVO_KB_CYCLE },
+	{ "wave",   CLEVO_KB_WAVE },
+	{ "dance",  CLEVO_KB_DANCE },
+	{ "tempo",  CLEVO_KB_TEMPO },
+	{ "flash",  CLEVO_KB_FLASH },
+};
+
 static ssize_t keyboard_rgb_show(struct device *dev,
 					struct device_attribute *attr, char *buf)
 {
@@ -559,21 +587,62 @@ static int clevo_cc_parse_keyboard_color(const char *text, u8 color[3])
 }
 
 /*
+ * Re-arm the single physical channel before an effect or color write: enable
+ * the LEDs, restore the cached brightness, re-apply the persisted color, push
+ * the effect word (NULL for `static`) and stop the firmware sleep timer.
+ */
+static int clevo_cc_apply_keyboard_effect(struct clevo_cc *cc, const char *name,
+						  u32 word)
+{
+	int zone;
+	int err;
+
+	err = clevo_cc_set_keyboard_status(cc, true);
+	if (err)
+		return err;
+	err = clevo_cc_set_keyboard_brightness_raw(cc, cc->keyboard_brightness_raw);
+	if (err)
+		return err;
+	for (zone = 0; zone < 1 && !err; zone++) {
+		if (cc->keyboard_color_known[zone])
+			err = clevo_cc_set_keyboard_color(cc, zone,
+							  cc->keyboard_color[zone]);
+	}
+	if (err)
+		return err;
+	if (word) {
+		err = clevo_cc_keyboard_command(cc, word);
+		if (err)
+			return err;
+	}
+	err = clevo_cc_disable_keyboard_sleep_timer(cc);
+	if (err)
+		return err;
+
+	cc->keyboard_mode = name;
+	cc->keyboard_led.brightness = cc->keyboard_brightness_raw;
+	return 0;
+}
+
+/*
  * sysfs: keyboard_rgb
  *
  * This is deliberately a small, named interface instead of exposing arbitrary
  * command-103 words. The accepted forms are:
  *
  *   all 112233
- *   mode off | static | wave
+ *   mode off | static | random | breath | cycle | wave | dance | tempo | flash
  *   brightness 0..100
  *   raw-brightness 0..255
  *   probe 0..2 112233
  *
- * Colors are written as RRGGBB. `brightness` is a percentage: the RGB15 channel
- * is analog, so it is scaled onto the raw 0..191 byte (100% = EC maximum)
- * rather than quantised onto the vendor's five calibrated steps. `raw-brightness`
- * stays available as an experimental, uncached byte-level diagnostic.
+ * `mode` selects the firmware's own RGB15 effect (the words come from the
+ * vendor's RGBKB.SetMode for kb_type 6/22); `static` re-applies the persisted
+ * colors and `off` disables the channel. Colors are written as RRGGBB.
+ * `brightness` is a percentage: the RGB15 channel is analog, so it is scaled
+ * onto the raw 0..191 byte (100% = EC maximum) rather than quantised onto the
+ * vendor's five calibrated steps. `raw-brightness` stays available as an
+ * experimental, uncached byte-level diagnostic.
  *
  * This P15 23 has one physical RGB15 channel; the legacy left/middle/right
  * spellings remain accepted as aliases for compatibility, but all of them
@@ -618,6 +687,8 @@ static ssize_t keyboard_rgb_store(struct device *dev,
 
 	mutex_lock(&cc->keyboard_lock);
 	if (!strcmp(op, "mode")) {
+		unsigned int i;
+
 		if (!strcmp(value, "off")) {
 			err = clevo_cc_set_keyboard_brightness_percent(cc, 0);
 			if (!err)
@@ -629,46 +700,17 @@ static ssize_t keyboard_rgb_store(struct device *dev,
 				cc->keyboard_led.brightness = LED_OFF;
 			}
 		} else if (!strcmp(value, "static")) {
-			int zone;
-
-			/* Re-enable first; color writes then replace any persisted colors. */
-			err = clevo_cc_set_keyboard_status(cc, true);
-			if (err)
-				goto unlock;
-			err = clevo_cc_set_keyboard_brightness_raw(
-				cc, cc->keyboard_brightness_raw);
-			for (zone = 0; zone < 1 && !err; zone++) {
-				if (cc->keyboard_color_known[zone])
-					err = clevo_cc_set_keyboard_color(
-						cc, zone, cc->keyboard_color[zone]);
-			}
-			if (!err)
-				err = clevo_cc_disable_keyboard_sleep_timer(cc);
-			if (!err) {
-				cc->keyboard_mode = "static";
-				cc->keyboard_led.brightness = cc->keyboard_brightness_raw;
-			}
-		} else if (!strcmp(value, "wave")) {
-			int zone;
-
-			/* Re-enable first; color writes then replace any persisted colors. */
-			err = clevo_cc_set_keyboard_status(cc, true);
-			if (err)
-				goto unlock;
-			err = clevo_cc_set_keyboard_brightness_raw(
-				cc, cc->keyboard_brightness_raw);
-			for (zone = 0; zone < 1 && !err; zone++) {
-				if (cc->keyboard_color_known[zone])
-					err = clevo_cc_set_keyboard_color(
-						cc, zone, cc->keyboard_color[zone]);
-			}
-			if (!err)
-				err = clevo_cc_keyboard_command(cc, CLEVO_KB_WAVE);
-			if (!err)
-				err = clevo_cc_disable_keyboard_sleep_timer(cc);
-			if (!err) {
-				cc->keyboard_mode = "wave";
-				cc->keyboard_led.brightness = cc->keyboard_brightness_raw;
+			err = clevo_cc_apply_keyboard_effect(cc, "static", 0);
+		} else {
+			err = -EINVAL;
+			for (i = 0; i < ARRAY_SIZE(clevo_cc_keyboard_effects); i++) {
+				if (strcmp(value,
+					   clevo_cc_keyboard_effects[i].name))
+					continue;
+				err = clevo_cc_apply_keyboard_effect(
+					cc, clevo_cc_keyboard_effects[i].name,
+					clevo_cc_keyboard_effects[i].word);
+				break;
 			}
 		}
 	} else if (!strcmp(op, "brightness")) {

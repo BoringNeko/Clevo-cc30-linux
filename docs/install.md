@@ -107,15 +107,17 @@ echo 'mode static' | sudo tee "$K"
 cat "$K"
 # 静态模式保持 35 秒，确认不会被固件睡眠定时器关闭。
 sleep 35
-# 确认整块键盘仍亮着后再测试动态效果；不要在观察前写 mode off。
-echo 'mode wave' | sudo tee "$K"
+# 确认整块键盘仍亮着后再测试原生灯效；不要在观察前写 mode off。
+# 可用：random breath cycle wave dance tempo flash
+echo 'mode breath' | sudo tee "$K"
 sleep 10
 echo 'mode off' | sudo tee "$K"         # 收尾关闭
 sudo systemctl start clevod
 ```
 
-本机 `kb_type=6` 是单区 RGB15；`mode static` / `mode wave` 会重新开启整块键盘、
-再写入颜色，并通过 `121/24 = 0`
+本机 `kb_type=6` 是单区 RGB15；`mode static` 会重新开启整块键盘、写入颜色；
+`mode <effect>`（`breath` / `cycle` / `wave` / `dance` / `tempo` / `flash` /
+`random`）额外发送固件原生灯效字，并通过 `121/24 = 0`
 关闭固件的键盘灯睡眠定时器；这只影响当前运行状态，不写入 Windows 的 AppSettings
 持久化页。
 

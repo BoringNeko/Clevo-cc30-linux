@@ -9,24 +9,21 @@ import CheckIcon from "@mui/icons-material/Check";
 import WbIncandescentIcon from "@mui/icons-material/WbIncandescent";
 import { CardHeader, GlassCard } from "./GlassCard";
 import { ColorPicker } from "./ColorPicker";
+import { KeyboardStage } from "./KeyboardStage";
 import { KeyboardPreview } from "./KeyboardPreview";
-import {
-  KEYBOARD_BRIGHTNESS_MAX,
-  KEYBOARD_MODES,
-  KEYBOARD_ZONES,
-  type KeyboardMode,
-  type KeyboardState,
-  type KeyboardZone,
-} from "../api/daemon";
+import { KEYBOARD_BRIGHTNESS_MAX, KEYBOARD_ZONES, type KeyboardMode, type KeyboardState, type KeyboardZone } from "../api/daemon";
 import {
   applyZone,
   isSingleZone,
   keyboardModeLabel,
+  keyboardModeSubtitle,
+  keyboardSupportedModes,
   keyboardWritable,
   keyboardZoneLabel,
   normaliseKeys,
   type KeyboardKeys,
 } from "../lib/keyboard";
+import { effectInfo } from "../lib/keyboardEffect";
 import { hexToRgbTuple, rgbString, rgbTupleToHex, type ExtractedPalette } from "../lib/color";
 
 interface KeyboardCardProps {
@@ -59,9 +56,11 @@ function currentColor(state: KeyboardState): string {
 }
 
 /**
- * Keyboard backlight controls: effect mode, brightness and colour.
+ * Keyboard backlight studio: a live single-zone preview, the firmware effects,
+ * brightness and colour.
  *
- * Capability gates every control: a controller that cannot be written keeps its
+ * Capability gates every control: only the effects the daemon reports for this
+ * controller are offered, a controller that cannot be written keeps its
  * controls disabled, and a single-zone controller shows one colour channel with
  * no zone selector rather than pretending left/middle/right are separate.
  */
@@ -69,6 +68,7 @@ export function KeyboardCard({ palette, state, busy, onMode, onBrightness, onCol
   const writable = keyboardWritable(state);
   const disabled = !writable || busy;
   const singleZone = isSingleZone(state);
+  const modes = useMemo(() => keyboardSupportedModes(state), [state]);
 
   const [color, setColor] = useState(() => currentColor(state));
   const [zone, setZone] = useState<KeyboardZone>("all");
@@ -86,6 +86,9 @@ export function KeyboardCard({ palette, state, busy, onMode, onBrightness, onCol
     setBrightness(state.brightness);
   }, [state.brightness]);
 
+  // Switching effect writes the firmware; the preview follows `state.mode` once
+  // the daemon confirms it, so a rejected effect never animates as if applied.
+  const activeMode = state.mode;
   const rgb = useMemo(() => hexToRgbTuple(color) ?? [0, 0, 0], [color]);
 
   const apply = () => {
@@ -97,43 +100,78 @@ export function KeyboardCard({ palette, state, busy, onMode, onBrightness, onCol
     <GlassCard sx={{ gap: 2.5 }}>
       <CardHeader icon={<WbIncandescentIcon sx={{ fontSize: 16 }} />} title="键盘灯效" hint="键盘背光" />
 
-      <Box sx={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 1 }}>
-        {KEYBOARD_MODES.map((mode) => {
-          const active = state.mode === mode;
-          return (
-            <Button
-              key={mode}
-              onClick={() => onMode(mode)}
-              disabled={disabled}
-              variant="outlined"
-              aria-pressed={active}
-              startIcon={active ? <CheckIcon sx={{ fontSize: 15 }} /> : undefined}
-              sx={{
-                width: "100%",
-                py: 1.25,
-                fontSize: "0.75rem",
-                fontWeight: active ? 700 : 600,
-                letterSpacing: "0.02em",
-                color: active ? "#fff" : "text.secondary",
-                borderWidth: active ? 2 : 1,
-                borderColor: active ? rgbString(palette.primary, 0.95) : "divider",
-                backgroundColor: active ? rgbString(palette.primary, 0.42) : "action.hover",
-                boxShadow: active
-                  ? `0 4px 18px ${rgbString(palette.primary, 0.45)}, inset 0 0 0 1px ${rgbString(palette.primary, 0.35)}`
-                  : "none",
-                "& .MuiButton-startIcon": { mr: 0.5, ml: 0 },
-                "&:hover": {
+      <KeyboardStage mode={activeMode} color={rgb as [number, number, number]} brightness={brightness} />
+
+      <Box>
+        <Typography
+          sx={{
+            fontSize: "0.625rem",
+            textTransform: "uppercase",
+            letterSpacing: "0.12em",
+            color: "text.disabled",
+            mb: 1,
+          }}
+        >
+          单区灯效{modes.length > 0 ? ` · ${modes.length} 种` : ""}
+        </Typography>
+        <Box sx={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 1 }}>
+          {modes.map((mode) => {
+            const info = effectInfo(mode);
+            const active = activeMode === mode;
+            return (
+              <Button
+                key={mode}
+                onClick={() => onMode(mode)}
+                disabled={disabled}
+                variant="outlined"
+                aria-pressed={active}
+                aria-label={keyboardModeLabel(mode)}
+                startIcon={
+                  active ? (
+                    <CheckIcon sx={{ fontSize: 15 }} />
+                  ) : (
+                    <Box
+                      component="span"
+                      sx={{ width: 7, height: 7, borderRadius: "50%", backgroundColor: info.dot }}
+                    />
+                  )
+                }
+                sx={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "flex-start",
+                  gap: 0.25,
+                  width: "100%",
+                  py: 1,
+                  px: 1.25,
+                  textAlign: "left",
+                  fontSize: "0.75rem",
+                  fontWeight: active ? 700 : 600,
+                  letterSpacing: "0.02em",
+                  color: active ? "#fff" : "text.secondary",
                   borderWidth: active ? 2 : 1,
-                  backgroundColor: active ? rgbString(palette.primary, 0.52) : "divider",
-                  borderColor: active ? rgbString(palette.primary, 1) : "divider",
-                  color: "text.primary",
-                },
-              }}
-            >
-              {keyboardModeLabel(mode)}
-            </Button>
-          );
-        })}
+                  borderColor: active ? rgbString(palette.primary, 0.95) : "divider",
+                  backgroundColor: active ? rgbString(palette.primary, 0.42) : "action.hover",
+                  boxShadow: active
+                    ? `0 4px 18px ${rgbString(palette.primary, 0.45)}, inset 0 0 0 1px ${rgbString(palette.primary, 0.35)}`
+                    : "none",
+                  "& .MuiButton-startIcon": { mr: 0.5, ml: 0, position: "absolute", top: 8, right: 8 },
+                  "&:hover": {
+                    borderWidth: active ? 2 : 1,
+                    backgroundColor: active ? rgbString(palette.primary, 0.52) : "divider",
+                    borderColor: active ? rgbString(palette.primary, 1) : "divider",
+                    color: "text.primary",
+                  },
+                }}
+              >
+                <span>{keyboardModeLabel(mode)}</span>
+                <Typography component="span" sx={{ fontSize: "0.5625rem", color: "text.disabled", fontWeight: 400 }}>
+                  {keyboardModeSubtitle(mode)}
+                </Typography>
+              </Button>
+            );
+          })}
+        </Box>
       </Box>
 
       <Box>
@@ -187,13 +225,7 @@ export function KeyboardCard({ palette, state, busy, onMode, onBrightness, onCol
             ))}
           </ToggleButtonGroup>
         )}
-        <Button
-          size="small"
-          variant="outlined"
-          disabled={disabled}
-          onClick={apply}
-          sx={{ px: 2 }}
-        >
+        <Button size="small" variant="outlined" disabled={disabled} onClick={apply} sx={{ px: 2 }}>
           应用颜色
         </Button>
       </Box>

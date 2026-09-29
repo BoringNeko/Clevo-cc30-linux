@@ -194,13 +194,19 @@ fi
 # backend sources. A string-presence check is not usable — the compiler merges
 # and drops string literals, so `load_wallpaper` is absent even from a current
 # binary alongside `save_wallpaper`.
+#
+# Only the backend crate's own sources count. The workspace crates (`clevod`,
+# `clevo-transport`) are *dev*-dependencies used by the e2e tests; they are not
+# compiled into the release binary, so editing them must not flag it stale.
 backend_newest_src=0
-for src in "$ROOT"/ui/src-tauri/src "$ROOT"/crates; do
-    [[ -d "$src" ]] || continue
-    while IFS= read -r f; do
-        t="$(stat -c %Y "$f" 2>/dev/null || echo 0)"
-        [[ "$t" -gt "$backend_newest_src" ]] && backend_newest_src="$t"
-    done < <(find "$src" -type f -name '*.rs' 2>/dev/null)
+while IFS= read -r f; do
+    t="$(stat -c %Y "$f" 2>/dev/null || echo 0)"
+    [[ "$t" -gt "$backend_newest_src" ]] && backend_newest_src="$t"
+done < <(find "$ROOT/ui/src-tauri/src" -type f -name '*.rs' 2>/dev/null)
+for f in "$ROOT/ui/src-tauri/Cargo.toml" "$ROOT/ui/src-tauri/build.rs"; do
+    [[ -f "$f" ]] || continue
+    t="$(stat -c %Y "$f" 2>/dev/null || echo 0)"
+    [[ "$t" -gt "$backend_newest_src" ]] && backend_newest_src="$t"
 done
 
 backends=(
