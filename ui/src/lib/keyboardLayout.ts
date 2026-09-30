@@ -12,8 +12,8 @@ export interface KeyDef {
   w: number;
 }
 
-/** 1u in CSS pixels. */
-export const KEY_UNIT_PX = 46;
+/** 1u in CSS pixels. Sized so the 75% board fits the fixed design surface. */
+export const KEY_UNIT_PX = 44;
 /** Gap between keys in CSS pixels. */
 export const KEY_GAP_PX = 5;
 

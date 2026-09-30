@@ -230,20 +230,27 @@ export function KeyboardCard({ palette, state, busy, onMode, onBrightness, onCol
         </Button>
       </Box>
 
-      <Box>
-        <Typography
-          sx={{
-            fontSize: "0.625rem",
-            textTransform: "uppercase",
-            letterSpacing: "0.12em",
-            color: "text.disabled",
-            mb: 1,
-          }}
-        >
-          {singleZone ? "单区颜色" : "分区颜色"}
-        </Typography>
-        <KeyboardPreview keys={keys} />
-      </Box>
+      {/*
+       * A single-zone board has one physical channel, so the animated stage
+       * above already *is* the colour readout; a second grid would only repeat
+       * it. The 6x20 grid is for controllers that address keys individually.
+       */}
+      {!singleZone ? (
+        <Box>
+          <Typography
+            sx={{
+              fontSize: "0.625rem",
+              textTransform: "uppercase",
+              letterSpacing: "0.12em",
+              color: "text.disabled",
+              mb: 1,
+            }}
+          >
+            分区颜色
+          </Typography>
+          <KeyboardPreview keys={keys} />
+        </Box>
+      ) : null}
     </GlassCard>
   );
 }

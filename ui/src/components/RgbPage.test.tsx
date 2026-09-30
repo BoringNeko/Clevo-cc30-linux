@@ -94,6 +94,16 @@ describe("RgbPage", () => {
     await waitFor(() => expect(setKeyboardMode).toHaveBeenCalledWith("breath"));
   });
 
+  it("shows the animated stage instead of a redundant grid for a single zone", async () => {
+    getKeyboard.mockResolvedValue(keyboardState());
+    render(<RgbPage palette={FALLBACK_PALETTE} />);
+
+    // The studio preview is the colour readout on a single-zone board: a
+    // second 6x20 grid would just repeat the same colour 120 times.
+    await waitFor(() => expect(screen.getByText("整块键盘共用一个颜色通道")).toBeTruthy());
+    expect(screen.queryByLabelText("键盘灯颜色预览")).toBeNull();
+  });
+
   it("writes the chosen effect mode through the daemon", async () => {
     getKeyboard.mockResolvedValue(keyboardState());
     render(<RgbPage palette={FALLBACK_PALETTE} />);
