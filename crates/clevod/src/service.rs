@@ -654,6 +654,27 @@ impl Service {
         }
 
         if let (Some(keyboard), Some(saved)) = (self.keyboard.as_ref(), config.keyboard.as_ref()) {
+            // A config written before the capability was narrowed can name an
+            // effect this backend no longer offers (e.g. a `wave` saved when
+            // the single-zone EC was wrongly assumed to animate). Fall back to
+            // the closest supported mode — static keeps the saved colour — and
+            // do not report it as a failure, or every start would log one.
+            let restore_mode = |keyboard: &dyn Keyboard| -> Result<(), ServiceError> {
+                let Some(mode) = KeyboardMode::parse(&saved.mode) else {
+                    return Err(ServiceError::UnknownMode(format!(
+                        "keyboard mode {:?}",
+                        saved.mode
+                    )));
+                };
+                let supported = keyboard.snapshot().info.modes;
+                let mode = if supported.contains(&mode) {
+                    mode
+                } else {
+                    KeyboardMode::Static
+                };
+                Ok(keyboard.set_mode(mode)?)
+            };
+
             if keyboard.snapshot().info.backend == "acpi-dchu" {
                 // This machine's RGB15 path has one physical channel. Restore
                 // one representative persisted color; replaying left/middle/
@@ -670,22 +691,12 @@ impl Service {
                 if let Err(err) = keyboard.set_brightness(saved.brightness) {
                     failures.push(format!("keyboard brightness: {err}"));
                 }
-                match KeyboardMode::parse(&saved.mode) {
-                    Some(mode) => {
-                        if let Err(err) = keyboard.set_mode(mode) {
-                            failures.push(format!("keyboard mode: {err}"));
-                        }
-                    }
-                    None => failures.push(format!("keyboard mode {:?}: unknown mode", saved.mode)),
+                if let Err(err) = restore_mode(keyboard.as_ref()) {
+                    failures.push(format!("keyboard mode: {err}"));
                 }
             } else {
-                match KeyboardMode::parse(&saved.mode) {
-                    Some(mode) => {
-                        if let Err(err) = keyboard.set_mode(mode) {
-                            failures.push(format!("keyboard mode: {err}"));
-                        }
-                    }
-                    None => failures.push(format!("keyboard mode {:?}: unknown mode", saved.mode)),
+                if let Err(err) = restore_mode(keyboard.as_ref()) {
+                    failures.push(format!("keyboard mode: {err}"));
                 }
                 if let Err(err) = keyboard.set_brightness(saved.brightness) {
                     failures.push(format!("keyboard brightness: {err}"));

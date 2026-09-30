@@ -96,18 +96,19 @@ pub const ALL_KEYBOARD_MODES: &[KeyboardMode] = &[
 pub const USB_HID_KEYBOARD_MODES: &[KeyboardMode] =
     &[KeyboardMode::Off, KeyboardMode::Static, KeyboardMode::Wave];
 
-/// Native RGB15 effects exposed by the ACPI-DCHU backend.
-pub const ACPI_KEYBOARD_MODES: &[KeyboardMode] = &[
-    KeyboardMode::Off,
-    KeyboardMode::Static,
-    KeyboardMode::Breath,
-    KeyboardMode::Cycle,
-    KeyboardMode::Wave,
-    KeyboardMode::Dance,
-    KeyboardMode::Tempo,
-    KeyboardMode::Flash,
-    KeyboardMode::Random,
-];
+/// Effects the ACPI-DCHU RGB15 backend offers.
+///
+/// Measured on the COLORFUL P15 23 (single-zone RGB15, `kb_type=6`): the DSDT's
+/// command-103 handler *does* implement the vendor effect words, but the EC
+/// never animates for them — not even for a bare word sent with no status,
+/// brightness or colour write around it (see the kernel driver's `raw-effect`
+/// diagnostic). The vendor utility agrees: it only shows its effect panel for
+/// multi-zone models and gives `kb_type 6` static colour plus brightness.
+///
+/// So this backend offers `off`/`static` only. The wider [`KeyboardMode`] set
+/// stays defined because the kernel interface still speaks those words and a
+/// multi-zone RGB15 board could report them without any caller changing.
+pub const ACPI_KEYBOARD_MODES: &[KeyboardMode] = &[KeyboardMode::Off, KeyboardMode::Static];
 
 impl KeyboardMode {
     /// Parse the D-Bus/UI spelling.
@@ -531,6 +532,15 @@ impl Keyboard for AcpiKeyboard {
     }
 
     fn set_mode(&self, mode: KeyboardMode) -> Result<(), KeyboardError> {
+        // Keep the write path in step with the advertised capability: a mode
+        // this backend does not list must not reach the hardware (a bare
+        // command-103 word is accepted by the EC yet does nothing).
+        if !ACPI_KEYBOARD_MODES.contains(&mode) {
+            return Err(KeyboardError::Invalid(format!(
+                "effect {} is not supported by the ACPI-DCHU backend",
+                mode.as_str()
+            )));
+        }
         self.write_operation(&format!("mode {}", mode.as_str()))?;
         if let Ok(mut state) = self.state.lock() {
             state.mode = mode;
@@ -630,7 +640,7 @@ impl Keyboard for MockKeyboard {
     fn set_mode(&self, mode: KeyboardMode) -> Result<(), KeyboardError> {
         if !ACPI_KEYBOARD_MODES.contains(&mode) {
             return Err(KeyboardError::Invalid(format!(
-                "effect {} is not supported by the mock backend",
+                "effect {} is not supported by this backend",
                 mode.as_str()
             )));
         }
@@ -734,8 +744,8 @@ mod tests {
 
         keyboard.set_zone(KeyboardZone::Right, blue).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "all 0000ff\n");
-        keyboard.set_mode(KeyboardMode::Wave).unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "mode wave\n");
+        keyboard.set_mode(KeyboardMode::Static).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "mode static\n");
         keyboard.set_brightness(60).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "brightness 60\n");
 
@@ -744,44 +754,54 @@ mod tests {
         assert_eq!(state.info.modes, ACPI_KEYBOARD_MODES);
         assert_eq!(state.keys[0][19], blue);
         assert_eq!(state.keys[0][12], blue);
-        assert_eq!(state.mode, KeyboardMode::Wave);
+        assert_eq!(state.mode, KeyboardMode::Static);
         assert_eq!(state.brightness, 60);
         let _ = std::fs::remove_file(path);
     }
 
     #[test]
-    fn acpi_backend_drives_every_native_rgb15_effect() {
+    fn acpi_backend_refuses_effects_it_does_not_advertise() {
+        // The single-zone RGB15 EC accepts the vendor effect words yet never
+        // animates for them, so this backend must not offer them and must not
+        // forward them to the hardware either.
         let path = std::env::temp_dir().join(format!(
             "clevo-acpi-keyboard-{}-{}",
             std::process::id(),
             "effects"
         ));
-        for mode in ACPI_KEYBOARD_MODES {
-            if *mode == KeyboardMode::Off {
-                continue;
-            }
-            let _ = std::fs::remove_file(&path);
-            std::fs::write(&path, "").unwrap();
-            let keyboard = AcpiKeyboard::with_path(&path);
-            keyboard.set_mode(*mode).unwrap();
-            assert_eq!(
-                std::fs::read_to_string(&path).unwrap(),
-                format!("mode {}\n", mode.as_str()),
-                "{} should be written as a named operation",
-                mode.as_str()
+        let _ = std::fs::remove_file(&path);
+        std::fs::write(&path, "").unwrap();
+        let keyboard = AcpiKeyboard::with_path(&path);
+
+        assert_eq!(
+            keyboard.snapshot().info.modes,
+            [KeyboardMode::Off, KeyboardMode::Static]
+        );
+        for effect in [
+            KeyboardMode::Breath,
+            KeyboardMode::Cycle,
+            KeyboardMode::Wave,
+            KeyboardMode::Dance,
+            KeyboardMode::Tempo,
+            KeyboardMode::Flash,
+            KeyboardMode::Random,
+        ] {
+            assert!(
+                keyboard.set_mode(effect).is_err(),
+                "{} must be rejected before touching the hardware",
+                effect.as_str()
             );
-            assert_eq!(keyboard.snapshot().mode, *mode);
         }
+        // Nothing was written, so the sysfs node is still empty.
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
         let _ = std::fs::remove_file(path);
     }
 
     #[test]
-    fn hid_backend_rejects_rgb15_only_effects() {
-        // The USB HID backend only implements the verified command-0 set; the
-        // extra RGB15 effects must be refused, not silently mis-sent.
-        assert!(!USB_HID_KEYBOARD_MODES.contains(&KeyboardMode::Breath));
+    fn hid_backend_offers_and_rejects_the_verified_set() {
+        // The USB HID backend only implements the verified command-0 set.
         assert!(USB_HID_KEYBOARD_MODES.contains(&KeyboardMode::Wave));
-        assert!(ACPI_KEYBOARD_MODES.contains(&KeyboardMode::Breath));
+        assert!(!USB_HID_KEYBOARD_MODES.contains(&KeyboardMode::Breath));
         // Every backend must be able to turn the lights off and go static.
         for modes in [USB_HID_KEYBOARD_MODES, ACPI_KEYBOARD_MODES] {
             assert!(modes.contains(&KeyboardMode::Off));

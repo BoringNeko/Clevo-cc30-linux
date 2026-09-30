@@ -28,6 +28,8 @@ function keyboardState(patch: Partial<KeyboardState> = {}): KeyboardState {
     firmware_kb_type: 6,
     mode: "static",
     brightness: 75,
+    // What the real single-zone RGB15 backend reports.
+    modes: ["off", "static"],
     keys: Array.from({ length: 6 }, () => Array.from({ length: 20 }, () => [255, 0, 0])),
     ...patch,
   };
@@ -62,7 +64,8 @@ describe("RgbPage", () => {
     expect(screen.getByText("是")).toBeTruthy();
   });
 
-  it("offers every effect the controller reports", async () => {
+  it("offers exactly the effects the controller reports", async () => {
+    // A controller that reports more drives more.
     getKeyboard.mockResolvedValue(
       keyboardState({ modes: ["off", "static", "breath", "cycle", "wave", "dance", "tempo", "flash", "random"] }),
     );
@@ -71,6 +74,20 @@ describe("RgbPage", () => {
     await waitFor(() => expect(screen.getByText("键盘灯效")).toBeTruthy());
     for (const label of ["关闭", "静态", "呼吸", "循环", "波浪", "舞动", "节奏", "闪烁", "随机"]) {
       expect(screen.getByRole("button", { name: label })).toBeTruthy();
+    }
+  });
+
+  it("shows only off/static for the single-zone RGB15 controller", async () => {
+    // The real COLORFUL P15 23 backend reports exactly these two: the EC accepts
+    // the vendor effect words but never animates for them.
+    getKeyboard.mockResolvedValue(keyboardState({ modes: ["off", "static"] }));
+    render(<RgbPage palette={FALLBACK_PALETTE} />);
+
+    await waitFor(() => expect(screen.getByText("键盘灯效")).toBeTruthy());
+    expect(screen.getByRole("button", { name: "关闭" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "静态" })).toBeTruthy();
+    for (const label of ["呼吸", "循环", "波浪", "舞动", "节奏", "闪烁", "随机"]) {
+      expect(screen.queryByRole("button", { name: label })).toBeNull();
     }
   });
 
@@ -105,7 +122,7 @@ describe("RgbPage", () => {
   });
 
   it("writes the chosen effect mode through the daemon", async () => {
-    getKeyboard.mockResolvedValue(keyboardState());
+    getKeyboard.mockResolvedValue(keyboardState({ modes: ["off", "static", "wave"] }));
     render(<RgbPage palette={FALLBACK_PALETTE} />);
 
     const wave = await screen.findByRole("button", { name: "波浪" });
@@ -137,7 +154,7 @@ describe("RgbPage", () => {
   });
 
   it("surfaces a daemon error without pretending the write succeeded", async () => {
-    getKeyboard.mockResolvedValue(keyboardState());
+    getKeyboard.mockResolvedValue(keyboardState({ modes: ["off", "static", "wave"] }));
     setKeyboardMode.mockRejectedValue(new Error("权限不足"));
     render(<RgbPage palette={FALLBACK_PALETTE} />);
 

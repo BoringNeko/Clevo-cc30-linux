@@ -48,14 +48,14 @@ export function keyboardModeSubtitle(mode: KeyboardMode): string {
 /**
  * The effects a controller can actually drive.
  *
- * The daemon reports the backend's own list; when it is absent (an older daemon
- * or an unavailable controller) fall back to the three modes every backend
- * implements, never to the full union.
+ * The daemon reports the backend's own list. When it is absent (an older daemon)
+ * fall back to the set every backend implements — `off`/`static` — rather than
+ * assuming the wider set, so the UI never offers a control that may do nothing.
  */
 export function keyboardSupportedModes(state: KeyboardState | null): KeyboardMode[] {
   const modes = state?.modes;
   if (modes && modes.length > 0) return modes;
-  return ["off", "static", "wave"];
+  return ["off", "static"];
 }
 
 /** Zone display names. */

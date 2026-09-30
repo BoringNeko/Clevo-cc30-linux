@@ -23,7 +23,7 @@ exposes fan monitoring and fan-mode control through `hwmon` and sysfs.
 | `sysfs fan_curve` | rw | read (command 13) and write (command 14) |
 | `sysfs raw_status` / `raw_curve` | read | diagnostic hex dumps (for re-verifying offsets) |
 | `sysfs perf_mode` | rw | `quiet` / `pwrsaving` / `performance` / `entertainment` |
-| `sysfs keyboard_rgb` | rw | RGB15 single-zone color, effect, mode and brightness (percent) |
+| `sysfs keyboard_rgb` | rw | RGB15 single-zone color, mode (off/static) and brightness (percent) |
 | LED class `clevo::kbd_backlight` | rw | standard raw keyboard brightness (`0..191`) |
 
 `fan_mode` values map to `121/1`: `auto`=0, `max`=1, `maxq`=5, `custom`=6,
@@ -50,6 +50,16 @@ so the whole keyboard changes together. The legacy `left`, `middle`, and
 `right` spellings are accepted as aliases for `all`; they are not independent
 zones. Colors, and the `brightness` percentage, are reported back by `cat`.
 
+`mode` accepts `off` and `static` only. The vendor's RGB15 effect words
+(`random` `0x70000000`, `breath` `0x1002A000`, `cycle` `0x33010000`, `wave`
+`0xB0000000`, `dance` `0x80000000`, `tempo` `0x90000000`, `flash`
+`0xA0000000`) are implemented in the DSDT's command-103 handler and accepted by
+ACPI, but this single-zone EC never animates for them: a bare word sent with no
+surrounding writes (the `raw-effect` diagnostic) does nothing either, and the
+vendor utility only shows its effect panel for multi-zone models. They are
+therefore not exposed as modes; `raw-effect 00000000` remains so a multi-zone
+board can be probed before they are added.
+
 Color writes through `all RRGGBB` use a short software fade with 24 intermediate
 steps; the transition takes about 0.3 seconds and remains a single physical
 channel.
@@ -59,8 +69,7 @@ The LED class device is available at
 `0..191` brightness byte accepted by the RGB15 command, giving desktop
 power-management tools 192 requested levels. The named `keyboard_rgb`
 interface uses a friendlier `0..100` percentage over the same analog channel
-(`100` = the EC maximum `191`). RGB color and effect selection remain on
-`keyboard_rgb`.
+(`100` = the EC maximum `191`). Color control remains on `keyboard_rgb`.
 
 For a direct hardware experiment only, stop `clevod` and use `probe 0..2` to
 send the vendor's raw F0/F1/F2 selectors without updating the cached state:
@@ -162,7 +171,7 @@ cat /sys/class/hwmon/hwmon*/temp1_input             # GPU temperature (m°C)
 cat /sys/devices/platform/CLV0001:00/raw_status     # raw cmd-12 bytes
 echo max | sudo tee /sys/devices/platform/CLV0001:00/fan_mode
 echo "all ff0000" | sudo tee /sys/devices/platform/CLV0001:00/keyboard_rgb
-echo "mode breath" | sudo tee /sys/devices/platform/CLV0001:00/keyboard_rgb
+echo "mode static" | sudo tee /sys/devices/platform/CLV0001:00/keyboard_rgb
 cat /sys/devices/platform/CLV0001:00/keyboard_rgb
 echo "mode off" | sudo tee /sys/devices/platform/CLV0001:00/keyboard_rgb
 sudo rmmod clevo_cc

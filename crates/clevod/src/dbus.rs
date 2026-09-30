@@ -583,12 +583,12 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(value["available"], true);
         assert_eq!(value["backend"], "mock");
-        // The UI reads this list to decide which effect cards to render.
+        // The UI reads this list to decide which effect cards to render. The
+        // ACPI-DCHU path (stood in for by the mock) offers off/static only,
+        // because the single-zone RGB15 EC does not animate the effect words.
         let modes = value["modes"].as_array().expect("modes array");
         let names: Vec<_> = modes.iter().map(|m| m.as_str().unwrap()).collect();
-        assert!(names.contains(&"breath"));
-        assert!(names.contains(&"random"));
-        assert!(names.contains(&"off"));
+        assert_eq!(names, ["off", "static"]);
     }
 
     #[test]

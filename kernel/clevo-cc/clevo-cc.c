@@ -57,18 +57,6 @@
 #define CLEVO_KB_BRIGHTNESS_PERCENT_MAX 100
 #define CLEVO_KB_COLOR_FADE_STEPS 24
 #define CLEVO_KB_COLOR_FADE_DELAY_US 10000
-/*
- * Native RGB15 effect words from the vendor's RGBKB.SetMode(), which is the
- * class the firmware selects for kb_type 6/22. `static` has no effect word: it
- * is just the persisted per-channel colors.
- */
-#define CLEVO_KB_RANDOM 0x70000000
-#define CLEVO_KB_DANCE 0x80000000
-#define CLEVO_KB_TEMPO 0x90000000
-#define CLEVO_KB_FLASH 0xA0000000
-#define CLEVO_KB_WAVE 0xB0000000
-#define CLEVO_KB_BREATH 0x1002A000
-#define CLEVO_KB_CYCLE 0x33010000
 /* Vendor RGB15 status word with the available keyboard channel enabled. */
 #define CLEVO_KB_STATUS_ON 0xE0071007
 #define CLEVO_KB_STATUS_OFF 0xE0000007
@@ -538,21 +526,42 @@ static const char *clevo_cc_keyboard_mode_name(const struct clevo_cc *cc)
 }
 
 /*
- * Native RGB15 effects exposed by the named interfaces. `static` is not in the
- * table because it has no effect word; it re-applies the persisted colors.
+ * Re-arm the single physical channel before a static color write: enable the
+ * LEDs, restore the cached brightness, re-apply the persisted color and stop
+ * the firmware sleep timer.
+ *
+ * The DSDT's command-103 handler does implement the vendor's effect words, but
+ * on this single-zone RGB15 EC they are accepted and never animate — a bare word
+ * sent with no surrounding writes does nothing either (verified with the
+ * `raw-effect` diagnostic). So the effects are not exposed as modes; the
+ * diagnostic stays available to probe a multi-zone board before adding them.
  */
-static const struct {
-	const char *name;
-	u32 word;
-} clevo_cc_keyboard_effects[] = {
-	{ "random", CLEVO_KB_RANDOM },
-	{ "breath", CLEVO_KB_BREATH },
-	{ "cycle",  CLEVO_KB_CYCLE },
-	{ "wave",   CLEVO_KB_WAVE },
-	{ "dance",  CLEVO_KB_DANCE },
-	{ "tempo",  CLEVO_KB_TEMPO },
-	{ "flash",  CLEVO_KB_FLASH },
-};
+static int clevo_cc_apply_keyboard_static(struct clevo_cc *cc)
+{
+	int zone;
+	int err;
+
+	err = clevo_cc_set_keyboard_status(cc, true);
+	if (err)
+		return err;
+	err = clevo_cc_set_keyboard_brightness_raw(cc, cc->keyboard_brightness_raw);
+	if (err)
+		return err;
+	for (zone = 0; zone < 1 && !err; zone++) {
+		if (cc->keyboard_color_known[zone])
+			err = clevo_cc_set_keyboard_color(cc, zone,
+							  cc->keyboard_color[zone]);
+	}
+	if (err)
+		return err;
+	err = clevo_cc_disable_keyboard_sleep_timer(cc);
+	if (err)
+		return err;
+
+	cc->keyboard_mode = "static";
+	cc->keyboard_led.brightness = cc->keyboard_brightness_raw;
+	return 0;
+}
 
 static ssize_t keyboard_rgb_show(struct device *dev,
 					struct device_attribute *attr, char *buf)
@@ -587,67 +596,32 @@ static int clevo_cc_parse_keyboard_color(const char *text, u8 color[3])
 }
 
 /*
- * Re-arm the single physical channel before an effect or color write: enable
- * the LEDs, restore the cached brightness, re-apply the persisted color, push
- * the effect word (NULL for `static`) and stop the firmware sleep timer.
- */
-static int clevo_cc_apply_keyboard_effect(struct clevo_cc *cc, const char *name,
-						  u32 word)
-{
-	int zone;
-	int err;
-
-	err = clevo_cc_set_keyboard_status(cc, true);
-	if (err)
-		return err;
-	err = clevo_cc_set_keyboard_brightness_raw(cc, cc->keyboard_brightness_raw);
-	if (err)
-		return err;
-	for (zone = 0; zone < 1 && !err; zone++) {
-		if (cc->keyboard_color_known[zone])
-			err = clevo_cc_set_keyboard_color(cc, zone,
-							  cc->keyboard_color[zone]);
-	}
-	if (err)
-		return err;
-	if (word) {
-		err = clevo_cc_keyboard_command(cc, word);
-		if (err)
-			return err;
-	}
-	err = clevo_cc_disable_keyboard_sleep_timer(cc);
-	if (err)
-		return err;
-
-	cc->keyboard_mode = name;
-	cc->keyboard_led.brightness = cc->keyboard_brightness_raw;
-	return 0;
-}
-
-/*
  * sysfs: keyboard_rgb
  *
  * This is deliberately a small, named interface instead of exposing arbitrary
  * command-103 words. The accepted forms are:
  *
  *   all 112233
- *   mode off | static | random | breath | cycle | wave | dance | tempo | flash
+ *   mode off | static
  *   brightness 0..100
  *   raw-brightness 0..255
+ *   raw-effect 00000000
  *   probe 0..2 112233
  *
- * `mode` selects the firmware's own RGB15 effect (the words come from the
- * vendor's RGBKB.SetMode for kb_type 6/22); `static` re-applies the persisted
- * colors and `off` disables the channel. Colors are written as RRGGBB.
- * `brightness` is a percentage: the RGB15 channel is analog, so it is scaled
- * onto the raw 0..191 byte (100% = EC maximum) rather than quantised onto the
- * vendor's five calibrated steps. `raw-brightness` stays available as an
- * experimental, uncached byte-level diagnostic.
+ * `mode static` re-applies the persisted colors and `off` disables the channel;
+ * colors are written as RRGGBB. The vendor's RGB15 effects (`random`, `breath`,
+ * `cycle`, `wave`, `dance`, `tempo`, `flash`) are deliberately *not* exposed as
+ * modes: on this single-zone EC they are accepted but never animate, verified
+ * with `raw-effect`, which sends a bare command-103 word for probing. `brightness`
+ * is a percentage: the RGB15 channel is analog, so it is scaled onto the raw
+ * 0..191 byte (100% = EC maximum) rather than quantised onto the vendor's five
+ * calibrated steps. `raw-brightness` stays available as an experimental,
+ * uncached byte-level diagnostic.
  *
  * This P15 23 has one physical RGB15 channel; the legacy left/middle/right
  * spellings remain accepted as aliases for compatibility, but all of them
- * address the same F0 channel. `probe` is an experimental, uncached F0/F1/F2
- * diagnostic. `raw-brightness` and `probe` should only be used with the daemon
+ * address the same F0 channel. `probe`, `raw-brightness` and `raw-effect` are
+ * experimental, uncached diagnostics that should only be used with the daemon
  * stopped.
  */
 static ssize_t keyboard_rgb_store(struct device *dev,
@@ -687,8 +661,6 @@ static ssize_t keyboard_rgb_store(struct device *dev,
 
 	mutex_lock(&cc->keyboard_lock);
 	if (!strcmp(op, "mode")) {
-		unsigned int i;
-
 		if (!strcmp(value, "off")) {
 			err = clevo_cc_set_keyboard_brightness_percent(cc, 0);
 			if (!err)
@@ -700,18 +672,7 @@ static ssize_t keyboard_rgb_store(struct device *dev,
 				cc->keyboard_led.brightness = LED_OFF;
 			}
 		} else if (!strcmp(value, "static")) {
-			err = clevo_cc_apply_keyboard_effect(cc, "static", 0);
-		} else {
-			err = -EINVAL;
-			for (i = 0; i < ARRAY_SIZE(clevo_cc_keyboard_effects); i++) {
-				if (strcmp(value,
-					   clevo_cc_keyboard_effects[i].name))
-					continue;
-				err = clevo_cc_apply_keyboard_effect(
-					cc, clevo_cc_keyboard_effects[i].name,
-					clevo_cc_keyboard_effects[i].word);
-				break;
-			}
+			err = clevo_cc_apply_keyboard_static(cc);
 		}
 	} else if (!strcmp(op, "brightness")) {
 		unsigned int percent;
@@ -746,6 +707,18 @@ static ssize_t keyboard_rgb_store(struct device *dev,
 			err = clevo_cc_set_keyboard_brightness_raw(cc, raw);
 		if (!err)
 			err = clevo_cc_disable_keyboard_sleep_timer(cc);
+	} else if (!strcmp(op, "raw-effect")) {
+		u32 word;
+
+		/*
+		 * Send a bare command-103 word with no status/brightness/color
+		 * writes around it. Diagnostic only, like `raw-brightness`: it
+		 * isolates what the EC does with an effect word so a failure can
+		 * be pinned on the word rather than on the surrounding order.
+		 */
+		if (kstrtou32(value, 16, &word))
+			goto unlock;
+		err = clevo_cc_keyboard_command(cc, word);
 	} else if (!strcmp(op, "all") || !strcmp(op, "left") ||
 		   !strcmp(op, "middle") || !strcmp(op, "right")) {
 		int zone;

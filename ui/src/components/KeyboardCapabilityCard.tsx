@@ -89,7 +89,7 @@ export function KeyboardCapabilityCard({ state }: KeyboardCapabilityCardProps) {
           <Row label="灯区" value={zones} />
           <Row
             label="灯效"
-            value={state?.modes?.length ? `${state.modes.length} 种` : "关闭 / 静态 / 波浪"}
+            value={state?.modes?.length ? `${state.modes.length} 种` : "关闭 / 静态"}
           />
           <Row label="固件 kb_type" value={firmware} />
           <Row label="USB ID" value={usb} />
