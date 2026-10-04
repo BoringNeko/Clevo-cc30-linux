@@ -112,12 +112,16 @@ echo 'mode off' | sudo tee "$K"         # 收尾关闭
 sudo systemctl start clevod
 ```
 
-本机 `kb_type=6` 是单区 RGB15，只有 `mode off` / `mode static`：`static` 会重新
-开启整块键盘、写入颜色，并通过 `121/24 = 0`
-关闭固件的键盘灯睡眠定时器；这只影响当前运行状态，不写入 Windows 的 AppSettings
-持久化页。原厂固件里那些灯效字（`breath` / `cycle` / `wave` 等）在本机的单区 EC
-上被接受但不会产生任何动画——连裸发单个命令字也一样（`raw-effect` 诊断），
-所以驱动和 UI 都不把它们当作可用模式，只提供静态颜色、亮度和开关。
+本机 `kb_type=6` 是单区 RGB15，内核只提供 `mode off` / `mode static`：`static` 会重新
+开启整块键盘、写入颜色，并通过 `121/24 = 0` 关闭固件的键盘灯睡眠定时器；这只影响
+当前运行状态，不写入 Windows 的 AppSettings 持久化页。daemon 和 UI 也只保留关闭、
+静态颜色、亮度和分区写入，不启动灯效动画或音频采集。升级时同时更新驱动、daemon 和 UI：
+
+```bash
+cd /path/to/clevo-cc30-linux-git
+sudo packaging/install.sh --enable --electron
+clevo-cc-ui-electron                   # 用登录用户启动，勿用 sudo
+```
 
 内核同时注册标准 LED class 设备，供 KDE/PowerDevil 等桌面组件调节亮度。
 该接口使用 RGB15 原始亮度字节，范围是 `0..191`；命名接口 `keyboard_rgb`
@@ -130,7 +134,7 @@ echo 96 | sudo tee /sys/class/leds/clevo::kbd_backlight/brightness
 cat /sys/class/leds/clevo::kbd_backlight/brightness
 ```
 
-该标准接口只负责亮度；颜色和 `static` / `wave` 模式仍通过
+该标准接口只负责亮度；颜色和 `off` / `static` 模式仍通过
 `/sys/devices/platform/CLV0001:00/keyboard_rgb` 控制。通过 `all RRGGBB` 写入新颜色
 时，驱动会用 24 个中间颜色做约 0.3 秒的软件渐变；这不是硬件原生渐变，但所有
 调用路径都能得到相同效果。

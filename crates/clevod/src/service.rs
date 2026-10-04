@@ -294,16 +294,16 @@ impl Service {
         })
     }
 
-    /// Set a keyboard effect mode.
+    /// Set a keyboard lighting mode.
     pub fn set_keyboard_mode(&self, mode: &str) -> Result<(), ServiceError> {
         let mode = KeyboardMode::parse(mode)
             .ok_or_else(|| ServiceError::UnknownMode(format!("keyboard mode {mode:?}")))?;
         let keyboard = self.keyboard()?;
-        // Refuse effects this backend cannot drive instead of letting the
+        // Refuse modes this backend cannot drive instead of letting the
         // hardware layer reject them with a less specific message.
         if !keyboard.snapshot().info.modes.contains(&mode) {
             return Err(ServiceError::Unsupported(format!(
-                "keyboard effect {mode:?} is not available on this controller"
+                "keyboard mode {mode:?} is not available on this controller"
             )));
         }
         keyboard.set_mode(mode)?;
@@ -654,25 +654,18 @@ impl Service {
         }
 
         if let (Some(keyboard), Some(saved)) = (self.keyboard.as_ref(), config.keyboard.as_ref()) {
-            // A config written before the capability was narrowed can name an
-            // effect this backend no longer offers (e.g. a `wave` saved when
-            // the single-zone EC was wrongly assumed to animate). Fall back to
-            // the closest supported mode — static keeps the saved colour — and
-            // do not report it as a failure, or every start would log one.
+            // A legacy config can contain a mode that is no longer supported.
+            // Fall back to static so saved colors remain usable and startup
+            // does not fail just because an old mode name was persisted.
             let restore_mode = |keyboard: &dyn Keyboard| -> Result<(), ServiceError> {
-                let Some(mode) = KeyboardMode::parse(&saved.mode) else {
-                    return Err(ServiceError::UnknownMode(format!(
-                        "keyboard mode {:?}",
-                        saved.mode
-                    )));
-                };
+                let mode = KeyboardMode::parse(&saved.mode).unwrap_or(KeyboardMode::Static);
                 let supported = keyboard.snapshot().info.modes;
                 let mode = if supported.contains(&mode) {
                     mode
                 } else {
                     KeyboardMode::Static
                 };
-                Ok(keyboard.set_mode(mode)?)
+                self.set_keyboard_mode(mode.as_str())
             };
 
             if keyboard.snapshot().info.backend == "acpi-dchu" {
@@ -680,8 +673,7 @@ impl Service {
                 // one representative persisted color; replaying left/middle/
                 // right in sequence would make the last color overwrite the
                 // entire keyboard. Restore colors and brightness before the
-                // mode because applying colors after `wave` can switch the EC
-                // back to static mode.
+                // mode so the static channel is configured in one pass.
                 if let Some(key) = saved.keys.first() {
                     if let Err(err) = keyboard.set_zone(KeyboardZone::All, key.color.into()) {
                         failures.push(format!("keyboard zone All: {err}"));

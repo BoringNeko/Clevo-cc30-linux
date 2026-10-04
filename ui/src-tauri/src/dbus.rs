@@ -228,7 +228,9 @@ impl DaemonClient {
             .call_method("GetKeyboard", &())?
             .body()
             .deserialize()
-            .map_err(|e| UiError { message: format!("could not decode keyboard reply: {e}") })?;
+            .map_err(|e| UiError {
+                message: format!("could not decode keyboard reply: {e}"),
+            })?;
         Ok(serde_json::from_str(&json)?)
     }
 
@@ -250,19 +252,15 @@ impl DaemonClient {
 
     /// Set one logical keyboard zone.
     pub fn set_keyboard_zone(&self, zone: &str, color: [u8; 3]) -> Result<(), UiError> {
-        self.proxy()?.call_method(
-            "SetKeyboardZone",
-            &(zone, color[0], color[1], color[2]),
-        )?;
+        self.proxy()?
+            .call_method("SetKeyboardZone", &(zone, color[0], color[1], color[2]))?;
         Ok(())
     }
 
     /// Set one key in the verified 6x20 layout.
     pub fn set_keyboard_key(&self, row: u8, col: u8, color: [u8; 3]) -> Result<(), UiError> {
-        self.proxy()?.call_method(
-            "SetKeyboardKey",
-            &(row, col, color[0], color[1], color[2]),
-        )?;
+        self.proxy()?
+            .call_method("SetKeyboardKey", &(row, col, color[0], color[1], color[2]))?;
         Ok(())
     }
 

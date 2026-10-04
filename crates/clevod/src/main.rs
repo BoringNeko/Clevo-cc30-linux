@@ -12,7 +12,6 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::time::Duration;
 
 use clap::Parser;
 use tracing::{info, warn};
@@ -174,13 +173,17 @@ async fn main() -> ExitCode {
 
     if !args.no_poll {
         let service = Arc::clone(&service);
-        let interval = Duration::from_millis(args.interval_ms);
+        let interval = std::time::Duration::from_millis(args.interval_ms);
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(interval);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 ticker.tick().await;
-                if let Err(err) = service.poll_fan() {
-                    warn!("fan poll failed: {err}");
+                let poll = Arc::clone(&service);
+                match tokio::task::spawn_blocking(move || poll.poll_fan()).await {
+                    Ok(Err(err)) => warn!("fan poll failed: {err}"),
+                    Err(err) => warn!("fan poll task failed: {err}"),
+                    _ => {}
                 }
             }
         });

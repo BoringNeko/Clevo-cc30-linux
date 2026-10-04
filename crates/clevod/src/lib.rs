@@ -181,15 +181,15 @@ mod tests {
 
     #[test]
     fn acpi_service_offers_and_applies_static_and_off() {
-        let path =
-            std::env::temp_dir().join(format!("clevo-daemon-effects-{}", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "clevo-daemon-keyboard-modes-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_file(&path);
         std::fs::write(&path, "").unwrap();
         let keyboard = AcpiKeyboard::with_path(&path);
         let service = Service::new(mock(FIXTURE)).with_keyboard(Some(Box::new(keyboard)));
 
-        // The single-zone RGB15 EC does not animate the vendor effect words, so
-        // the backend offers exactly off/static; the UI renders that list.
         let snapshot = service.keyboard_snapshot().unwrap();
         assert_eq!(
             snapshot.info.modes,
@@ -203,18 +203,39 @@ mod tests {
             KeyboardMode::Static
         );
 
-        // A mode the backend does not advertise is refused with a clear reason.
+        // Removed modes are no longer accepted by the public mode parser.
         assert!(matches!(
-            service.set_keyboard_mode("breath"),
-            Err(service::ServiceError::Unsupported(_))
+            service.set_keyboard_mode("wave"),
+            Err(service::ServiceError::UnknownMode(_))
         ));
         let _ = std::fs::remove_file(path);
     }
 
     #[test]
-    fn saved_unavailable_effect_degrades_to_static() {
-        // A file written while the effect was offered must not make every start
-        // fail: the unsupported effect falls back to static, keeping the colour.
+    fn static_mode_keeps_base_color_and_persists_it() {
+        let path =
+            std::env::temp_dir().join(format!("clevo-daemon-static-mode-{}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        std::fs::write(&path, "").unwrap();
+        let service = Service::new(mock(FIXTURE))
+            .with_keyboard(Some(Box::new(AcpiKeyboard::with_path(&path))));
+        let red = Color { r: 255, g: 0, b: 0 };
+        service.set_keyboard_zone("all", red).unwrap();
+        service.set_keyboard_mode("static").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "mode static\n");
+        let snapshot = service.keyboard_snapshot().unwrap();
+        assert_eq!(snapshot.mode, KeyboardMode::Static);
+        assert_eq!(snapshot.keys[0][0], red);
+        let saved = service.to_config().keyboard.unwrap();
+        assert_eq!(saved.mode, "static");
+        assert_eq!(saved.keys[0].color, config::KeyboardColorWire::from(red));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn saved_legacy_mode_degrades_to_static() {
+        // A legacy mode must not make every start fail: it falls back to
+        // static, keeping the saved color.
         let path =
             std::env::temp_dir().join(format!("clevo-daemon-fallback-{}", std::process::id()));
         let _ = std::fs::remove_file(&path);
@@ -242,26 +263,24 @@ mod tests {
     }
 
     #[test]
-    fn unknown_keyboard_effect_is_rejected() {
+    fn unknown_keyboard_mode_is_rejected() {
         let service =
             Service::new(mock(FIXTURE)).with_keyboard(Some(Box::new(MockKeyboard::new())));
         assert!(matches!(
-            service.set_keyboard_mode("spectrum"),
+            service.set_keyboard_mode("unknown-effect"),
             Err(service::ServiceError::UnknownMode(_))
         ));
     }
 
     #[test]
     fn supported_modes_are_advertised_per_backend() {
-        // The ACPI-DCHU path (stood in for by the mock) offers off/static; the
-        // UI renders exactly the cards that work, no more.
+        // Mock reports the same mode names but never touches real hardware.
         let service =
             Service::new(mock(FIXTURE)).with_keyboard(Some(Box::new(MockKeyboard::new())));
         let modes = service.keyboard_snapshot().unwrap().info.modes;
         assert!(modes.contains(&KeyboardMode::Off));
         assert!(modes.contains(&KeyboardMode::Static));
-        assert!(!modes.contains(&KeyboardMode::Wave));
-        assert!(!modes.contains(&KeyboardMode::Breath));
+        assert_eq!(modes.len(), 2);
     }
 
     #[test]

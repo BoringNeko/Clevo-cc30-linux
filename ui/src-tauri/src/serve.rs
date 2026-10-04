@@ -141,7 +141,7 @@ fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
             commands::set_fan_curve(curve)?;
             Ok(Value::Null)
         }
-        "get_keyboard" => ok(commands::get_keyboard()? ),
+        "get_keyboard" => ok(commands::get_keyboard()?),
         "set_keyboard_mode" => {
             commands::set_keyboard_mode(str_arg(args, "mode")?)?;
             Ok(Value::Null)
@@ -154,7 +154,7 @@ fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
             if level > u64::from(u8::MAX) {
                 return Err("level is outside u8 range".into());
             }
-            ok(commands::set_keyboard_brightness(level as u8)? )
+            ok(commands::set_keyboard_brightness(level as u8)?)
         }
         "set_keyboard_zone" => {
             let color = rgb_arg(args)?;
@@ -220,9 +220,18 @@ fn rgb_arg(args: &Value) -> Result<[u8; 3], String> {
         return Err("color must contain exactly three components".into());
     }
     Ok([
-        value[0].as_u64().and_then(|v| u8::try_from(v).ok()).ok_or_else(|| "invalid red component".to_string())?,
-        value[1].as_u64().and_then(|v| u8::try_from(v).ok()).ok_or_else(|| "invalid green component".to_string())?,
-        value[2].as_u64().and_then(|v| u8::try_from(v).ok()).ok_or_else(|| "invalid blue component".to_string())?,
+        value[0]
+            .as_u64()
+            .and_then(|v| u8::try_from(v).ok())
+            .ok_or_else(|| "invalid red component".to_string())?,
+        value[1]
+            .as_u64()
+            .and_then(|v| u8::try_from(v).ok())
+            .ok_or_else(|| "invalid green component".to_string())?,
+        value[2]
+            .as_u64()
+            .and_then(|v| u8::try_from(v).ok())
+            .ok_or_else(|| "invalid blue component".to_string())?,
     ])
 }
 

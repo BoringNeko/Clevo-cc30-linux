@@ -74,17 +74,23 @@ pub fn set_keyboard_mode(mode: String) -> Result<(), String> {
 
 /// Set keyboard brightness as a percentage in 0..=100.
 pub fn set_keyboard_brightness(level: u8) -> Result<u8, String> {
-    client()?.set_keyboard_brightness(level).map_err(|e| e.message)
+    client()?
+        .set_keyboard_brightness(level)
+        .map_err(|e| e.message)
 }
 
 /// Set one logical keyboard zone.
 pub fn set_keyboard_zone(zone: String, color: [u8; 3]) -> Result<(), String> {
-    client()?.set_keyboard_zone(&zone, color).map_err(|e| e.message)
+    client()?
+        .set_keyboard_zone(&zone, color)
+        .map_err(|e| e.message)
 }
 
 /// Set one key in the verified 6x20 layout.
 pub fn set_keyboard_key(row: u8, col: u8, color: [u8; 3]) -> Result<(), String> {
-    client()?.set_keyboard_key(row, col, color).map_err(|e| e.message)
+    client()?
+        .set_keyboard_key(row, col, color)
+        .map_err(|e| e.message)
 }
 
 /// Serialize a curve back into the daemon's JSON wire shape.

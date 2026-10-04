@@ -33,6 +33,14 @@ fn start_daemon(name: &str) {
 fn start_daemon_with(name: &str, authorizer: Arc<dyn clevod::policy::Authorizer>) {
     let mock = MockTransport::from_fixture_str(FIXTURE).expect("fixture");
     let service = Arc::new(Service::new(Box::new(mock)));
+    start_daemon_with_service(name, service, authorizer);
+}
+
+fn start_daemon_with_service(
+    name: &str,
+    service: Arc<Service>,
+    authorizer: Arc<dyn clevod::policy::Authorizer>,
+) {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -178,7 +186,10 @@ fn factory_curve_is_readable_by_the_ui() {
     let client = DaemonClient::session_with_name("org.clevo.CC.factory").expect("client");
     // Not captured yet on a fresh daemon: that must be a clean `None`, not an
     // error, so the UI can say "unknown".
-    assert!(client.factory_curve().expect("read factory curve").is_none());
+    assert!(client
+        .factory_curve()
+        .expect("read factory curve")
+        .is_none());
 
     // A write captures the EC's shipped curve before overwriting it.
     let curve = client.curve().expect("read curve");

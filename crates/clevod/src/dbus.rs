@@ -24,7 +24,8 @@
 //! cannot see, so `missing_docs` is relaxed for this module.
 #![allow(missing_docs)]
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use zbus::interface;
 use zbus::message::Header;
@@ -38,6 +39,7 @@ use clevo_transport::Color;
 pub struct CcDaemon {
     service: Arc<Service>,
     authorizer: Arc<dyn Authorizer>,
+    subjects: Mutex<HashMap<String, policy::Subject>>,
 }
 
 impl CcDaemon {
@@ -51,6 +53,7 @@ impl CcDaemon {
         Self {
             service,
             authorizer,
+            subjects: Mutex::new(HashMap::new()),
         }
     }
 
@@ -82,33 +85,47 @@ impl CcDaemon {
         emitter: &SignalEmitter<'_>,
         action: &str,
     ) -> zbus::fdo::Result<()> {
-        let subject = match sender {
+        let (subject, newly_resolved) = match sender {
             Some(name) => {
-                let dbus = zbus::fdo::DBusProxy::new(emitter.connection()).await?;
-                let bus_name = zbus::names::BusName::from(name.clone());
-                let uid = dbus.get_connection_unix_user(bus_name.clone()).await?;
-                let pid = dbus.get_connection_unix_process_id(bus_name).await?;
-                let start_time = crate::policy::process_start_time(pid).unwrap_or(0);
-                let session_id =
-                    crate::policy::session_for_pid(emitter.connection(), pid, uid).await;
-                policy::Subject {
-                    pid,
-                    start_time,
-                    uid,
-                    session_id,
+                let cache_key = name.to_string();
+                let cached = { self.subjects.lock().unwrap().get(&cache_key).cloned() };
+                if let Some(subject) = cached {
+                    (subject, false)
+                } else {
+                    let dbus = zbus::fdo::DBusProxy::new(emitter.connection()).await?;
+                    let bus_name = zbus::names::BusName::from(name.clone());
+                    let uid = dbus.get_connection_unix_user(bus_name.clone()).await?;
+                    let pid = dbus.get_connection_unix_process_id(bus_name).await?;
+                    let start_time = crate::policy::process_start_time(pid).unwrap_or(0);
+                    let session_id =
+                        crate::policy::session_for_pid(emitter.connection(), pid, uid).await;
+                    let subject = policy::Subject {
+                        pid,
+                        start_time,
+                        uid,
+                        session_id,
+                    };
+                    let mut subjects = self.subjects.lock().unwrap();
+                    if subjects.len() >= 64 {
+                        subjects.clear();
+                    }
+                    subjects.insert(cache_key, subject.clone());
+                    (subject, true)
                 }
             }
-            None => policy::Subject::root(),
+            None => (policy::Subject::root(), true),
         };
 
-        tracing::info!(
-            action,
-            pid = subject.pid,
-            start_time = subject.start_time,
-            session = ?subject.session_id,
-            uid = subject.uid,
-            "policy check"
-        );
+        if newly_resolved {
+            tracing::info!(
+                action,
+                pid = subject.pid,
+                start_time = subject.start_time,
+                session = ?subject.session_id,
+                uid = subject.uid,
+                "policy check"
+            );
+        }
 
         if self.authorizer.authorized(action, &subject).await {
             Ok(())
@@ -578,14 +595,12 @@ mod tests {
     }
 
     #[test]
-    fn keyboard_json_reports_the_backend_effect_list() {
+    fn keyboard_json_reports_the_backend_mode_list() {
         let json = keyboard_to_json(Some(snapshot()), Some(6));
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(value["available"], true);
         assert_eq!(value["backend"], "mock");
-        // The UI reads this list to decide which effect cards to render. The
-        // ACPI-DCHU path (stood in for by the mock) offers off/static only,
-        // because the single-zone RGB15 EC does not animate the effect words.
+        // The UI reads this list to decide which mode buttons to render.
         let modes = value["modes"].as_array().expect("modes array");
         let names: Vec<_> = modes.iter().map(|m| m.as_str().unwrap()).collect();
         assert_eq!(names, ["off", "static"]);

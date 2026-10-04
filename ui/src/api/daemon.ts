@@ -159,13 +159,6 @@ export async function setFanCurve(curve: FanCurve): Promise<void> {
 export const KEYBOARD_MODES = [
   "off",
   "static",
-  "breath",
-  "cycle",
-  "wave",
-  "dance",
-  "tempo",
-  "flash",
-  "random",
 ] as const;
 export type KeyboardMode = (typeof KEYBOARD_MODES)[number];
 
@@ -203,7 +196,7 @@ export async function getKeyboard(): Promise<KeyboardState> {
   return invoke<KeyboardState>("get_keyboard");
 }
 
-/** Set keyboard effect mode. */
+/** Set keyboard lighting mode. */
 export async function setKeyboardMode(mode: KeyboardMode): Promise<void> {
   return invoke<void>("set_keyboard_mode", { mode });
 }

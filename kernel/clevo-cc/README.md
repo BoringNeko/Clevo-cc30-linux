@@ -23,7 +23,7 @@ exposes fan monitoring and fan-mode control through `hwmon` and sysfs.
 | `sysfs fan_curve` | rw | read (command 13) and write (command 14) |
 | `sysfs raw_status` / `raw_curve` | read | diagnostic hex dumps (for re-verifying offsets) |
 | `sysfs perf_mode` | rw | `quiet` / `pwrsaving` / `performance` / `entertainment` |
-| `sysfs keyboard_rgb` | rw | RGB15 single-zone color, mode (off/static) and brightness (percent) |
+| `sysfs keyboard_rgb` | rw | RGB15 single-zone color, mode (off/static), and brightness (percent) |
 | LED class `clevo::kbd_backlight` | rw | standard raw keyboard brightness (`0..191`) |
 
 `fan_mode` values map to `121/1`: `auto`=0, `max`=1, `maxq`=5, `custom`=6,
@@ -50,15 +50,8 @@ so the whole keyboard changes together. The legacy `left`, `middle`, and
 `right` spellings are accepted as aliases for `all`; they are not independent
 zones. Colors, and the `brightness` percentage, are reported back by `cat`.
 
-`mode` accepts `off` and `static` only. The vendor's RGB15 effect words
-(`random` `0x70000000`, `breath` `0x1002A000`, `cycle` `0x33010000`, `wave`
-`0xB0000000`, `dance` `0x80000000`, `tempo` `0x90000000`, `flash`
-`0xA0000000`) are implemented in the DSDT's command-103 handler and accepted by
-ACPI, but this single-zone EC never animates for them: a bare word sent with no
-surrounding writes (the `raw-effect` diagnostic) does nothing either, and the
-vendor utility only shows its effect panel for multi-zone models. They are
-therefore not exposed as modes; `raw-effect 00000000` remains so a multi-zone
-board can be probed before they are added.
+`mode` accepts `off` and `static` only. Transient frames, firmware effect words,
+keypress reactions, and audio-driven updates are intentionally not exposed.
 
 Color writes through `all RRGGBB` use a short software fade with 24 intermediate
 steps; the transition takes about 0.3 seconds and remains a single physical
@@ -181,23 +174,12 @@ The RGB15 status word enables the available keyboard channel together with the
 color and brightness commands. `mode off` is the reversible cleanup operation;
 it does not change the cached color or brightness level.
 
-`keyboard_rgb` also exposes the firmware's own RGB15 effects. `static` re-applies
-the persisted colour (no effect word); the rest send the word the vendor's
-`RGBKB.SetMode` uses for `kb_type` 6/22:
+`keyboard_rgb` exposes only `off` and `static` as hardware modes. `static`
+re-applies the cached colour. No firmware effect words or transient frame
+operation is accepted by the driver.
 
-| `mode` | Vendor `Mode` | Effect |
-| --- | --- | --- |
-| `random` | 0 | random sparkle |
-| `breath` | 2 | single-colour breathing |
-| `cycle` | 3 | colour cycling |
-| `wave` | 4 | flowing wave |
-| `dance` | 5 | rhythmic dance |
-| `tempo` | 6 | tempo pulse |
-| `flash` | 7 | strobe |
-
-The daemon only offers the effects the detected backend reports, and the UI
-mirrors that list, so a machine whose controller cannot drive an effect never
-shows it.
+The daemon and UI use the same two keyboard modes and do not run a background
+lighting animation loop.
 
 If `_DSM` returns `0x80000002` the probe still loads but reads return
 `-EOPNOTSUPP`; check `dmesg`.

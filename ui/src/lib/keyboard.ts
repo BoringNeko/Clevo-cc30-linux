@@ -9,44 +9,42 @@ import type { KeyboardMode, KeyboardState, KeyboardZone } from "../api/daemon";
 /** The 6x20 per-key colour grid the daemon reports. */
 export type KeyboardKeys = number[][][];
 
-/** Effect-mode display names (the wire spellings come from the daemon). */
+/** Lighting-mode display names (the wire spellings come from the daemon). */
 const MODE_LABELS: Record<KeyboardMode, string> = {
   off: "关闭",
   static: "静态",
-  breath: "呼吸",
-  cycle: "循环",
-  wave: "波浪",
-  dance: "舞动",
-  tempo: "节奏",
-  flash: "闪烁",
-  random: "随机",
 };
 
-/** Short English subtitle for each effect, shown under the name. */
+/** Short English subtitle for each mode, shown under the name. */
 const MODE_SUBTITLES: Record<KeyboardMode, string> = {
   off: "Off",
   static: "Static",
-  breath: "Breathing",
-  cycle: "Color Cycle",
-  wave: "Wave",
-  dance: "Dance",
-  tempo: "Tempo",
-  flash: "Flash",
-  random: "Random",
 };
 
-/** Human-readable effect mode. */
+/** Human-readable lighting mode. */
 export function keyboardModeLabel(mode: KeyboardMode): string {
   return MODE_LABELS[mode] ?? mode;
 }
 
-/** English subtitle for an effect mode. */
+/** English subtitle for a lighting mode. */
 export function keyboardModeSubtitle(mode: KeyboardMode): string {
   return MODE_SUBTITLES[mode] ?? mode;
 }
 
 /**
- * The effects a controller can actually drive.
+ * The order lighting modes are shown in.
+ *
+ * The daemon may report them in any order; the UI presents one consistent
+ * sequence so the grid does not move between backends or firmware revisions.
+ * Anything not listed keeps its reported position after the known ones.
+ */
+const MODE_ORDER: KeyboardMode[] = [
+  "off",
+  "static",
+];
+
+/**
+ * The lighting modes a controller can actually drive, in display order.
  *
  * The daemon reports the backend's own list. When it is absent (an older daemon)
  * fall back to the set every backend implements — `off`/`static` — rather than
@@ -54,8 +52,12 @@ export function keyboardModeSubtitle(mode: KeyboardMode): string {
  */
 export function keyboardSupportedModes(state: KeyboardState | null): KeyboardMode[] {
   const modes = state?.modes;
-  if (modes && modes.length > 0) return modes;
-  return ["off", "static"];
+  const supported = modes && modes.length > 0 ? modes : (["off", "static"] as KeyboardMode[]);
+  return [...supported].sort((a, b) => {
+    const ai = MODE_ORDER.indexOf(a);
+    const bi = MODE_ORDER.indexOf(b);
+    return (ai === -1 ? MODE_ORDER.length : ai) - (bi === -1 ? MODE_ORDER.length : bi);
+  });
 }
 
 /** Zone display names. */

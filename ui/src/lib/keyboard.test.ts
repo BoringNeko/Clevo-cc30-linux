@@ -4,6 +4,7 @@ import {
   isSingleZone,
   keyboardBackendLabel,
   keyboardModeLabel,
+  keyboardSupportedModes,
   keyboardUnavailableMessage,
   keyboardWritable,
   keyboardZoneLabel,
@@ -28,7 +29,6 @@ describe("keyboard helpers", () => {
   it("labels every mode and zone", () => {
     expect(keyboardModeLabel("off")).toBe("关闭");
     expect(keyboardModeLabel("static")).toBe("静态");
-    expect(keyboardModeLabel("wave")).toBe("波浪");
     expect(keyboardZoneLabel("all")).toBe("全部");
     expect(keyboardZoneLabel("right")).toBe("右");
   });
@@ -73,6 +73,11 @@ describe("keyboard helpers", () => {
     const original = normaliseKeys(undefined);
     applyZone(original, "all", [1, 2, 3]);
     expect(original[0][0]).toEqual([0, 0, 0]);
+  });
+
+  it("keeps the static mode list stable", () => {
+    const reported = keyboardSupportedModes(state({ modes: ["static", "off"] }));
+    expect(reported).toEqual(["off", "static"]);
   });
 
   it("recognises the single-zone backend", () => {

@@ -21,9 +21,9 @@ use serde::{Deserialize, Serialize};
 
 /// Current on-disk schema version.
 ///
-/// Version 5 changed `keyboard.brightness` from the vendor's 0..4 scale to a
-/// 0..100 percentage; v4 files are migrated on load.
-pub const SCHEMA_VERSION: u32 = 5;
+/// Version 6 is retained so existing files that contained the removed RGB15
+/// effect-speed field continue to migrate cleanly; unknown fields are ignored.
+pub const SCHEMA_VERSION: u32 = 6;
 
 /// A fan-curve point in the versioned configuration file.
 ///
@@ -93,7 +93,7 @@ pub struct KeyboardKeyWire {
 /// Persisted keyboard RGB preferences.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeyboardConfig {
-    /// Last selected controller mode (`off`, `static`, or `wave`).
+    /// Last selected controller mode.
     #[serde(default = "default_keyboard_mode")]
     pub mode: String,
     /// Last brightness as a percentage in `0..=100`.

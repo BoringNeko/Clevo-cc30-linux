@@ -404,27 +404,42 @@ function applyChromiumSwitches() {
   }
 }
 
-app.whenReady().then(async () => {
-  applyChromiumSwitches();
-  try {
-    await startBackend();
-  } catch (e) {
-    console.error("could not start the clevo-cc backend:", e.message);
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  // A second shell would start another Rust backend. Keep one owner so the
+  // desktop control center has a single D-Bus client and tray process.
+  app.on("second-instance", () => showWindow());
+
+  app.whenReady().then(async () => {
+    applyChromiumSwitches();
+    try {
+      await startBackend();
+    } catch (e) {
+      console.error("could not start the clevo-cc backend:", e.message);
+      app.quit();
+      return;
+    }
+    createWindow();
+    buildTray();
+
+    app.on("activate", () => showWindow());
+  });
+
+  // Closing the last window must not quit: the tray keeps the app alive.
+  app.on("window-all-closed", () => {
+    if (quitting) app.quit();
+  });
+
+  let backendStopping = false;
+  app.on("before-quit", (event) => {
+    quitting = true;
+    if (!backend || backend.killed || backendStopping) return;
+    event.preventDefault();
+    backendStopping = true;
+    if (backend && !backend.killed) backend.kill();
     app.quit();
-    return;
-  }
-  createWindow();
-  buildTray();
-
-  app.on("activate", () => showWindow());
-});
-
-// Closing the last window must not quit: the tray keeps the app alive.
-app.on("window-all-closed", () => {
-  if (quitting) app.quit();
-});
-
-app.on("before-quit", () => {
-  quitting = true;
-  if (backend && !backend.killed) backend.kill();
-});
+  });
+}
