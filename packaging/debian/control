@@ -6,7 +6,8 @@ Build-Depends:
  debhelper-compat (= 13),
  cargo,
  rustc,
- libhidapi-dev
+ libudev-dev,
+ pkg-config
 Standards-Version: 4.6.2
 Rules-Requires-Root: no
 Homepage: https://github.com/BoringNeko/Clevo-cc30-linux

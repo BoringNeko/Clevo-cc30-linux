@@ -60,8 +60,8 @@
 
 | 发行版 | 安装命令 |
 |---|---|
-| Arch / CachyOS | `sudo pacman -S --needed dbus polkit hidapi` |
-| Debian / Ubuntu | `sudo apt install dbus polkitd libhidapi-dev` |
+| Arch / CachyOS | `sudo pacman -S --needed dbus polkit systemd-libs` |
+| Debian / Ubuntu | `sudo apt install dbus polkitd libudev1` |
 | Fedora / RHEL | `sudo dnf install dbus polkit` |
 | openSUSE | `sudo zypper install dbus-1 polkit` |
 
