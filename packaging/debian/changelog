@@ -1,3 +1,11 @@
+clevo-cc-linux (0.2.1-1) unstable; urgency=medium
+
+  * Restrict keyboard lighting to off and static modes, removing audio-driven
+    and animated lighting paths.
+  * Simplify the color-only preview and update package metadata.
+
+ -- BoringNeko <noreply@github.com>  Sun, 04 Oct 2026 00:00:00 +0000
+
 clevo-cc-linux (0.2.0-1) unstable; urgency=medium
 
   * Persist the fan mode, performance mode and custom fan curve, and replay

@@ -122,6 +122,10 @@ dkms install -m clevo-cc -v %{version} >/dev/null 2>&1 || :
 /usr/src/clevo-cc-%{version}
 
 %changelog
+* Sun Oct 04 2026 BoringNeko <noreply@github.com> - 0.2.1-1
+- Keep keyboard lighting to off/static and remove audio-driven animations
+- Replace the keyboard drawing with a static color preview
+
 * Sun Sep 27 2026 BoringNeko <noreply@github.com> - 0.2.0-1
 - Persist fan mode, performance mode and custom fan curve across reboots
 - Capture the real factory fan curve on a cold boot (restore-default source)

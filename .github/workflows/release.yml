@@ -1,7 +1,7 @@
 name: Release
 
 # Build deb / rpm / AppImage packages and attach them to a GitHub Release when
-# a version tag is pushed (e.g. v0.1.2). Can also be run manually.
+# a version tag is pushed (e.g. v0.2.1). Can also be run manually.
 on:
   push:
     tags:
@@ -111,8 +111,11 @@ jobs:
             > AppImage **仅包含 UI 界面**（不含守护进程与内核驱动）。
 
             ### Fix
-            - 修复安装脚本更新时没有更新成功
+            - 修复可以启动多个客户端
 
             ### Add
-            - 添加持久化，重启保留模式
+            - 添加键盘 RGB 灯的颜色与亮度自定义
+
+            ### Note
+            - 因键盘 RGB 灯光效果会导致音频出现问题，暂时进行搁置
           fail_on_unmatched_files: true
