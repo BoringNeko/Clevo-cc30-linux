@@ -34,10 +34,7 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-      - name: Tests (no hardware required)
-        run: cargo test --workspace
-
-      - name: D-Bus integration test (private session bus)
+      - name: Tests (no hardware required; private D-Bus session)
         run: dbus-run-session -- cargo test --workspace
 
   ui:
