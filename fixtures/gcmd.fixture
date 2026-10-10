@@ -1,0 +1,13 @@
+# Synthetic GCMD fixture: no AppSettings pages and no hardware provenance.
+# PSF4 bit 2 and PSF5 bit 0 enable the four performance modes.
+# Replies contain one little-endian u32 result record.
+model = "SYNTHETIC-GCMD"
+bios = "test"
+date = "2026-10-11"
+allow_write = true
+exec 7a * 0000000000000000010000000000040011009000
+exec 60 * 0000000000000000010000000000040004300000
+exec 10 * 0000000000000000010000000000040083080000
+exec 3c * 0000000000000000010000000000040001000000
+exec 52 * 0000000000000000010000000000040020000008
+exec 79 * 0000000000000000010000000000040079000000

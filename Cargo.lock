@@ -183,6 +183,7 @@ dependencies = [
  "clevo-proto",
  "clevo-transport",
  "clevod",
+ "serde_json",
  "tokio",
  "zbus",
 ]
@@ -190,6 +191,9 @@ dependencies = [
 [[package]]
 name = "clevo-proto"
 version = "0.2.1"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "clevo-transport"

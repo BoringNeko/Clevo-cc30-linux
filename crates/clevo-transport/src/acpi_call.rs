@@ -3,8 +3,8 @@
 //! This backend talks to the firmware's `_DSM` method through the `acpi_call`
 //! kernel module. It is deliberately restricted:
 //!
-//! * Only the **verified read commands** may be issued (command `12` fan status
-//!   and command `13` fan curve). Every other command is rejected with
+//! * Only the **verified read commands** may be issued (command `12` fan status,
+//!   command `13` fan curve, and GCMD `122/96/16/60/82`). Others are rejected with
 //!   [`TransportError::Unsupported`], so this backend can never write hardware
 //!   even if a caller asks it to.
 //! * AppSettings reads/writes are not implemented (no verified accessor yet).
@@ -17,7 +17,8 @@
 //! `acpi_call`'s default `BUFFER_SIZE` is 256, so the input is capped near 512
 //! characters; fan payloads here are all-zero and short.
 
-use clevo_proto::constants::{ACPI_DSM_PATH, DSM_GUID};
+use clevo_proto::command::GCMD_CAPABILITY_COMMANDS;
+use clevo_proto::constants::{ACPI_DSM_PATH, ACPI_GCMD_PATH, DSM_GUID};
 
 use crate::error::{TransportError, TransportResult};
 use crate::{Transport, TransportKind, PAYLOAD_BYTES};
@@ -26,7 +27,7 @@ use crate::{Transport, TransportKind, PAYLOAD_BYTES};
 pub const DEFAULT_CALL_PATH: &str = "/proc/acpi/call";
 
 /// DCHU commands this backend is allowed to issue. All are read-only.
-pub const READ_ONLY_COMMANDS: &[u32] = &[12, 13];
+pub const READ_ONLY_COMMANDS: &[u32] = &[12, 13, 122, 96, 16, 60, 82];
 
 /// A read-only transport backed by the `acpi_call` kernel module.
 #[derive(Debug, Clone)]
@@ -93,8 +94,26 @@ impl AcpiCallTransport {
 }
 
 impl Transport for AcpiCallTransport {
-    fn execute(&self, command: u32, _payload: &[u8; PAYLOAD_BYTES]) -> TransportResult<Vec<u8>> {
+    fn execute(&self, command: u32, payload: &[u8; PAYLOAD_BYTES]) -> TransportResult<Vec<u8>> {
         Self::ensure_read_only(command)?;
+
+        if GCMD_CAPABILITY_COMMANDS
+            .iter()
+            .any(|cmd| cmd.get() == command)
+        {
+            if payload.iter().any(|byte| *byte != 0) {
+                return Err(TransportError::Unsupported(
+                    "GCMD capability reads require an empty payload".into(),
+                ));
+            }
+            // acpi_call cannot construct DCHU's Package { Buffer(256) }.
+            // The parallel WMI method implements the same queries with scalar
+            // arguments; use it only for this fixed read-only allowlist.
+            let reply = self.run(&format!("{ACPI_GCMD_PATH} 0 {command} 0"))?;
+            return Ok(wrap_as_dchu_response(
+                &parse_gcmd_integer(&reply)?.to_le_bytes(),
+            ));
+        }
 
         let call = build_read_call_string(command).ok_or_else(|| {
             TransportError::Io(format!(
@@ -126,6 +145,26 @@ impl Transport for AcpiCallTransport {
     fn writable(&self) -> bool {
         false
     }
+}
+
+fn parse_gcmd_integer(reply: &str) -> TransportResult<u32> {
+    let reply = reply.trim().trim_matches('\0').trim();
+    if reply.starts_with("Error:") {
+        return Err(TransportError::Io(reply.to_string()));
+    }
+    let hex = reply.strip_prefix("0x").ok_or_else(|| {
+        TransportError::MalformedResponse("GCMD expected an integer reply".into())
+    })?;
+    let value = u64::from_str_radix(hex, 16)
+        .map_err(|e| TransportError::MalformedResponse(format!("GCMD integer: {e}")))?;
+    if value == u64::from(clevo_proto::DSM_NOT_SUPPORTED)
+        || value == u64::from(u32::MAX)
+        || value == u64::MAX
+    {
+        return Err(TransportError::FirmwareRejected(value as i32));
+    }
+    u32::try_from(value)
+        .map_err(|_| TransportError::MalformedResponse("GCMD integer exceeds 32 bits".into()))
 }
 
 impl AcpiCallTransport {
@@ -296,6 +335,7 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clevo_proto::message::empty_payload;
 
     #[test]
     fn call_string_uses_verified_guid_and_path() {
@@ -410,5 +450,28 @@ mod tests {
     #[test]
     fn kind_is_acpi_call() {
         assert_eq!(AcpiCallTransport::new().kind(), TransportKind::AcpiCall);
+    }
+
+    #[test]
+    fn gcmd_integers_are_data_including_zero_and_command_number() {
+        for value in [0, 16, 0x3004, 0x0090_0011] {
+            let transport = AcpiCallTransport::with_fixed_reply(format!("0x{value:x}"));
+            let response = transport.execute(16, &empty_payload()).unwrap();
+            assert_eq!(
+                clevo_proto::response::response_integer(&response).unwrap(),
+                value
+            );
+        }
+        for reply in [
+            "0x80000002",
+            "0xffffffff",
+            "0xffffffffffffffff",
+            "0x100000000",
+            "{0x04}",
+            "Error: AE_NOT_FOUND",
+        ] {
+            let transport = AcpiCallTransport::with_fixed_reply(reply);
+            assert!(transport.execute(96, &empty_payload()).is_err());
+        }
     }
 }

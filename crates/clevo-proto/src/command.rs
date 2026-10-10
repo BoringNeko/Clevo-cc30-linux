@@ -27,6 +27,26 @@ pub const SUB_FAN_MODE: u8 = 1;
 /// `CMD_MAIN` sub-command selecting the power/situational mode (`0..=3`).
 pub const SUB_POWER_MODE: u8 = 25;
 
+/// Read PSF2 feature flags through GCMD.
+pub const CMD_FEATURES: Command = Command(122);
+/// Read PSF4 flags, including the performance-mode gate (bit 2).
+pub const CMD_EXTENDED_FEATURES: Command = Command(96);
+/// Read the supported application bitmap (PSF5).
+pub const CMD_SUPPORTED_APPS: Command = Command(16);
+/// Read the GPU power status through GCMD (not a capability bitmap).
+pub const CMD_GPU_POWER_STATUS: Command = Command(60);
+/// Read PSF1 platform flags, including the default power-conservation mode.
+pub const CMD_PLATFORM_FEATURES: Command = Command(82);
+
+/// Read-only queries used when the AppSettings channel is unavailable.
+pub const GCMD_CAPABILITY_COMMANDS: [Command; 5] = [
+    CMD_FEATURES,
+    CMD_EXTENDED_FEATURES,
+    CMD_SUPPORTED_APPS,
+    CMD_GPU_POWER_STATUS,
+    CMD_PLATFORM_FEATURES,
+];
+
 impl Command {
     /// Returns the raw numeric command value.
     pub const fn get(self) -> u32 {

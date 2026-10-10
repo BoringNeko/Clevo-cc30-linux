@@ -137,6 +137,9 @@ step "Packaging: install.sh UI-replace logic"
 try scripts/tests-install-ui-replace.sh
 
 if [ "$WANT_KERNEL" = 1 ]; then
+    step "Kernel: GCMD argument ABI regression test"
+    try scripts/tests-kernel-gcmd.sh
+
     step "Kernel: build the clevo-cc module (from clean)"
     if [ -d "/lib/modules/$(uname -r)/build" ]; then
         # Build in a *copy*, from clean. Building in place reuses stale .o files

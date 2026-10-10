@@ -1,4 +1,4 @@
-//! Capability bitmap parsing (`page 7`, 256 bytes).
+//! Capability parsing from AppSettings page 7 or read-only GCMD queries.
 //!
 //! From `ControlCenter-RE/docs/02-DCHU-WMI协议参考.md` §4.3. `page7[0..1]` is
 //! the feature-table version, big-endian, which selects the parsing layout:
@@ -17,6 +17,7 @@ use crate::error::ProtoError;
 
 /// Feature-table version, read from `page7[0..1]` (big-endian).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Page7Version {
     /// Legacy table (`0x0000`): only the four power-mode bits.
     V0,
@@ -26,6 +27,7 @@ pub enum Page7Version {
 
 /// Which power/situational modes the firmware advertises.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PowerModeSupport {
     /// Quiet mode (`0`).
     pub quiet: bool,
@@ -50,23 +52,67 @@ impl PowerModeSupport {
     }
 }
 
-/// Parsed capability information from `page 7`.
+/// Raw GCMD query values, preserving the distinction between flags and state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct GcmdCapabilities {
+    /// Command 122: PSF2 feature flags.
+    pub features: u32,
+    /// Command 96: PSF4 feature flags.
+    pub extended_features: u32,
+    /// Command 16: supported applications.
+    pub supported_apps: u32,
+    /// Command 60: current GPU power state, not a support flag.
+    pub gpu_power_status: u32,
+    /// Command 82: PSF1 flags and default power-conservation mode.
+    pub platform_features: u32,
+}
+
+/// Capabilities reported by page 7 or reconstructed from GCMD.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Capabilities {
-    /// Detected feature-table version.
-    pub version: Page7Version,
+    /// Detected page 7 version; absent when GCMD is the source.
+    pub version: Option<Page7Version>,
+    /// Raw GCMD values; absent when page 7 is the source.
+    pub gcmd: Option<GcmdCapabilities>,
     /// Advertised power modes.
     pub power_modes: PowerModeSupport,
     /// `PowerModeUI_ID` (`page7[17]` bits 4..7).
-    pub power_mode_ui_id: u8,
+    pub power_mode_ui_id: Option<u8>,
     /// Turbo fan supported (`page7[16]` bit4, V1 only).
-    pub turbo_fan: bool,
+    pub turbo_fan: Option<bool>,
     /// MSHybrid dGPU/iGPU switching supported (`page7[18]` bit0, V1 only).
-    pub ms_hybrid_switch: bool,
+    pub ms_hybrid_switch: Option<bool>,
     /// NVIDIA PowerOff supported (`page7[19]` bit6, V1 only).
-    pub nvidia_power_off: bool,
+    pub nvidia_power_off: Option<bool>,
     /// Slow fan supported (`page7[20]` bit0, V1 only).
-    pub slow_fan: bool,
+    pub slow_fan: Option<bool>,
+}
+
+/// Reconstruct only the features that the verified GCMD ABI exposes.
+///
+/// The local DSDT gates `121/25` on PSF4 bit 2 and accepts all four values
+/// `0..4`. Command 16 bit 0 additionally advertises the power-mode application.
+/// Neither query carries page 7's per-mode mask or UI id. Command 82 bits 4..5
+/// describe a default mode, not that UI id; command 60 is state, not support.
+pub fn capabilities_from_gcmd(raw: GcmdCapabilities) -> Capabilities {
+    let power_mode = raw.extended_features & (1 << 2) != 0 && raw.supported_apps & 1 != 0;
+    Capabilities {
+        version: None,
+        gcmd: Some(raw),
+        power_modes: PowerModeSupport {
+            quiet: power_mode,
+            power_saving: power_mode,
+            performance: power_mode,
+            entertainment: power_mode,
+        },
+        power_mode_ui_id: None,
+        turbo_fan: None,
+        ms_hybrid_switch: Some(raw.features & (1 << 20) != 0),
+        nvidia_power_off: None,
+        slow_fan: None,
+    }
 }
 
 /// Parse a 256-byte `page 7` buffer.
@@ -108,13 +154,14 @@ pub fn parse_capabilities(page7: &[u8]) -> Result<Capabilities, ProtoError> {
     };
 
     Ok(Capabilities {
-        version,
+        version: Some(version),
+        gcmd: None,
         power_modes,
-        power_mode_ui_id,
-        turbo_fan,
-        ms_hybrid_switch,
-        nvidia_power_off,
-        slow_fan,
+        power_mode_ui_id: Some(power_mode_ui_id),
+        turbo_fan: Some(turbo_fan),
+        ms_hybrid_switch: Some(ms_hybrid_switch),
+        nvidia_power_off: Some(nvidia_power_off),
+        slow_fan: Some(slow_fan),
     })
 }
 
@@ -130,11 +177,37 @@ mod tests {
     }
 
     #[test]
+    fn gcmd_requires_both_power_mode_gates_and_keeps_unknowns() {
+        for (extended_features, supported_apps, supported) in
+            [(4, 1, true), (0, 1, false), (4, 0, false), (0, 0, false)]
+        {
+            let raw = GcmdCapabilities {
+                features: 1 << 20,
+                extended_features,
+                supported_apps,
+                gpu_power_status: 1,
+                platform_features: 0x30,
+            };
+            let caps = capabilities_from_gcmd(raw);
+            for mode in 0..4 {
+                assert_eq!(caps.power_modes.supports(mode), supported);
+            }
+            assert_eq!(caps.version, None);
+            assert_eq!(caps.gcmd, Some(raw));
+            assert_eq!(caps.power_mode_ui_id, None);
+            assert_eq!(caps.turbo_fan, None);
+            assert_eq!(caps.ms_hybrid_switch, Some(true));
+            assert_eq!(caps.nvidia_power_off, None);
+            assert_eq!(caps.slow_fan, None);
+        }
+    }
+
+    #[test]
     fn parses_v0_power_modes() {
         let mut p = base([0x00, 0x00]);
         p[17] = 0b0101; // quiet + performance
         let caps = parse_capabilities(&p).unwrap();
-        assert_eq!(caps.version, Page7Version::V0);
+        assert_eq!(caps.version, Some(Page7Version::V0));
         assert!(caps.power_modes.quiet);
         assert!(!caps.power_modes.power_saving);
         assert!(caps.power_modes.performance);
@@ -153,10 +226,10 @@ mod tests {
         p[19] = 0b0100_0000;
         p[20] = 0b0000_0001;
         let caps = parse_capabilities(&p).unwrap();
-        assert!(!caps.turbo_fan);
-        assert!(!caps.ms_hybrid_switch);
-        assert!(!caps.nvidia_power_off);
-        assert!(!caps.slow_fan);
+        assert_eq!(caps.turbo_fan, Some(false));
+        assert_eq!(caps.ms_hybrid_switch, Some(false));
+        assert_eq!(caps.nvidia_power_off, Some(false));
+        assert_eq!(caps.slow_fan, Some(false));
     }
 
     #[test]
@@ -168,11 +241,11 @@ mod tests {
         p[19] = 0b0100_0000;
         p[20] = 0b0000_0001;
         let caps = parse_capabilities(&p).unwrap();
-        assert_eq!(caps.version, Page7Version::V1);
-        assert!(caps.turbo_fan);
-        assert!(caps.ms_hybrid_switch);
-        assert!(caps.nvidia_power_off);
-        assert!(caps.slow_fan);
+        assert_eq!(caps.version, Some(Page7Version::V1));
+        assert_eq!(caps.turbo_fan, Some(true));
+        assert_eq!(caps.ms_hybrid_switch, Some(true));
+        assert_eq!(caps.nvidia_power_off, Some(true));
+        assert_eq!(caps.slow_fan, Some(true));
         assert!(caps.power_modes.quiet);
         assert!(caps.power_modes.entertainment);
     }
@@ -185,10 +258,10 @@ mod tests {
         p[19] = 0b0010_0000; // bit5, not bit6
         p[20] = 0b0000_0010; // bit1, not bit0
         let caps = parse_capabilities(&p).unwrap();
-        assert!(!caps.turbo_fan);
-        assert!(!caps.ms_hybrid_switch);
-        assert!(!caps.nvidia_power_off);
-        assert!(!caps.slow_fan);
+        assert_eq!(caps.turbo_fan, Some(false));
+        assert_eq!(caps.ms_hybrid_switch, Some(false));
+        assert_eq!(caps.nvidia_power_off, Some(false));
+        assert_eq!(caps.slow_fan, Some(false));
     }
 
     #[test]
@@ -196,7 +269,7 @@ mod tests {
         let mut p = base([0x00, 0x00]);
         p[17] = 0b1010_0001;
         let caps = parse_capabilities(&p).unwrap();
-        assert_eq!(caps.power_mode_ui_id, 0b1010);
+        assert_eq!(caps.power_mode_ui_id, Some(0b1010));
     }
 
     #[test]

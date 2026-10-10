@@ -8,6 +8,10 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+serde = { workspace = true, optional = true }
+
+[features]
+serde = ["dep:serde"]
 
 [lints]
 workspace = true

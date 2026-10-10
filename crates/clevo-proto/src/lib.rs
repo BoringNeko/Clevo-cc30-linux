@@ -24,7 +24,7 @@ pub mod fan_status;
 pub mod message;
 pub mod response;
 
-pub use capability::{Capabilities, Page7Version, PowerModeSupport};
+pub use capability::{Capabilities, GcmdCapabilities, Page7Version, PowerModeSupport};
 pub use command::Command;
 pub use error::ProtoError;
 pub use fan_curve::{FanCurve, FanCurveInfo, FanPoint};

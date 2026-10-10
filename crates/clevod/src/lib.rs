@@ -96,10 +96,15 @@ mod tests {
 
         fn read_app_settings(
             &self,
-            _page: u8,
-            _offset: u16,
-            _len: u16,
+            page: u8,
+            offset: u16,
+            len: u16,
         ) -> Result<Vec<u8>, TransportError> {
+            if page == 7 && offset == 0 && usize::from(len) == PAYLOAD_LEN {
+                let mut page = vec![0; PAYLOAD_LEN];
+                page[17] = 0x0f;
+                return Ok(page);
+            }
             Err(TransportError::Unsupported("test transport".into()))
         }
 
@@ -139,6 +144,86 @@ mod tests {
         for name in ["quiet", "pwrsaving", "performance", "entertainment"] {
             let v = perf_mode_value(name).unwrap();
             assert_eq!(perf_mode_name(v), Some(name));
+        }
+    }
+
+    struct GcmdTransport {
+        mock: MockTransport,
+        writes: Arc<Mutex<usize>>,
+    }
+
+    impl Transport for GcmdTransport {
+        fn execute(
+            &self,
+            command: u32,
+            payload: &[u8; PAYLOAD_LEN],
+        ) -> Result<Vec<u8>, TransportError> {
+            if command == CMD_MAIN.get() {
+                *self.writes.lock().unwrap() += 1;
+            }
+            self.mock.execute(command, payload)
+        }
+
+        fn read_app_settings(
+            &self,
+            _page: u8,
+            _offset: u16,
+            _len: u16,
+        ) -> Result<Vec<u8>, TransportError> {
+            Err(TransportError::Unsupported("no AppSettings channel".into()))
+        }
+
+        fn write_app_settings(
+            &self,
+            _page: u8,
+            _offset: u16,
+            _data: &[u8],
+        ) -> Result<(), TransportError> {
+            Err(TransportError::Unsupported("no AppSettings channel".into()))
+        }
+
+        fn kind(&self) -> TransportKind {
+            TransportKind::Mock
+        }
+        fn writable(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn perf_mode_gcmd_validation_precedes_writes_and_persistence() {
+        let fixture = include_str!("../../../fixtures/gcmd.fixture");
+        for (tag, text, success) in [
+            ("supported", fixture.to_string(), true),
+            ("no-gate", fixture.replace("04300000", "00300000"), false),
+            ("no-app", fixture.replace("83080000", "82080000"), false),
+            ("rejected", fixture.replace("04300000", "02000080"), false),
+            (
+                "missing",
+                fixture
+                    .lines()
+                    .filter(|line| !line.starts_with("exec 60 "))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                false,
+            ),
+        ] {
+            let writes = Arc::new(Mutex::new(0));
+            let transport = GcmdTransport {
+                mock: MockTransport::from_fixture_str(&text).unwrap(),
+                writes: writes.clone(),
+            };
+            let path = temp_config(&format!("gcmd-{tag}"));
+            let service = Service::new(Box::new(transport)).with_config_path(Some(path.clone()));
+            assert_eq!(
+                service.set_perf_mode("performance").is_ok(),
+                success,
+                "{tag}"
+            );
+            assert_eq!(*writes.lock().unwrap(), usize::from(success), "{tag}");
+            assert_eq!(service.to_config().perf_mode, success.then_some(2), "{tag}");
+            assert_eq!(path.exists(), success, "{tag}");
+            let _ = std::fs::remove_dir_all(path.parent().unwrap());
         }
     }
 

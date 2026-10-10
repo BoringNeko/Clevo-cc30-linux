@@ -270,8 +270,45 @@ bitmask, **not** a direct enum. `SetWMI(121,1,mode)` writes one bit per mode;
 
 - `_STA` returns `0x0F` only if `(PSF0 & 0x80) != 0` and `OSYS >= 0x07DC`.
 - Performance mode sub `0x19` requires `PSF4 & 0x04`.
-- These are candidates for the `page7` capability substitute until the
-  AppSettings channel is verified.
+- AppSettings EC pages `0..7` remain unsupported on the Linux hardware
+  transports. Capability discovery bypasses them and reads GCMD
+  `122/96/16/60/82`; it does not fabricate an AppSettings page.
+
+### 9.1 GCMD capability fallback
+
+The kernel driver exposes a read-only `capabilities` attribute containing one
+`<decimal command>=0x<32-bit value>` line for each query. It calls DCHU `_DSM`
+with `Package { Buffer(256) }` and treats the integer return as data, not a
+write success status. The `acpi_call` backend cannot construct that package,
+so it uses the parallel `\\_SB.WMI.GCMD(0, command, 0)` scalar entry point
+present in the same DSDT. Only these five read queries are allowed.
+
+| Query | Value | Use |
+|---|---|---|
+| 122 (`0x7a`) | PSF2 | bit 20: MSHybrid switching; bit 23: CPU OC |
+| 96 (`0x60`) | PSF4 | bit 2: performance-mode command gate; bits 12/13: DTT/AMD manual |
+| 16 (`0x10`) | filtered PSF5 | bit 0: power-mode application; bit 1: Flexikey |
+| 60 (`0x3c`) | GPU power state | retained as state, not converted into capability flags |
+| 82 (`0x52`) | PSF1 | retained raw; bits 4..5 are a default mode, not page 7's UI id |
+
+On this verified ABI, command `121/25` accepts all four plain modes `0..3`
+when PSF4 bit 2 is set. Discovery also requires command 16 bit 0, the vendor's
+power-mode application flag. GCMD cannot recover page 7's individual mode
+mask, UI id, TurboFan, NVIDIA PowerOff, or slow-fan flags. Those unrecoverable
+fields stay `None` (`unknown` in the CLI, `null` in JSON).
+
+`GetCapabilities` on `org.clevo.CC` returns typed JSON, including its source
+and all five raw values. Both `capabilities` and `profile list` work through
+the driver, `acpi_call`, mock, and D-Bus backends. Real page 7 fixtures remain
+authoritative. Missing queries, malformed responses, `0x80000002`, and
+all-ones error returns fail discovery. `set_perf_mode` requires successful
+discovery and a supported mode before sending a write or persisting a choice;
+it no longer silently ignores capability-read errors.
+
+GCMD query values have been checked against the stored DSDT and synthetic
+fixtures; live verification requires loading the updated kernel module.
+Older loaded modules without `capabilities` must be upgraded/reloaded, along
+with the daemon providing `GetCapabilities`.
 
 ## 10. LIVE READ VERIFICATION (acpi_call, read-only) — SUCCESS
 

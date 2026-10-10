@@ -15,6 +15,7 @@
 //! | `14` fan curve write | sysfs `fan_curve` |
 //! | `121/1` fan mode | sysfs `fan_mode` |
 //! | `121/25` perf mode | sysfs `perf_mode` |
+//! | `122/96/16/60/82` GCMD reads | sysfs `capabilities` |
 //!
 //! Only the values the driver actually reports are filled in; temperature and
 //! duty fields are left at zero (which the parser surfaces as "not reported")
@@ -218,6 +219,38 @@ impl DriverTransport {
         }
         Ok(wrap_integer(121))
     }
+
+    fn capability_reply(&self, command: u32) -> TransportResult<Vec<u8>> {
+        let text = self.read_attr("capabilities")?;
+        Ok(wrap_integer(parse_gcmd_value(&text, command)?))
+    }
+}
+
+fn parse_gcmd_value(text: &str, command: u32) -> TransportResult<u32> {
+    let key = command.to_string();
+    let mut value = None;
+    for line in text.lines() {
+        if let Some((name, hex)) = line.split_once('=') {
+            if name.trim() == key {
+                if value.is_some() {
+                    return Err(TransportError::MalformedResponse(format!(
+                        "duplicate GCMD capability command {command}"
+                    )));
+                }
+                let hex = hex.trim().strip_prefix("0x").ok_or_else(|| {
+                    TransportError::MalformedResponse(format!(
+                        "GCMD {command}: expected a hexadecimal integer"
+                    ))
+                })?;
+                value = Some(u32::from_str_radix(hex, 16).map_err(|e| {
+                    TransportError::MalformedResponse(format!("GCMD {command}: {e}"))
+                })?);
+            }
+        }
+    }
+    value.ok_or_else(|| {
+        TransportError::MalformedResponse(format!("capabilities is missing GCMD command {command}"))
+    })
 }
 
 /// Decode a command `14` payload into the driver's `fan_curve` text form.
@@ -320,12 +353,38 @@ fn wrap_record(data: &[u8]) -> Vec<u8> {
 }
 
 impl Transport for DriverTransport {
+    fn read_capabilities(&self) -> TransportResult<clevo_proto::Capabilities> {
+        // One sysfs read evaluates all five commands once, keeping the snapshot
+        // together and avoiding five complete firmware scans.
+        let text = self.read_attr("capabilities")?;
+        let mut values = [0; 5];
+        for (slot, command) in values
+            .iter_mut()
+            .zip(clevo_proto::command::GCMD_CAPABILITY_COMMANDS)
+        {
+            *slot = parse_gcmd_value(&text, command.get())?;
+        }
+        crate::capability::decode_gcmd_capabilities(values)
+    }
+
     fn execute(&self, command: u32, payload: &[u8; PAYLOAD_BYTES]) -> TransportResult<Vec<u8>> {
         match command {
             12 => self.fan_status_reply(),
             13 => self.fan_curve_reply(),
             14 => self.write_fan_curve(payload),
             121 => self.main_command(payload),
+            other
+                if clevo_proto::command::GCMD_CAPABILITY_COMMANDS
+                    .iter()
+                    .any(|command| command.get() == other) =>
+            {
+                if payload.iter().any(|byte| *byte != 0) {
+                    return Err(TransportError::Unsupported(
+                        "GCMD capability reads require an empty payload".into(),
+                    ));
+                }
+                self.capability_reply(other)
+            }
             other => Err(TransportError::Unsupported(format!(
                 "command {other} is not supported by the driver transport"
             ))),
@@ -454,6 +513,34 @@ mod tests {
             t.execute(99, &empty_payload()),
             Err(TransportError::Unsupported(_))
         ));
+    }
+
+    #[test]
+    fn driver_discovers_gcmd_and_preserves_appsettings_as_unsupported() {
+        let fake = FakeSysfs::new("capabilities");
+        let text = "122=0x00900011\n96=0x00003004\n16=0x00000883\n60=0x00000001\n82=0x08000020\n";
+        std::fs::write(fake.root.join("capabilities"), text).unwrap();
+        let transport = fake.transport();
+        let caps = transport.read_capabilities().unwrap();
+        assert!(caps.power_modes.supports(2));
+        assert_eq!(caps.gcmd.unwrap().extended_features, 0x3004);
+        assert_eq!(
+            response_integer(&transport.execute(96, &empty_payload()).unwrap()).unwrap(),
+            0x3004
+        );
+        assert!(matches!(
+            transport.read_app_settings(7, 0, 256),
+            Err(TransportError::Unsupported(_))
+        ));
+        for bad in [
+            text.replace("96=0x00003004\n", ""),
+            text.replace("0x00003004", "0x80000002"),
+            text.replace("0x00003004", "oops"),
+            format!("{text}96=0x4\n"),
+        ] {
+            std::fs::write(fake.root.join("capabilities"), bad).unwrap();
+            assert!(transport.read_capabilities().is_err());
+        }
     }
 
     #[test]

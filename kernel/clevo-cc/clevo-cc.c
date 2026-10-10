@@ -40,6 +40,12 @@
 #define CLEVO_CMD_FAN_CURVE_WRITE 14
 #define CLEVO_CMD_MAIN 121
 #define CLEVO_CMD_KEYBOARD_RGB 103
+/* Read-only GCMD capability/state queries; never interpret these as status. */
+#define CLEVO_CMD_FEATURES 122
+#define CLEVO_CMD_EXTENDED_FEATURES 96
+#define CLEVO_CMD_SUPPORTED_APPS 16
+#define CLEVO_CMD_GPU_POWER_STATUS 60
+#define CLEVO_CMD_PLATFORM_FEATURES 82
 
 /*
  * RGB15 command-103 selector used by the COLORFUL P15 23.  The vendor
@@ -122,10 +128,11 @@ struct clevo_cc {
  *
  * Success codes differ by command family, and both were verified live:
  *
- *   - SCMD/GCMD (e.g. 121) return the command number itself (`0x79`).
+ *   - SCMD writes (e.g. 121) return the command number itself (`0x79`).
  *   - The fan-curve write (14) returns `0x14` (20), documented in
  *     docs/hardware-notes.md §7.
  *   - `0x80000002` means "not supported".
+ *   - GCMD reads return data, handled separately in clevo_cc_dsm_call.
  *
  * Treating only `ret == function` as success made a working curve write look
  * like a failure: the EC accepted the curve and returned 20, which is exactly
@@ -150,12 +157,13 @@ static int clevo_cc_dsm_status(u32 function, u64 value)
  * Evaluate the firmware `_DSM` method:
  *   _DSM(GUID buffer, Revision=0, Function, Arg3)
  *
- * `arg3` is taken over by this call (its dynamically allocated buffer is freed
- * here). Returns -errno, or 0 with `out_len` bytes copied to `out`.
+ * The caller owns `arg3`. Returns -errno, or 0 with `out_len` bytes copied to
+ * `out`. When `integer` is supplied, a GCMD integer is returned as query data;
+ * otherwise integer results are interpreted as write status codes.
  */
 static int clevo_cc_dsm_call(struct clevo_cc *cc, u32 function,
 			     union acpi_object *arg3, u8 *out, size_t out_cap,
-			     size_t *out_len)
+			     size_t *out_len, u32 *integer)
 {
 	struct acpi_object_list args;
 	union acpi_object argv[4];
@@ -193,9 +201,24 @@ static int clevo_cc_dsm_call(struct clevo_cc *cc, u32 function,
 	if (ret->type == ACPI_TYPE_BUFFER) {
 		size_t n = min(out_cap, (size_t)ret->buffer.length);
 
+		if (integer) {
+			err = -EPROTO;
+			goto out;
+		}
 		memcpy(out, ret->buffer.pointer, n);
 		*out_len = n;
 	} else if (ret->type == ACPI_TYPE_INTEGER) {
+		if (integer) {
+			if (ret->integer.value == 0x80000002 ||
+			    ret->integer.value == 0xFFFFFFFF ||
+			    ret->integer.value == U64_MAX)
+				err = -EOPNOTSUPP;
+			else if (ret->integer.value > U32_MAX)
+				err = -ERANGE;
+			else
+				*integer = (u32)ret->integer.value;
+			goto out;
+		}
 		err = clevo_cc_dsm_status(function, ret->integer.value);
 		if (err == -EOPNOTSUPP)
 			dev_warn(&cc->adev->dev,
@@ -254,7 +277,7 @@ static int clevo_cc_dsm_payload(struct clevo_cc *cc, u32 function, const u8 *in,
 	pkg.package.elements[0].buffer.length = CLEVO_PAYLOAD_LEN;
 	pkg.package.elements[0].buffer.pointer = payload;
 
-	err = clevo_cc_dsm_call(cc, function, &pkg, out, out_cap, out_len);
+	err = clevo_cc_dsm_call(cc, function, &pkg, out, out_cap, out_len, NULL);
 
 	kfree(pkg.package.elements);
 	kfree(payload);
@@ -283,7 +306,7 @@ static int clevo_cc_dsm_scalar(struct clevo_cc *cc, u32 function, u32 value,
 	pkg.package.elements[0].type = ACPI_TYPE_INTEGER;
 	pkg.package.elements[0].integer.value = value;
 
-	err = clevo_cc_dsm_call(cc, function, &pkg, out, out_cap, out_len);
+	err = clevo_cc_dsm_call(cc, function, &pkg, out, out_cap, out_len, NULL);
 	kfree(pkg.package.elements);
 	return err;
 }
@@ -1443,6 +1466,49 @@ static ssize_t perf_mode_store(struct device *dev, struct device_attribute *attr
 }
 static DEVICE_ATTR_RW(perf_mode);
 
+/* GCMD reads require Package { Buffer(256) } and return integer data. */
+static int clevo_cc_gcmd_read(struct clevo_cc *cc, u32 command, u32 *value)
+{
+	u8 payload[CLEVO_PAYLOAD_LEN] = { 0 };
+	union acpi_object element;
+	union acpi_object package;
+	size_t len = 0;
+
+	/* These are unions: a nested initializer after `.type` would
+	 * overwrite the type field and send Arg3 as ACPI_TYPE_ANY (0). */
+	element.buffer.type = ACPI_TYPE_BUFFER;
+	element.buffer.length = sizeof(payload);
+	element.buffer.pointer = payload;
+	package.package.type = ACPI_TYPE_PACKAGE;
+	package.package.count = 1;
+	package.package.elements = &element;
+
+	return clevo_cc_dsm_call(cc, command, &package, NULL, 0, &len, value);
+}
+
+/* Expose only the five verified read queries, with no raw command write API. */
+static ssize_t capabilities_show(struct device *dev,
+				 struct device_attribute *attr, char *buf)
+{
+	struct clevo_cc *cc = dev_get_drvdata(dev);
+	static const u32 commands[] = {
+		CLEVO_CMD_FEATURES, CLEVO_CMD_EXTENDED_FEATURES,
+		CLEVO_CMD_SUPPORTED_APPS, CLEVO_CMD_GPU_POWER_STATUS,
+		CLEVO_CMD_PLATFORM_FEATURES,
+	};
+	u32 value;
+	int i, err, n = 0;
+
+	for (i = 0; i < ARRAY_SIZE(commands); i++) {
+		err = clevo_cc_gcmd_read(cc, commands[i], &value);
+		if (err)
+			return err;
+		n += sysfs_emit_at(buf, n, "%u=0x%08x\n", commands[i], value);
+	}
+	return n;
+}
+static DEVICE_ATTR_RO(capabilities);
+
 static struct attribute *clevo_cc_attrs[] = {
 	&dev_attr_fan_mode.attr,
 	&dev_attr_fan_curve.attr,
@@ -1450,6 +1516,7 @@ static struct attribute *clevo_cc_attrs[] = {
 	&dev_attr_raw_status.attr,
 	&dev_attr_raw_curve.attr,
 	&dev_attr_keyboard_rgb.attr,
+	&dev_attr_capabilities.attr,
 	NULL
 };
 ATTRIBUTE_GROUPS(clevo_cc);

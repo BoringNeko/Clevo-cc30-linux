@@ -153,6 +153,15 @@ pub async fn serve(connection: &zbus::Connection, daemon: CcDaemon) -> zbus::Res
 
 #[interface(name = "org.clevo.CC")]
 impl CcDaemon {
+    /// Return capabilities as JSON, including their source and raw GCMD values.
+    async fn get_capabilities(&self) -> zbus::fdo::Result<String> {
+        let caps = self
+            .service
+            .read_capabilities()
+            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
+        serde_json::to_string(&caps).map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+    }
+
     /// Emitted after a successful poll with the current CPU and GPU1 rpm.
     #[zbus(signal)]
     async fn fan_changed(

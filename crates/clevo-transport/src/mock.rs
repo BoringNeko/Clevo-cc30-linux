@@ -128,6 +128,14 @@ impl MockTransport {
 }
 
 impl Transport for MockTransport {
+    fn read_capabilities(&self) -> TransportResult<clevo_proto::Capabilities> {
+        if self.app_settings.contains_key(&(7, 0)) {
+            crate::capability::read_capabilities(self)
+        } else {
+            crate::capability::read_gcmd_capabilities(self)
+        }
+    }
+
     fn execute(&self, command: u32, payload: &[u8; PAYLOAD_BYTES]) -> TransportResult<Vec<u8>> {
         if let Some(response) = self.exact.get(&LookupKey {
             command,

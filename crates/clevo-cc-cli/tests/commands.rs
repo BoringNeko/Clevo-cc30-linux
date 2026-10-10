@@ -164,6 +164,30 @@ fn profile_list_shows_supported_modes() {
 }
 
 #[test]
+fn gcmd_profiles_have_data_and_reject_unsupported_dry_runs() {
+    let fixture = include_str!("../../../fixtures/gcmd.fixture");
+    let transport = MockTransport::from_fixture_str(fixture).unwrap();
+    let mut out = Vec::new();
+    commands::run_profile(&transport, &ProfileCommand::List, &mut out).unwrap();
+    let out = String::from_utf8(out).unwrap();
+    assert!(out.contains("source          : GCMD"));
+    assert!(out.contains("2 performance    supported"));
+    assert!(out.contains("turbo fan       : unknown"));
+    let unsupported =
+        MockTransport::from_fixture_str(&fixture.replace("04300000", "00300000")).unwrap();
+    for apply in [false, true] {
+        assert!(matches!(
+            commands::run_profile(
+                &unsupported,
+                &ProfileCommand::Set { value: 2, apply },
+                &mut Vec::new()
+            ),
+            Err(CliError::Invalid(_))
+        ));
+    }
+}
+
+#[test]
 fn profile_set_out_of_range_is_invalid() {
     let (result, _) = run(|t, out| {
         commands::run_profile(

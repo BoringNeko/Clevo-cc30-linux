@@ -164,6 +164,19 @@ impl DbusClient {
             .map_err(|e| DbusError::Decode(e.to_string()))
     }
 
+    /// Fetch typed capabilities, preserving unknown fields as `None`.
+    pub fn get_capabilities(&self) -> Result<clevo_proto::Capabilities, DbusError> {
+        let proxy = self.proxy(DBUS_INTERFACE)?;
+        let reply = proxy
+            .call_method("GetCapabilities", &())
+            .map_err(|e| classify(&e))?;
+        let json: String = reply
+            .body()
+            .deserialize()
+            .map_err(|e| DbusError::Decode(e.to_string()))?;
+        serde_json::from_str(&json).map_err(|e| DbusError::Decode(e.to_string()))
+    }
+
     /// Fetch the fan curve as the daemon's JSON string.
     pub fn get_curve(&self) -> Result<String, DbusError> {
         let proxy = self.proxy(DBUS_INTERFACE)?;

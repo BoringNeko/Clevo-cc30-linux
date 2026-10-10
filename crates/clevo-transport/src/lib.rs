@@ -10,12 +10,14 @@
 use crate::error::TransportResult;
 
 pub mod acpi_call;
+pub mod capability;
 pub mod driver;
 pub mod error;
 pub mod keyboard;
 pub mod mock;
 
 pub use acpi_call::AcpiCallTransport;
+pub use capability::read_capabilities;
 pub use driver::DriverTransport;
 pub use error::TransportError;
 pub use keyboard::{
@@ -46,6 +48,11 @@ pub const PAYLOAD_BYTES: usize = clevo_proto::constants::PAYLOAD_LEN;
 /// Implementations must be `Send + Sync` so a single transport can be shared by
 /// a multi-threaded daemon (`clevod`) and polled from async tasks.
 pub trait Transport: Send + Sync {
+    /// Discover capabilities from page 7 or verified GCMD queries.
+    fn read_capabilities(&self) -> TransportResult<clevo_proto::Capabilities> {
+        capability::read_capabilities(self)
+    }
+
     /// Execute a DCHU command with a 256-byte payload.
     ///
     /// Returns the raw response bytes (nominally `RSP_LEN` long) for the caller

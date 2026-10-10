@@ -59,7 +59,7 @@ pub struct Cli {
 pub enum TransportChoice {
     /// Replay recorded fixtures; never touches hardware.
     Mock,
-    /// Linux `/proc/acpi/call` (read-only: commands 12 and 13 only).
+    /// Linux `/proc/acpi/call` (read-only fan and GCMD capability queries).
     AcpiCall,
     /// Kernel `clevo-cc` driver sysfs/hwmon (read/write; no `acpi_call`).
     Driver,
@@ -72,7 +72,7 @@ pub enum TransportChoice {
 pub enum Commands {
     /// Check OS/library state without changing anything.
     Doctor,
-    /// Print the machine's advertised capabilities (page 7).
+    /// Print capabilities from AppSettings page 7 or read-only GCMD queries.
     Capabilities,
     /// Fan-related operations.
     #[command(subcommand)]

@@ -27,7 +27,11 @@ fn no_session_bus() -> bool {
 
 /// Host a permissive daemon under a unique name and return a client for it.
 fn host_client(name: &str) -> clevo_cc_cli::dbus::DbusClient {
-    let mock = MockTransport::from_fixture_str(FIXTURE).expect("fixture");
+    host_client_with_fixture(name, FIXTURE)
+}
+
+fn host_client_with_fixture(name: &str, fixture: &str) -> clevo_cc_cli::dbus::DbusClient {
+    let mock = MockTransport::from_fixture_str(fixture).expect("fixture");
     let service = Arc::new(Service::new(Box::new(mock)));
 
     // The blocking test owns its own runtime for the server side.
@@ -143,4 +147,36 @@ fn cli_dry_run_does_not_write() {
     assert!(out.contains("dry run"), "output: {out}");
     // The daemon's mode is still unset.
     assert_eq!(client.status().unwrap().fan_mode, 255);
+}
+
+#[test]
+fn cli_capabilities_and_profiles_use_gcmd_over_dbus() {
+    if no_session_bus() {
+        return;
+    }
+    let fixture = include_str!("../../../fixtures/gcmd.fixture");
+    let client = host_client_with_fixture("org.clevo.CC.cli.gcmd", fixture);
+    for command in [
+        Commands::Capabilities,
+        Commands::Profile(ProfileCommand::List),
+    ] {
+        let (result, out) = run(&client, &command);
+        result.unwrap();
+        assert!(out.contains("source          : GCMD"), "{out}");
+        assert!(out.contains("2 performance    supported"), "{out}");
+    }
+    assert_eq!(client.set_perf_mode("performance").unwrap(), 2);
+    let rejected = host_client_with_fixture(
+        "org.clevo.CC.cli.gcmdRejected",
+        &fixture.replace("04300000", "00300000"),
+    );
+    assert!(rejected.set_perf_mode("performance").is_err());
+    for apply in [false, true] {
+        let (result, _) = run(
+            &rejected,
+            &Commands::Profile(ProfileCommand::Set { value: 2, apply }),
+        );
+        assert!(matches!(result, Err(CliError::Invalid(_))));
+    }
+    assert_eq!(rejected.status().unwrap().perf_mode, 255);
 }

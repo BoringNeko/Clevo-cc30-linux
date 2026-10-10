@@ -123,12 +123,13 @@ pub const DSM_CURVE_WRITE_OK: u32 = 0x14;
 ///
 /// | family | success value |
 /// |---|---|
-/// | `SCMD`/`GCMD` (e.g. `121`) | the command number itself |
+/// | `SCMD` writes (e.g. `121`) | the command number itself |
 /// | fan-curve write (`14`) | `0x14` (20) |
 /// | any | [`DSM_NOT_SUPPORTED`] means unsupported |
 ///
 /// Treating only `value == command` as success made a working curve write look
 /// like a failure: the EC accepted the curve and returned 20.
+/// GCMD capability reads return integer data and must not use this predicate.
 pub fn is_success_status(command: u32, value: u32) -> bool {
     value == command || (command == 14 && value == DSM_CURVE_WRITE_OK)
 }

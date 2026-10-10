@@ -22,6 +22,10 @@ pub const METHOD_NAME: [u8; 4] = *b"_DSM";
 /// Full ACPI path of the DCHU `_DSM` method, verified on a COLORFUL P15 23.
 pub const ACPI_DSM_PATH: &str = "\\_SB.DCHU._DSM";
 
+/// Legacy WMI GCMD method with scalar arguments, verified in the local DSDT.
+/// Unlike DCHU.GCMD it does not require an ACPI Package argument.
+pub const ACPI_GCMD_PATH: &str = "\\_SB.WMI.GCMD";
+
 /// Method revision sent in the request header.
 pub const METHOD_REVISION: u32 = 0;
 

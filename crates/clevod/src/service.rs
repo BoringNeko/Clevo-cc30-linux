@@ -7,22 +7,21 @@
 //! Write policy (mirrors the CLI):
 //! * the target transport must report `writable()` before any write is sent;
 //! * fan mode values are validated against the driver's accepted set;
-//! * performance mode values are validated to `0..=3`; when a capability bitmap
-//!   is available it is also checked, otherwise the firmware adjudicates.
+//! * performance modes require a successful page 7 / GCMD capability read;
+//!   unsupported modes and discovery failures are rejected before writing.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use clevo_proto::capability::{parse_capabilities, Capabilities};
 use clevo_proto::command::{
     CMD_FAN_CURVE_READ, CMD_FAN_CURVE_WRITE, CMD_FAN_STATUS, CMD_MAIN, SUB_FAN_MODE, SUB_POWER_MODE,
 };
-use clevo_proto::constants::PAYLOAD_LEN;
 use clevo_proto::fan_curve::{encode_curve, parse_curve, FanCurve, FanPoint};
 use clevo_proto::fan_status::parse_fan_status;
 use clevo_proto::message::{build_subcommand_payload, empty_payload, payload_from_slice};
 use clevo_proto::response::response_first_record;
+use clevo_proto::Capabilities;
 use clevo_transport::{
     Color, Keyboard, KeyboardError, KeyboardMode, KeyboardSnapshot, KeyboardZone, Transport,
     TransportError,
@@ -515,10 +514,9 @@ impl Service {
         self.set_curve(&curve)
     }
 
-    /// Read the capability bitmap (`page 7`), if the channel is available.
+    /// Read page 7 capabilities, falling back to the verified GCMD queries.
     pub fn read_capabilities(&self) -> Result<Capabilities, ServiceError> {
-        let page = self.transport.read_app_settings(7, 0, PAYLOAD_LEN as u16)?;
-        Ok(parse_capabilities(&page)?)
+        Ok(self.transport.read_capabilities()?)
     }
 
     /// Set the fan mode by name (`auto`/`max`/`maxq`/`quiet`).
@@ -534,12 +532,11 @@ impl Service {
     /// Set the performance mode by name.
     pub fn set_perf_mode(&self, name: &str) -> Result<u8, ServiceError> {
         let value = perf_mode_value(name).ok_or_else(|| ServiceError::UnknownMode(name.into()))?;
-        if let Ok(caps) = self.read_capabilities() {
-            if !caps.power_modes.supports(value) {
-                return Err(ServiceError::Unsupported(format!(
-                    "performance mode {name:?} is not advertised by this machine"
-                )));
-            }
+        let caps = self.read_capabilities()?;
+        if !caps.power_modes.supports(value) {
+            return Err(ServiceError::Unsupported(format!(
+                "performance mode {name:?} is not advertised by this machine"
+            )));
         }
         self.apply(SUB_POWER_MODE, value)?;
         self.last_perf_mode

@@ -23,6 +23,7 @@ exposes fan monitoring and fan-mode control through `hwmon` and sysfs.
 | `sysfs fan_curve` | rw | read (command 13) and write (command 14) |
 | `sysfs raw_status` / `raw_curve` | read | diagnostic hex dumps (for re-verifying offsets) |
 | `sysfs perf_mode` | rw | `quiet` / `pwrsaving` / `performance` / `entertainment` |
+| `sysfs capabilities` | read | GCMD 122/96/16/60/82 integer data; no EC AppSettings page access |
 | `sysfs keyboard_rgb` | rw | RGB15 single-zone color, mode (off/static), and brightness (percent) |
 | LED class `clevo::kbd_backlight` | rw | standard raw keyboard brightness (`0..191`) |
 
@@ -33,6 +34,12 @@ performance=2, entertainment=3.
 `fan_mode`/`perf_mode` report the last value written this session (fan_mode
 defaults to `auto`, perf_mode to `unknown`); the firmware does not report the
 current mode reliably.
+
+`capabilities` reads the five verified GCMD queries once and emits lines such
+as `96=0x00000004`. Firmware errors and non-integer responses fail the read.
+The daemon uses PSF4 bit 2 (command 96) and the power-mode application flag
+(command 16 bit 0) to validate performance writes. See the GCMD capability
+fallback section in `docs/hardware-notes.md` for the complete field mapping.
 
 `keyboard_rgb` accepts named operations and keeps the last values in its read
 back:

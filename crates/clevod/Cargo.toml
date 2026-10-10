@@ -8,7 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-clevo-proto.workspace = true
+clevo-proto = { workspace = true, features = ["serde"] }
 clevo-transport.workspace = true
 async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }

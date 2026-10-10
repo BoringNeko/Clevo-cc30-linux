@@ -3,11 +3,10 @@
 
 use std::io::{self, Write};
 
-use clevo_proto::capability::{parse_capabilities, Page7Version};
+use clevo_proto::capability::Page7Version;
 use clevo_proto::command::{
     CMD_FAN_CURVE_READ, CMD_FAN_CURVE_WRITE, CMD_FAN_STATUS, CMD_MAIN, SUB_FAN_MODE, SUB_POWER_MODE,
 };
-use clevo_proto::constants::PAYLOAD_LEN;
 use clevo_proto::fan_curve::{encode_curve, parse_curve, FanCurve, FanPoint};
 use clevo_proto::fan_status::parse_fan_status;
 use clevo_proto::message::{build_subcommand_payload, empty_payload, payload_from_slice};
@@ -79,10 +78,9 @@ pub fn cli_tdp_class() -> clevo_proto::TdpClass {
     }
 }
 
-/// Read the capability bitmap (`page 7`) and parse it.
+/// Read capabilities through the shared page 7 / GCMD discovery path.
 pub fn read_capabilities(transport: &dyn Transport) -> Result<clevo_proto::Capabilities, CliError> {
-    let page = transport.read_app_settings(7, 0, PAYLOAD_LEN as u16)?;
-    Ok(parse_capabilities(&page)?)
+    Ok(transport.read_capabilities()?)
 }
 
 /// Dispatch a fan sub-command.
@@ -341,12 +339,56 @@ pub fn run_fan_watch(
 
 /// Print a capability report.
 pub fn print_capabilities(caps: &clevo_proto::Capabilities, out: &mut dyn Write) -> io::Result<()> {
-    writeln!(out, "page7 version   : {}", version_str(caps.version))?;
-    writeln!(out, "power mode UI id: {}", caps.power_mode_ui_id)?;
-    writeln!(out, "turbo fan       : {}", caps.turbo_fan)?;
-    writeln!(out, "ms hybrid switch: {}", caps.ms_hybrid_switch)?;
-    writeln!(out, "nvidia power off: {}", caps.nvidia_power_off)?;
-    writeln!(out, "slow fan        : {}", caps.slow_fan)?;
+    writeln!(
+        out,
+        "source          : {}",
+        if caps.gcmd.is_some() {
+            "GCMD"
+        } else {
+            "AppSettings page 7"
+        }
+    )?;
+    if let Some(version) = caps.version {
+        writeln!(out, "page7 version   : {}", version_str(version))?;
+    }
+    writeln!(
+        out,
+        "power mode UI id: {}",
+        caps.power_mode_ui_id
+            .map_or_else(|| "unknown".into(), |id| id.to_string())
+    )?;
+    let flag = |value: Option<bool>| match value {
+        Some(true) => "true",
+        Some(false) => "false",
+        None => "unknown",
+    };
+    writeln!(out, "turbo fan       : {}", flag(caps.turbo_fan))?;
+    writeln!(out, "ms hybrid switch: {}", flag(caps.ms_hybrid_switch))?;
+    writeln!(out, "nvidia power off: {}", flag(caps.nvidia_power_off))?;
+    writeln!(out, "slow fan        : {}", flag(caps.slow_fan))?;
+    if let Some(raw) = caps.gcmd {
+        writeln!(out, "gcmd 122        : 0x{:08x}", raw.features)?;
+        writeln!(out, "gcmd 96         : 0x{:08x}", raw.extended_features)?;
+        writeln!(out, "gcmd 16         : 0x{:08x}", raw.supported_apps)?;
+        writeln!(out, "gcmd 60 (state) : 0x{:08x}", raw.gpu_power_status)?;
+        writeln!(out, "gcmd 82         : 0x{:08x}", raw.platform_features)?;
+        writeln!(out, "cpu overclock   : {}", raw.features & (1 << 23) != 0)?;
+        writeln!(
+            out,
+            "DTT             : {}",
+            raw.extended_features & (1 << 12) != 0
+        )?;
+        writeln!(
+            out,
+            "AMD manual mode : {}",
+            raw.extended_features & (1 << 13) != 0
+        )?;
+        writeln!(
+            out,
+            "Flexikey        : {}",
+            raw.supported_apps & (1 << 1) != 0
+        )?;
+    }
     let names = ["quiet", "pwrsaving", "performance", "entertainment"];
     for (value, name) in names.iter().enumerate() {
         writeln!(
@@ -519,9 +561,10 @@ pub fn run_dbus(
             writeln!(out, "no changes were made.")?;
             Ok(())
         }
-        crate::Commands::Capabilities => Err(CliError::TransportUnavailable(
-            "capabilities are not exposed over D-Bus yet".into(),
-        )),
+        crate::Commands::Capabilities => {
+            print_capabilities(&client.get_capabilities()?, out)?;
+            Ok(())
+        }
         crate::Commands::Fan(fan) => run_fan_dbus(client, fan, watch, out),
         crate::Commands::Profile(profile) => run_profile_dbus(client, profile, out),
     }
@@ -598,10 +641,7 @@ fn run_profile_dbus(
 ) -> Result<(), CliError> {
     match command {
         ProfileCommand::List => {
-            writeln!(
-                out,
-                "performance modes are validated by the daemon; use `profile set <0..3> --apply`"
-            )?;
+            print_capabilities(&client.get_capabilities()?, out)?;
             Ok(())
         }
         ProfileCommand::Set { value, apply } => {
@@ -612,6 +652,12 @@ fn run_profile_dbus(
             }
             let name = perf_mode_name(*value)
                 .ok_or_else(|| CliError::Invalid(format!("no such performance mode {value}")))?;
+            let caps = client.get_capabilities()?;
+            if !caps.power_modes.supports(*value) {
+                return Err(CliError::Invalid(format!(
+                    "performance mode {value} is not supported by this machine"
+                )));
+            }
             if !*apply {
                 writeln!(
                     out,
