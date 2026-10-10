@@ -131,6 +131,14 @@ pub fn set_launch_prefs(prefs: crate::prefs::LaunchPrefs) -> Result<(), String> 
     crate::prefs::save_launch_prefs(&prefs)
 }
 
+pub fn get_autostart() -> Result<bool, String> {
+    crate::autostart::get()
+}
+
+pub fn set_autostart(enabled: bool) -> Result<bool, String> {
+    crate::autostart::set(enabled)
+}
+
 // --- Wallpaper and logo persistence -----------------------------------------
 
 use base64::Engine;
@@ -287,6 +295,16 @@ pub mod tauri_commands {
     #[tauri::command]
     pub fn set_launch_prefs(prefs: crate::prefs::LaunchPrefs) -> Result<(), String> {
         super::set_launch_prefs(prefs)
+    }
+
+    #[tauri::command]
+    pub fn get_autostart() -> Result<bool, String> {
+        super::get_autostart()
+    }
+
+    #[tauri::command]
+    pub fn set_autostart(enabled: bool) -> Result<bool, String> {
+        super::set_autostart(enabled)
     }
 
     #[tauri::command]

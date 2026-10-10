@@ -70,11 +70,25 @@ const PERF_SUBMENU_TITLE: &str = "性能模式";
 
 /// Show and focus the main control-center window.
 pub fn show_main_window(app: &AppHandle) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
-        window.show().map_err(|e| e.to_string())?;
-        window.unminimize().map_err(|e| e.to_string())?;
-        window.set_focus().map_err(|e| e.to_string())?;
-    }
+    let window = match app.get_webview_window(MAIN_WINDOW) {
+        Some(window) => window,
+        None => {
+            let config = app
+                .config()
+                .app
+                .windows
+                .iter()
+                .find(|config| config.label == MAIN_WINDOW)
+                .ok_or("Main window configuration is missing")?;
+            tauri::WebviewWindowBuilder::from_config(app, config)
+                .map_err(|e| e.to_string())?
+                .build()
+                .map_err(|e| e.to_string())?
+        }
+    };
+    window.show().map_err(|e| e.to_string())?;
+    window.unminimize().map_err(|e| e.to_string())?;
+    window.set_focus().map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -330,4 +344,3 @@ mod tests {
         }
     }
 }
-

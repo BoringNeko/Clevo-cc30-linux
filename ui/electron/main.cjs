@@ -103,7 +103,13 @@ async function startBackend() {
   }
   backend = spawn(backendPath, ["--serve"], {
     stdio: ["ignore", "pipe", "inherit"],
-    env: process.env,
+    env: {
+      ...process.env,
+      CLEVO_CC_UI_LAUNCHER: JSON.stringify({
+        executable: process.env.APPIMAGE || process.execPath,
+        args: process.env.APPIMAGE || app.isPackaged ? [] : [path.resolve(__dirname, "..")],
+      }),
+    },
   });
   const { port, token } = await waitForHandshake(backend);
   backendPort = port;
@@ -411,7 +417,9 @@ if (!gotSingleInstanceLock) {
 } else {
   // A second shell would start another Rust backend. Keep one owner so the
   // desktop control center has a single D-Bus client and tray process.
-  app.on("second-instance", () => showWindow());
+  app.on("second-instance", (_event, argv) => {
+    if (!argv.includes("--tray")) showWindow();
+  });
 
   app.whenReady().then(async () => {
     applyChromiumSwitches();
@@ -422,8 +430,8 @@ if (!gotSingleInstanceLock) {
       app.quit();
       return;
     }
-    createWindow();
     buildTray();
+    if (!process.argv.includes("--tray")) createWindow();
 
     app.on("activate", () => showWindow());
   });

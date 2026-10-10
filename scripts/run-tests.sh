@@ -101,12 +101,15 @@ if [ "$WANT_UI" = 1 ]; then
         try node --check ui/electron/main.cjs
         try node --check ui/electron/preload.cjs
         try node scripts/tests-electron-preload.mjs
+        try node scripts/tests-electron-autostart.mjs
         try scripts/tests-electron-bridge.sh
 
         # The headless backend (no Tauri shell) must also build and pass its
         # tests: it is what the Electron main process spawns.
         step "UI: headless backend build + tests (Electron)"
         try bash -c "cd ui/src-tauri && cargo test --no-default-features"
+        try bash -c "cd ui/src-tauri && cargo build --no-default-features"
+        try node scripts/tests-ui-autostart.mjs
 
         # End-to-end: start the backend, drive the HTTP bridge, and (with a
         # display and the Electron runtime downloaded) launch the real app.

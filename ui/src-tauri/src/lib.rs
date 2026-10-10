@@ -15,6 +15,7 @@
 //!   problems, see `docs/hardware-notes.md` §15) is not involved at all.
 
 pub mod assets;
+pub mod autostart;
 pub mod commands;
 pub mod dbus;
 pub mod launch_env;
@@ -41,6 +42,12 @@ pub(crate) fn test_env_lock() -> std::sync::MutexGuard<'static, ()> {
 #[cfg(feature = "tauri-shell")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let mut context = tauri::generate_context!();
+    if std::env::args().any(|arg| arg == "--tray") {
+        for window in &mut context.config_mut().app.windows {
+            window.create = false;
+        }
+    }
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             commands::tauri_commands::get_fan_snapshot,
@@ -58,6 +65,8 @@ pub fn run() {
             commands::tauri_commands::set_perf_mode,
             commands::tauri_commands::get_launch_prefs,
             commands::tauri_commands::set_launch_prefs,
+            commands::tauri_commands::get_autostart,
+            commands::tauri_commands::set_autostart,
             commands::tauri_commands::save_wallpaper,
             commands::tauri_commands::load_wallpaper,
             commands::tauri_commands::clear_wallpaper,
@@ -75,7 +84,7 @@ pub fn run() {
             tray::build_tray(app.handle())?;
             Ok(())
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building the Tauri application")
         .run(|app, event| match event {
             // Closing the last window must not quit: the control center keeps

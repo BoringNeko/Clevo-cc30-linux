@@ -169,6 +169,14 @@ fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
             Ok(Value::Null)
         }
         "get_launch_prefs" => ok(commands::get_launch_prefs()),
+        "get_autostart" => ok(commands::get_autostart()?),
+        "set_autostart" => {
+            let enabled = args
+                .get("enabled")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| "missing boolean argument: enabled".to_string())?;
+            ok(commands::set_autostart(enabled)?)
+        }
         "set_launch_prefs" => {
             let prefs = args
                 .get("prefs")
@@ -353,6 +361,10 @@ mod tests {
 
         let err = dispatch("set_fan_curve", &json!({})).unwrap_err();
         assert!(err.contains("missing curve"));
+        for args in [json!({}), json!({ "enabled": "true" })] {
+            let err = dispatch("set_autostart", &args).unwrap_err();
+            assert!(err.contains("missing boolean argument: enabled"));
+        }
     }
 
     #[test]

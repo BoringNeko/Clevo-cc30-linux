@@ -38,6 +38,8 @@
   [`docs/electron.md`](docs/electron.md)。
 - **系统托盘**：原生菜单直接切换性能模式（`▶` 标记当前模式）、打开控制中心、退出；
   关闭窗口即回到托盘，进程继续常驻。
+- **UI 登录自启动**：设置 / 应用程序中可开关，登录时仅驻留托盘；支持 Tauri 与
+  Electron，配置属于当前用户，不需要 root。见 [`docs/autostart.md`](docs/autostart.md)。
 - **安全默认**：写入默认关闭；`acpi_call` 传输只读；未验证的固件常量明确标注。
 - **可离线测试**：无需硬件，全部用手写 fixture 测试（190 Rust + 40 UI 后端 + 191 前端）。
 
