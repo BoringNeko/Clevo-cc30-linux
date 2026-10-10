@@ -40,6 +40,8 @@
   关闭窗口即回到托盘，进程继续常驻。
 - **UI 登录自启动**：设置 / 应用程序中可开关，登录时仅驻留托盘；支持 Tauri 与
   Electron，配置属于当前用户，不需要 root。见 [`docs/autostart.md`](docs/autostart.md)。
+- **只读诊断**：`clevo-cc --transport dbus doctor` 检查硬件、服务、权限和配置，
+  连接失败也输出完整报告与修复建议；支持 `--json`。见 [`docs/doctor.md`](docs/doctor.md)。
 - **安全默认**：写入默认关闭；`acpi_call` 传输只读；未验证的固件常量明确标注。
 - **可离线测试**：无需硬件，全部用手写 fixture 测试（190 Rust + 40 UI 后端 + 191 前端）。
 
@@ -88,6 +90,7 @@ sudo packaging/uninstall.sh               # 完整回滚
 |---|---|
 | [`docs/hardware-notes.md`](docs/hardware-notes.md) | 逆向出的协议事实与真机验证 |
 | [`docs/install.md`](docs/install.md) | 安装 / 升级 / 卸载 |
+| [`docs/doctor.md`](docs/doctor.md) | 只读诊断、JSON 报告与退出码 |
 | [`docs/support-matrix.md`](docs/support-matrix.md) | 支持矩阵与发行版适配 |
 | [`docs/ui.md`](docs/ui.md) | 桌面 UI 使用说明 |
 | [`docs/electron.md`](docs/electron.md) | Electron 壳：架构、构建与安装 |

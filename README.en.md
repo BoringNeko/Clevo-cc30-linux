@@ -96,10 +96,17 @@ unprivileged sysfs access, troubleshooting).
 
 ## Documentation
 
+Run `clevo-cc --transport dbus doctor` for read-only hardware, service, permission
+and configuration diagnostics. It prints a full report even when the daemon is
+unavailable. Add `--json` for structured output or `--config PATH` to match a
+custom daemon configuration. Exit status is 1 for failed checks, 0 otherwise;
+optional unsupported features are skipped. The default mock backend stays offline.
+
 | Document | Contents |
 |---|---|
 | [`docs/hardware-notes.md`](docs/hardware-notes.md) | Reverse-engineered protocol facts and verification |
 | [`docs/install.md`](docs/install.md) | Install / upgrade / uninstall |
+| [`docs/doctor.md`](docs/doctor.md) | Read-only diagnostics, JSON reports and exit status (Chinese) |
 | [`docs/support-matrix.md`](docs/support-matrix.md) | Support matrix and distribution notes |
 | [`docs/ui.md`](docs/ui.md) | Desktop UI guide |
 | [`docs/electron.md`](docs/electron.md) | Electron shell: architecture, build, install |

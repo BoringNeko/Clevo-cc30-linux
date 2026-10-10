@@ -14,14 +14,18 @@ path = "src/main.rs"
 [dependencies]
 clevo-proto = { workspace = true, features = ["serde"] }
 clevo-transport.workspace = true
+clevod.workspace = true
 clap = { version = "4", features = ["derive"] }
 zbus.workspace = true
+serde.workspace = true
 serde_json.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "1", features = ["fs"] }
 
 [dev-dependencies]
 clevo-proto.workspace = true
 clevo-transport.workspace = true
-clevod.workspace = true
 tokio.workspace = true
 zbus.workspace = true
 

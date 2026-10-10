@@ -3,11 +3,11 @@
 //! Safety rules enforced here:
 //!
 //! * The default transport is the offline [`MockTransport`]. The `acpi-call`
-//!   backend is not implemented in phase 1 and is rejected with a clear error.
+//!   backend supports read-only queries.
 //! * Every write command is a **dry run** unless `--apply` is passed; even then
 //!   the transport's own verification gate (e.g. `allow_write`) still applies.
-//! * Commands never touch ACPI/EC/hidraw/sysfs directly — all hardware access
-//!   goes through [`Transport`].
+//! * Hardware commands go through [`Transport`]. Doctor also reads system
+//!   metadata and checks permissions without changing settings.
 //!
 //! The CLI is structured as a library (`run`) plus a thin `main`, so command
 //! dispatch can be tested against a mock transport without spawning a process.
@@ -17,6 +17,7 @@
 
 pub mod commands;
 pub mod dbus;
+pub mod doctor;
 pub mod snapshot;
 
 use std::path::PathBuf;
@@ -70,8 +71,15 @@ pub enum TransportChoice {
 /// Available sub-commands.
 #[derive(Debug, Subcommand)]
 pub enum Commands {
-    /// Check OS/library state without changing anything.
-    Doctor,
+    /// Diagnose hardware, services, permissions and configuration without changes.
+    Doctor {
+        /// Daemon configuration file to validate (match clevod's --config).
+        #[arg(long, default_value_os_t = clevod::config::default_path())]
+        config: PathBuf,
+        /// Print a machine-readable diagnostic report.
+        #[arg(long)]
+        json: bool,
+    },
     /// Print capabilities from AppSettings page 7 or read-only GCMD queries.
     Capabilities,
     /// Fan-related operations.

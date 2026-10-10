@@ -10,6 +10,19 @@ use clevo_cc_cli::{build_transport, Cli, Commands, TransportChoice};
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
+    // Diagnostics must remain usable when the selected backend cannot connect.
+    if matches!(cli.command, Commands::Doctor { .. }) {
+        let stdout = std::io::stdout();
+        return match clevo_cc_cli::doctor::run(&cli, &mut stdout.lock()) {
+            Ok(true) => ExitCode::SUCCESS,
+            Ok(false) => ExitCode::FAILURE,
+            Err(err) => {
+                eprintln!("error: {err}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
     let result = if cli.transport == TransportChoice::Dbus {
         run_dbus(&cli)
     } else {
@@ -38,7 +51,7 @@ fn run(
     out: &mut dyn std::io::Write,
 ) -> Result<(), clevo_cc_cli::CliError> {
     match &cli.command {
-        Commands::Doctor => commands::run_doctor(transport, out),
+        Commands::Doctor { .. } => commands::run_doctor(transport, out),
         Commands::Capabilities => {
             let caps = commands::read_capabilities(transport)?;
             commands::print_capabilities(&caps, out)?;

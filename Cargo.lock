@@ -183,6 +183,8 @@ dependencies = [
  "clevo-proto",
  "clevo-transport",
  "clevod",
+ "rustix",
+ "serde",
  "serde_json",
  "tokio",
  "zbus",

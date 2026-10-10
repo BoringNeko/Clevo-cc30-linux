@@ -25,7 +25,7 @@ fn doctor_reports_mock_and_no_changes() {
     let (result, out) = run(|t, out| commands::run_doctor(t, out));
     result.unwrap();
     assert!(out.contains("transport    : Mock"));
-    assert!(out.contains("writable     : false"));
+    assert!(out.contains("writable API=false"));
     assert!(out.contains("no changes were made."));
 }
 

@@ -180,3 +180,61 @@ fn cli_capabilities_and_profiles_use_gcmd_over_dbus() {
     }
     assert_eq!(rejected.status().unwrap().perf_mode, 255);
 }
+
+#[test]
+fn doctor_queries_existing_daemon_without_polling_or_writing() {
+    if no_session_bus() {
+        return;
+    }
+    let client = host_client_with_fixture(
+        "org.clevo.CC.cli.doctor",
+        include_str!("../../../fixtures/gcmd.fixture"),
+    );
+    let before = client.status().unwrap();
+    let (result, text) = run(
+        &client,
+        &Commands::Doctor {
+            config: "/nonexistent-clevo-doctor-config.toml".into(),
+            json: true,
+        },
+    );
+    result.unwrap();
+    let report: serde_json::Value = serde_json::from_str(&text).unwrap();
+    for id in ["dbus.service", "daemon.status", "daemon.capabilities"] {
+        assert!(
+            report["checks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|check| check["id"] == id && check["status"] == "pass"),
+            "{text}"
+        );
+    }
+    assert_eq!(client.status().unwrap(), before);
+    assert_eq!(report["changes_made"], false);
+}
+
+#[test]
+fn doctor_reports_missing_service_without_activation() {
+    if no_session_bus() {
+        return;
+    }
+    let client =
+        clevo_cc_cli::dbus::DbusClient::session_with_name("org.clevo.CC.cli.missingDoctor")
+            .unwrap();
+    let (result, text) = run(
+        &client,
+        &Commands::Doctor {
+            config: "/nonexistent-clevo-doctor-config.toml".into(),
+            json: true,
+        },
+    );
+    result.unwrap();
+    let report: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert!(report["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|check| check["id"] == "dbus.service" && check["status"] == "fail"));
+    assert!(client.diagnostic_service().unwrap().is_none());
+}

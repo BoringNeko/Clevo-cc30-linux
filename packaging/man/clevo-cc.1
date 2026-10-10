@@ -1,9 +1,9 @@
-.TH CLEVO-CC 1 "2026-10-04" "clevo-cc-linux 0.2.1" "User Commands"
+.TH CLEVO-CC 1 "2026-10-11" "clevo-cc-linux 0.2.1" "User Commands"
 .SH NAME
 clevo-cc \- command-line client for the Clevo fan and performance controls
 .SH SYNOPSIS
 .B clevo-cc
-[\fB\-\-transport\fR \fIkall|acpi-call|dbus\fR]
+[\fB\-\-transport\fR \fImock|driver|acpi-call|dbus\fR]
 [\fB\-\-fixture\fR \fIFIle\fR]
 \fISubcommand\fR [\fIOptions\fR]
 .SH DESCRIPTION
@@ -26,6 +26,10 @@ Read-only, via
 .IR /proc/acpi/call .
 Rejects every write before any I/O.
 .TP
+.B driver
+Read the clevo-cc kernel driver's sysfs/hwmon interface directly.
+Direct writes require appropriate file permissions.
+.TP
 .B dbus
 Talk to
 .BR clevod
@@ -34,12 +38,35 @@ over
 reads need no privilege, writes go through PolicyKit.
 .SH EXAMPLES
 .nf
+clevo\-cc \-\-transport dbus doctor
+clevo\-cc \-\-transport driver doctor \-\-json
 clevo\-cc \-\-fixture fixtures/example.fixture fan status
 sudo clevo\-cc \-\-transport acpi\-call fan watch \-\-interval\-ms 1000
 clevo\-cc \-\-transport dbus fan status
 clevo\-cc \-\-transport dbus fan set\-mode max \-\-apply
 clevo\-cc \-\-transport dbus fan set\-curve \-\-cpu "40,20 60,40 80,70 100,100" \-\-apply
 .fi
+.SH DIAGNOSTICS
+.B doctor
+prints a read-only, best-effort report covering the kernel, ACPI/DMI, driver,
+keyboard, power interfaces, permissions, D-Bus service and daemon configuration.
+Individual probe failures do not stop the report. It does not activate the
+daemon, call Poll, change hardware settings or rewrite configuration.
+.PP
+Use
+.B \-\-json
+for structured output and
+.B \-\-config PATH
+to validate the daemon's configuration (default: /etc/clevo-cc/clevod.toml).
+The mock backend only validates the offline fixture and does not probe the host.
+Select driver, acpi-call or dbus explicitly to diagnose the installed system.
+.PP
+Statuses are Pass, Warn, Fail and Skip. Optional unsupported interfaces are
+skipped; unreadable evidence is reported separately from a confirmed fault.
+Doctor exits 1 if any check fails, or 0 when only passes, warnings and skips remain.
+.PP
+The acpi-call backend sends read-only queries through /proc/acpi/call;
+this writes query requests to the interface but never sends settings commands.
 .SH FAN CURVES
 .B fan set\-curve
 writes a four\-point curve (command 14) and selects the

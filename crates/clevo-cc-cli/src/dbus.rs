@@ -81,6 +81,49 @@ pub struct DbusClient {
 }
 
 impl DbusClient {
+    /// Connect with a short method timeout for non-activating doctor probes.
+    pub fn diagnostics(session: bool) -> Result<Self, DbusError> {
+        let builder = if session {
+            zbus::blocking::connection::Builder::session()
+        } else {
+            zbus::blocking::connection::Builder::system()
+        }
+        .map_err(|e| DbusError::Unavailable(e.to_string()))?;
+        let connection = builder
+            .method_timeout(std::time::Duration::from_secs(3))
+            .build()
+            .map_err(|e| DbusError::Unavailable(e.to_string()))?;
+        Ok(Self {
+            connection,
+            destination: DBUS_NAME.into(),
+        })
+    }
+
+    /// Resolve an existing daemon to its unique bus name without activating it.
+    /// Subsequent diagnostic calls stay on that instance even if it exits.
+    pub fn diagnostic_service(&self) -> Result<Option<Self>, DbusError> {
+        let proxy = zbus::blocking::fdo::DBusProxy::new(&self.connection)
+            .map_err(|e| DbusError::Unavailable(e.to_string()))?;
+        let name: zbus::names::BusName<'_> = self
+            .destination
+            .as_str()
+            .try_into()
+            .map_err(|e: zbus::names::Error| DbusError::Decode(e.to_string()))?;
+        if !proxy
+            .name_has_owner(name.clone())
+            .map_err(|e| DbusError::Unavailable(e.to_string()))?
+        {
+            return Ok(None);
+        }
+        let owner = proxy
+            .get_name_owner(name)
+            .map_err(|e| DbusError::Unavailable(e.to_string()))?;
+        Ok(Some(Self {
+            connection: self.connection.clone(),
+            destination: owner.to_string(),
+        }))
+    }
+
     /// Connect to the daemon on the system bus.
     pub fn system() -> Result<Self, DbusError> {
         Self::system_with_name(DBUS_NAME)
