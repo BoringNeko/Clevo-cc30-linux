@@ -73,6 +73,11 @@ if [ "$WANT_RUST" = 1 ]; then
 
     step "Rust: workspace tests"
     try bust cargo test --workspace
+
+    step "Kernel protocol helpers: offline regression tests"
+    try bash scripts/tests-kernel-gcmd.sh
+    try bash scripts/tests-kernel-profile.sh
+    try bash scripts/tests-kernel-charge.sh
 fi
 
 if [ "$WANT_UI" = 1 ]; then
@@ -142,6 +147,12 @@ try scripts/tests-install-ui-replace.sh
 if [ "$WANT_KERNEL" = 1 ]; then
     step "Kernel: GCMD argument ABI regression test"
     try scripts/tests-kernel-gcmd.sh
+
+    step "Kernel: platform-profile mapping and write validation"
+    try bash scripts/tests-kernel-profile.sh
+
+    step "Kernel: FlexiCharger payloads, validation and recovery"
+    try bash scripts/tests-kernel-charge.sh
 
     step "Kernel: build the clevo-cc module (from clean)"
     if [ -d "/lib/modules/$(uname -r)/build" ]; then

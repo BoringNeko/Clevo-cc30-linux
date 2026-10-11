@@ -67,6 +67,32 @@ Doctor exits 1 if any check fails, or 0 when only passes, warnings and skips rem
 .PP
 The acpi-call backend sends read-only queries through /proc/acpi/call;
 this writes query requests to the interface but never sends settings commands.
+.SH POWER
+.B power status
+reads standard Linux battery and platform-profile interfaces. Add
+.B \-\-json
+for structured output. Missing measurements remain unknown.
+.PP
+.B power set\-thresholds BAT0 \-\-end 80
+validates a charging limit without writing. Add
+.B \-\-start 40
+only when the battery supports a start threshold, and
+.B \-\-apply
+to commit through the dbus transport and PolicyKit. Omitting start preserves
+the existing start threshold. Require 0 <= start < end <= 100.
+Native FlexiCharger uses firmware-advertised discrete percentages; add
+.B \-\-enabled true
+or
+.B \-\-enabled false
+to enable or disable its charge window. Standard threshold drivers do not
+accept this option. Disabling preserves the selected window.
+The daemon verifies readback, attempts restoration on failure and persists
+successful settings for startup replay. Unsupported hardware is refused.
+.PP
+The kernel platform-profile provider maps quiet/low-power/balanced/performance
+to vendor modes 0/1/3/2 respectively. The daemon observes desktop changes and
+persists them. Initial mode is unknown until a successful write or saved-mode
+restore; registering the provider does not change the hardware mode.
 .SH FAN CURVES
 .B fan set\-curve
 writes a four\-point curve (command 14) and selects the

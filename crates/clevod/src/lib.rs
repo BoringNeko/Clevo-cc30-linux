@@ -20,6 +20,7 @@
 pub mod config;
 pub mod dbus;
 pub mod policy;
+pub mod power;
 pub mod service;
 pub mod state;
 

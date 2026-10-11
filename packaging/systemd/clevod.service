@@ -22,6 +22,10 @@ ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=no
 ReadWritePaths=/etc/clevo-cc
+# Permit driver controls and batteries' model-specific symlink targets despite
+# ProtectKernelTunables. Public write methods still require PolicyKit.
+ReadWritePaths=-/sys/class/power_supply
+ReadWritePaths=-/sys/devices
 ProtectKernelTunables=yes
 ProtectKernelModules=no
 ProtectControlGroups=yes

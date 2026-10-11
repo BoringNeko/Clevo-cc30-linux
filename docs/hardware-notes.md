@@ -1145,3 +1145,45 @@ USB HID 逐键控制。
 截至 2026-09-29，本机已确认命令会使整块键盘变色；这符合该机型单区 RGB15
 硬件，而不是三区协议失败。按 `docs/install.md` 完成的可逆手测中，静态红色保持
 35 秒未熄灭，说明实时 RGB15 控制和睡眠定时器关闭路径均已验证。
+
+## 15. Battery and desktop power (2026-10-11)
+
+The standard power_supply read on COLORFUL P15 23 reported BAT0 present,
+capacity 100, status Full, cycle_count 0 and external power online. The matching
+full/design capacity ratio yielded about 62.8% health. The health label and both
+charge_control_start_threshold / charge_control_end_threshold nodes were absent.
+The initial standard-interface implementation therefore could not control charging.
+The local DSDT subsequently confirmed a separate native FlexiCharger interface:
+PK04 selector 30 returns BAEE>>1, BSCP, BTCP at offsets 0/1/2 and allowed
+start/end percentages at offsets 16..31 / 32..47. Selector 31 takes the enabled
+flag, start and end at payload offsets 1/2/3, then submits EC command 0xCB.
+Both are `_DSM` function 4 with Package { Buffer(256) }. This matches the
+vendor PageFlexiCharger Load_Preference and SetFlexiCharger methods; neither
+AppSettings pages nor raw EC access are needed.
+
+The new named flexicharger sysfs control verifies nonempty ordered allowed-value
+lists, state and percentages, binds the ACPI BAT0 sibling to the matching
+power_supply, serializes writes and confirms/recoveries with selector 30. Driver
+helper tests emulate malformed/empty replies, invalid percentages, partial failure,
+clamping and failed recovery. The first live acceptance read confirmed BAT0,
+disabled state, 95/100 and
+the expected allowed lists. The first live write returned EINVAL and the
+configuration remained unchanged: formatted Rust writes had submitted separate
+fragments to the sysfs store callback. The daemon now formats a complete command
+before writing, with a per-write parser regression test covering enable and restore.
+On 2026-10-11 the user successfully applied enabled=1/start=40/end=80 via D-Bus
+and confirmed the same values through sysfs. A subsequent read reported 99%,
+kernel status Not charging and current 0; UPower reported fully-charged and 0 W,
+matching the KDE fully-charged text. Selector 30 reads firmware variables, not
+an independent EC acknowledgement. Native read/write and the current noncharging
+state are confirmed; a complete charge cycle demonstrating the stop/restart
+thresholds and reboot replay still requires acceptance testing (see power.md).
+
+The new platform_profile provider uses the verified 121/25 logical values:
+quiet=0, low-power=1, balanced=3, performance=2. Both GCMD gates are checked
+before registering or writing. The real driver compiled against the local
+7.2.9-arch1-1 headers; an extracted-helper firmware mock covers all four mappings,
+unknown initial state, rejected gates and failed writes. Desktop switching and
+notification on the actual machine still require installation of the new module
+and the procedure in [power.md](power.md). These offline checks are not a claim
+of successful hardware profile switching.

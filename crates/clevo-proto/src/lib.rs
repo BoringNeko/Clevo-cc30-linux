@@ -22,6 +22,7 @@ pub mod error;
 pub mod fan_curve;
 pub mod fan_status;
 pub mod message;
+pub mod power;
 pub mod response;
 
 pub use capability::{Capabilities, GcmdCapabilities, Page7Version, PowerModeSupport};

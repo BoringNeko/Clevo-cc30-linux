@@ -40,6 +40,11 @@ UI added.
   exposes the standard `clevo::kbd_backlight` LED class device for KDE and
   PowerDevil, with raw brightness `0..191` and an approximately 0.3-second
   software colour fade; `clevod` persists the user configuration.
+- **Battery and desktop power**: real battery status and health, authorized
+  standard charging thresholds and native FlexiCharger windows with an enable
+  switch, firmware value validation, readback and persistence, and kernel
+  `platform_profile` integration with the four performance modes. Unsupported
+  hardware is reported explicitly. See [`docs/power.md`](docs/power.md).
 - **Desktop UI**: a React frontend that runs under either **Tauri 2** (default)
   or **Electron**, talking only over D-Bus; glass dashboard, custom title bar, an
   editable fan curve, light/dark themes, custom accent colour/logo/wallpaper, a
@@ -51,8 +56,8 @@ UI added.
   to the tray and keeps the process running.
 - **Safe by default**: writes are off by default; the `acpi_call` transport is
   read-only; unverified firmware constants are clearly marked.
-- **Offline-testable**: no hardware required, everything is tested against
-  hand-written fixtures (190 Rust + 40 UI-backend + 191 frontend tests).
+- **Offline-testable**: protocol fixtures, isolated sysfs trees and private
+  D-Bus sessions cover reads, writes and rejection paths without hardware.
 
 > Fan control (speed, temperature, curve read/write, fan and performance modes)
 > has been verified item by item on real hardware; the record is in

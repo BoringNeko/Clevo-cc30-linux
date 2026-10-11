@@ -37,6 +37,12 @@ jobs:
       - name: Tests (no hardware required; private D-Bus session)
         run: dbus-run-session -- cargo test --workspace
 
+      - name: Kernel protocol and platform-profile helper tests
+        run: |
+          bash scripts/tests-kernel-gcmd.sh
+          bash scripts/tests-kernel-profile.sh
+          bash scripts/tests-kernel-charge.sh
+
   ui:
     name: Tauri UI
     runs-on: ubuntu-latest

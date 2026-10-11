@@ -11,6 +11,11 @@
 
 obj-m += clevo-cc.o
 
+# Detect the API itself: distributions may backport multi-provider profiles.
+ifneq ($(shell grep -l 'devm_platform_profile_register' $(srctree)/include/linux/platform_profile.h 2>/dev/null),)
+ccflags-y += -DCLEVO_PROFILE_DEVICE_API
+endif
+
 KDIR ?= /lib/modules/$(shell uname -r)/build
 
 # Auto-detect a Clang-built kernel when LLVM is not set on the command line.

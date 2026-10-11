@@ -21,6 +21,7 @@ tauri-shell = ["dep:tauri", "dep:tauri-build"]
 tauri-build = { version = "2", features = [], optional = true }
 
 [dependencies]
+clevo-proto = { path = "../../crates/clevo-proto", features = ["serde"] }
 tauri = { version = "2", features = ["tray-icon", "image-png"], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

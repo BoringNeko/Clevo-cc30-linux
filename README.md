@@ -30,6 +30,11 @@
   0.3 秒的软件渐变，配置由 `clevod` 持久化。
 - **守护进程**：`clevod` 是唯一接触硬件的长期进程，在系统 D-Bus 上提供
   `org.clevo.CC`，缓存读数并持久化用户选择。
+- **电池与桌面电源**：电源页面显示真实电量、充电状态、健康度和循环次数；
+  标准充电阈值和原生 FlexiCharger 均可经 PolicyKit 保存并在启动时恢复；原生通道
+  支持启用开关和固件档位选择，缺少可用接口时明确显示不可用。
+  内核 `platform_profile` 与四种性能模式共用写入路径，桌面切换会同步到 daemon。
+  使用和真机验收见 [`docs/power.md`](docs/power.md)。
 - **桌面 UI**：React 前端，Tauri 2（默认）或 Electron 两个壳均可运行，只经 D-Bus
   通信；玻璃拟态仪表盘、自绘标题栏、概览 / 风扇页面、CPU/GPU 硬件占用、内存与
   zram/swap、硬盘挂载占用、可拖拽编辑的风扇曲线、深浅色、自定义强调色/logo/壁纸、
@@ -43,7 +48,7 @@
 - **只读诊断**：`clevo-cc --transport dbus doctor` 检查硬件、服务、权限和配置，
   连接失败也输出完整报告与修复建议；支持 `--json`。见 [`docs/doctor.md`](docs/doctor.md)。
 - **安全默认**：写入默认关闭；`acpi_call` 传输只读；未验证的固件常量明确标注。
-- **可离线测试**：无需硬件，全部用手写 fixture 测试（190 Rust + 40 UI 后端 + 191 前端）。
+- **可离线测试**：无需硬件，协议 fixture、隔离 sysfs 和私有 D-Bus 覆盖读写与拒绝路径。
 
 > 风扇控制（转速、温度、曲线读写、风扇/性能模式）已在真机上逐项验证，
 > 记录见 [`docs/hardware-notes.md`](docs/hardware-notes.md)；
@@ -91,6 +96,7 @@ sudo packaging/uninstall.sh               # 完整回滚
 | [`docs/hardware-notes.md`](docs/hardware-notes.md) | 逆向出的协议事实与真机验证 |
 | [`docs/install.md`](docs/install.md) | 安装 / 升级 / 卸载 |
 | [`docs/doctor.md`](docs/doctor.md) | 只读诊断、JSON 报告与退出码 |
+| [`docs/power.md`](docs/power.md) | 电池状态、充电阈值和桌面电源模式 |
 | [`docs/support-matrix.md`](docs/support-matrix.md) | 支持矩阵与发行版适配 |
 | [`docs/ui.md`](docs/ui.md) | 桌面 UI 使用说明 |
 | [`docs/electron.md`](docs/electron.md) | Electron 壳：架构、构建与安装 |

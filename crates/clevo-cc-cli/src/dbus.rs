@@ -220,6 +220,52 @@ impl DbusClient {
         serde_json::from_str(&json).map_err(|e| DbusError::Decode(e.to_string()))
     }
 
+    /// Read the standard battery and desktop power interfaces.
+    pub fn power(&self) -> Result<clevod::power::PowerSnapshot, DbusError> {
+        let json: String = self
+            .proxy(DBUS_INTERFACE)?
+            .call_method("GetPower", &())
+            .map_err(|error| classify(&error))?
+            .body()
+            .deserialize()
+            .map_err(|error| DbusError::Decode(error.to_string()))?;
+        serde_json::from_str(&json).map_err(|error| DbusError::Decode(error.to_string()))
+    }
+
+    /// Apply standard battery thresholds through the authorized daemon.
+    pub fn set_charge_thresholds(
+        &self,
+        battery: &str,
+        start: Option<u8>,
+        end: u8,
+    ) -> Result<clevod::power::ChargeThresholds, DbusError> {
+        self.set_charge_window(battery, start, end, None)
+    }
+
+    /// Apply a native enable state and charge window in one authorized operation.
+    pub fn set_charge_window(
+        &self,
+        battery: &str,
+        start: Option<u8>,
+        end: u8,
+        enabled: Option<bool>,
+    ) -> Result<clevod::power::ChargeThresholds, DbusError> {
+        let proxy = self.proxy(DBUS_INTERFACE)?;
+        let reply = match enabled {
+            Some(enabled) => proxy.call_method(
+                "SetChargeWindow",
+                &(battery, start.unwrap_or(255), end, enabled),
+            ),
+            None => proxy.call_method("SetChargeThresholds", &(battery, start.unwrap_or(255), end)),
+        }
+        .map_err(|error| classify(&error))?;
+        let json: String = reply
+            .body()
+            .deserialize()
+            .map_err(|error| DbusError::Decode(error.to_string()))?;
+        serde_json::from_str(&json).map_err(|error| DbusError::Decode(error.to_string()))
+    }
+
     /// Fetch the fan curve as the daemon's JSON string.
     pub fn get_curve(&self) -> Result<String, DbusError> {
         let proxy = self.proxy(DBUS_INTERFACE)?;

@@ -6,6 +6,7 @@ import DashboardIcon from "@mui/icons-material/Dashboard";
 import AirIcon from "@mui/icons-material/Air";
 import WbIncandescentIcon from "@mui/icons-material/WbIncandescent";
 import SettingsIcon from "@mui/icons-material/Settings";
+import BatteryChargingFullIcon from "@mui/icons-material/BatteryChargingFull";
 import { rgbString, type ExtractedPalette } from "../lib/color";
 import { glassSx, type Appearance } from "../theme";
 
@@ -14,6 +15,7 @@ export const NAV = [
   { id: "overview", label: "概览", Icon: DashboardIcon },
   { id: "fans", label: "风扇", Icon: AirIcon },
   { id: "rgb", label: "RGB 灯效", Icon: WbIncandescentIcon },
+  { id: "power", label: "电源与电池", Icon: BatteryChargingFullIcon },
 ] as const;
 
 interface SidebarProps {

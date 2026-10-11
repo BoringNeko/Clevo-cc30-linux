@@ -23,7 +23,7 @@ function setup() {
 
 describe("Sidebar", () => {
   it("offers an RGB page alongside overview and fans", () => {
-    expect(NAV.map((item) => item.id)).toEqual(["overview", "fans", "rgb"]);
+    expect(NAV.map((item) => item.id)).toEqual(["overview", "fans", "rgb", "power"]);
   });
 
   it("renders a navigable RGB entry", async () => {

@@ -1,4 +1,4 @@
-.TH CLEVOD 8 "2026-10-04" "clevo-cc-linux 0.2.1" "System Administration"
+.TH CLEVOD 8 "2026-10-11" "clevo-cc-linux 0.2.1" "System Administration"
 .SH NAME
 clevod \- privileged Clevo control-center daemon (fan and performance mode)
 .SH SYNOPSIS
@@ -73,14 +73,33 @@ property returns the curve the machine shipped with, or an empty string when it
 has not been captured. It is captured from the EC on a cold boot, before any
 write, because the firmware cannot restore it afterwards; a warm restart (where
 the EC still holds the daemon's own curve) is deliberately not captured.
+.PP
+Power methods:
+.B GetPower
+reads standard battery and platform-profile information as JSON independently
+of fan polling.
+.B SetChargeThresholds
+takes a battery name, start and end percentages; start=255 preserves an
+existing start threshold. It requires
+.B org.clevo.CC.set\-charge\-thresholds
+authorization, checks readback and attempts restoration on failure.
+Unsupported devices return NotSupported and invalid windows return InvalidArgs.
+Desktop profile transitions are observed by the background poll and persisted;
+using --no-poll disables this automatic synchronization.
 .SH FILES
 .TP
 .I /etc/clevo-cc/clevod.toml
-Versioned daemon configuration (schema v3). The fan mode, performance mode and
+Versioned daemon configuration (schema v7). The fan mode, performance mode and
 the custom fan curve are saved after every successful write and re-applied on
 startup; the curve is written before the
 .BR custom
 mode is selected.
+Successful charge thresholds are stored per battery in charge_thresholds,
+including the optional native enabled state, and restored when apply_on_start
+is true. SetChargeWindow takes
+the battery name, start byte, end byte and enabled boolean, using the same
+PolicyKit action as SetChargeThresholds. Native control is bound to the ACPI
+battery path and validates the firmware-advertised discrete percentages.
 .SH SEE ALSO
 .BR clevo-cc (1),
 .BR systemctl (1),

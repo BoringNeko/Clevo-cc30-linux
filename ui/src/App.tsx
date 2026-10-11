@@ -20,6 +20,7 @@ import { SettingsDialog } from "./components/SettingsDialog";
 import { WindowControls } from "./components/WindowControls";
 import { FansCard } from "./components/FansCard";
 import { RgbPage } from "./components/RgbPage";
+import { PowerPage } from "./components/PowerPage";
 import { DiskUsageCard, ResourceUsageCard } from "./components/ResourceUsageCard";
 import { FanModeCard } from "./components/FanModeCard";
 import { PerformanceCard } from "./components/PerformanceCard";
@@ -46,17 +47,18 @@ const POLL_INTERVAL_MS = 2000;
 const HISTORY_LEN = 60;
 
 /** Pages the sidebar can select. */
-type PageId = "overview" | "fans" | "rgb";
+type PageId = "overview" | "fans" | "rgb" | "power";
 
 /** Header title per page. */
 const PAGE_TITLES: Record<PageId, string> = {
   overview: "系统概览",
   fans: "风扇",
   rgb: "RGB 灯效",
+  power: "电源与电池",
 };
 
 function isPageId(id: string): id is PageId {
-  return id === "overview" || id === "fans" || id === "rgb";
+  return id === "overview" || id === "fans" || id === "rgb" || id === "power";
 }
 
 /**
@@ -335,7 +337,7 @@ export default function App() {
               </Alert>
             )}
 
-            {active === "rgb" ? (
+            {active === "power" ? <PowerPage onModeChanged={() => void refresh()} /> : active === "rgb" ? (
               <Box
                 key="rgb"
                 sx={{

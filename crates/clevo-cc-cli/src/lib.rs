@@ -88,6 +88,37 @@ pub enum Commands {
     /// Performance-profile operations.
     #[command(subcommand)]
     Profile(ProfileCommand),
+    /// Battery state and standard or native charge thresholds.
+    #[command(subcommand)]
+    Power(PowerCommand),
+}
+
+/// Battery operations; charge writes require D-Bus and explicit --apply.
+#[derive(Debug, Subcommand)]
+pub enum PowerCommand {
+    /// Read batteries, external supply and desktop power-profile state.
+    Status {
+        /// Print the complete machine-readable snapshot.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Set supported battery charging thresholds through clevod.
+    SetThresholds {
+        /// Kernel battery name, for example BAT0.
+        battery: String,
+        /// Start threshold, if supported (otherwise leave unchanged).
+        #[arg(long)]
+        start: Option<u8>,
+        /// Stop threshold in 1..=100.
+        #[arg(long)]
+        end: u8,
+        /// Enable or disable native FlexiCharger (standard drivers omit this).
+        #[arg(long, action = clap::ArgAction::Set)]
+        enabled: Option<bool>,
+        /// Apply the change after PolicyKit authorization; otherwise dry run.
+        #[arg(long)]
+        apply: bool,
+    },
 }
 
 /// Fan sub-commands.

@@ -118,6 +118,24 @@ fn handle(mut stream: TcpStream, token: &str) -> std::io::Result<()> {
 /// `hide_main_window` and `quit_app` are handled by the Electron main process.
 fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
     match command {
+        "get_power" => ok(commands::get_power()?),
+        "set_charge_thresholds" => {
+            let enabled = match args.get("enabled") {
+                None | Some(Value::Null) => None,
+                Some(Value::Bool(value)) => Some(*value),
+                Some(_) => return Err("enabled must be a boolean".into()),
+            };
+            let start = match args.get("start") {
+                None | Some(Value::Null) => None,
+                Some(_) => Some(u8_arg(args, "start")?),
+            };
+            ok(commands::set_charge_thresholds(
+                str_arg(args, "battery")?,
+                start,
+                u8_arg(args, "end")?,
+                enabled,
+            )?)
+        }
         "get_fan_snapshot" => ok(commands::get_fan_snapshot()?),
         "poll_fan" => ok(commands::poll_fan()?),
         "get_hardware_usage" => ok(commands::get_hardware_usage()?),
@@ -364,6 +382,14 @@ mod tests {
         for args in [json!({}), json!({ "enabled": "true" })] {
             let err = dispatch("set_autostart", &args).unwrap_err();
             assert!(err.contains("missing boolean argument: enabled"));
+        }
+        for enabled in [json!("false"), json!(1), json!({})] {
+            let err = dispatch(
+                "set_charge_thresholds",
+                &json!({ "battery": "BAT0", "start": 40, "end": 80, "enabled": enabled }),
+            )
+            .unwrap_err();
+            assert!(err.contains("enabled must be a boolean"));
         }
     }
 

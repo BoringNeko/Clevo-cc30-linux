@@ -16,6 +16,23 @@ fn client() -> Result<DaemonClient, String> {
     DaemonClient::system().map_err(|e| e.message)
 }
 
+/// Read standard battery and desktop profile information through the daemon.
+pub fn get_power() -> Result<clevo_proto::power::PowerSnapshot, String> {
+    client()?.power().map_err(|error| error.message)
+}
+
+/// Apply standard battery charging thresholds through the authorized daemon.
+pub fn set_charge_thresholds(
+    battery: String,
+    start: Option<u8>,
+    end: u8,
+    enabled: Option<bool>,
+) -> Result<clevo_proto::power::ChargeThresholds, String> {
+    client()?
+        .set_charge_window(&battery, start, end, enabled)
+        .map_err(|error| error.message)
+}
+
 /// Return the daemon's cached snapshot without polling.
 pub fn get_fan_snapshot() -> Result<FanSnapshot, String> {
     client()?.snapshot().map_err(|e| e.message)
@@ -221,6 +238,21 @@ pub fn quit_app(app: tauri::AppHandle) {
 #[cfg(feature = "tauri-shell")]
 pub mod tauri_commands {
     use super::*;
+
+    #[tauri::command]
+    pub fn get_power() -> Result<clevo_proto::power::PowerSnapshot, String> {
+        super::get_power()
+    }
+
+    #[tauri::command]
+    pub fn set_charge_thresholds(
+        battery: String,
+        start: Option<u8>,
+        end: u8,
+        enabled: Option<bool>,
+    ) -> Result<clevo_proto::power::ChargeThresholds, String> {
+        super::set_charge_thresholds(battery, start, end, enabled)
+    }
 
     #[tauri::command]
     pub fn get_fan_snapshot() -> Result<FanSnapshot, String> {

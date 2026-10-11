@@ -8,7 +8,7 @@ SRC="${1:-$ROOT/kernel/clevo-cc/clevo-cc.c}"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-awk '/^static int clevo_cc_gcmd_read\(/,/^}/' "$SRC" >"$tmp/function.c"
+awk '/^static int clevo_cc_gcmd_read\(/ && !/;$/ { emit=1 } emit { print } emit && /^}/ { emit=0 }' "$SRC" >"$tmp/function.c"
 cat >"$tmp/test.c" <<'EOF'
 #include <errno.h>
 #include <stdint.h>

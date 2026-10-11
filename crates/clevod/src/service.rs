@@ -106,6 +106,10 @@ impl Clock for SystemClock {
 /// The daemon core.
 pub struct Service {
     transport: Box<dyn Transport>,
+    power: Option<crate::power::Power>,
+    perf_lock: Mutex<()>,
+    charge_lock: Mutex<()>,
+    persistence_lock: Mutex<()>,
     keyboard: Option<Box<dyn Keyboard>>,
     /// Keyboard type reported by the firmware's fan-curve capability record.
     /// This is separate from `keyboard`: the firmware can advertise RGB15
@@ -190,8 +194,14 @@ impl From<KeyboardError> for ServiceError {
 impl Service {
     /// Create a service around `transport`.
     pub fn new(transport: Box<dyn Transport>) -> Self {
+        let power = (transport.kind() != clevo_transport::TransportKind::Mock)
+            .then(crate::power::Power::system);
         Self {
             transport,
+            power,
+            perf_lock: Mutex::new(()),
+            charge_lock: Mutex::new(()),
+            persistence_lock: Mutex::new(()),
             keyboard: None,
             keyboard_firmware_type: std::sync::atomic::AtomicU8::new(UNKNOWN_KEYBOARD_TYPE),
             state: Arc::new(Mutex::new(DaemonState::default())),
@@ -205,6 +215,66 @@ impl Service {
             baseline: Mutex::new(config::Config::default()),
             applying: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// Replace Linux power access, primarily with isolated sysfs trees in tests.
+    pub fn with_power(mut self, power: crate::power::Power) -> Self {
+        self.power = Some(power);
+        self
+    }
+
+    /// Read power state independently from EC/fan polling failures.
+    pub fn power_snapshot(&self) -> crate::power::PowerSnapshot {
+        self.power
+            .as_ref()
+            .map(|power| power.snapshot())
+            .unwrap_or_default()
+    }
+
+    /// Apply standard charge thresholds and persist only verified readback.
+    pub fn set_charge_thresholds(
+        &self,
+        battery: &str,
+        start: Option<u8>,
+        end: u8,
+    ) -> Result<crate::power::ChargeThresholds, ServiceError> {
+        self.set_charge_window(battery, start, end, None)
+    }
+
+    /// Apply a native enable state as part of the same charge-window transaction.
+    pub fn set_charge_window(
+        &self,
+        battery: &str,
+        start: Option<u8>,
+        end: u8,
+        enabled: Option<bool>,
+    ) -> Result<crate::power::ChargeThresholds, ServiceError> {
+        let _guard = self.charge_lock.lock().unwrap();
+        let power = self.power.as_ref().ok_or_else(|| {
+            ServiceError::Unsupported("battery control disabled for this backend".into())
+        })?;
+        let requested = crate::power::ChargeThresholds {
+            enabled,
+            start,
+            end,
+        };
+        crate::power::validate_thresholds(requested).map_err(ServiceError::Protocol)?;
+        let applied = power
+            .set_thresholds(battery, requested)
+            .map_err(|error| match error {
+                crate::power::PowerError::Unsupported(message) => {
+                    ServiceError::Unsupported(message)
+                }
+                crate::power::PowerError::Invalid(message) => ServiceError::Protocol(message),
+                crate::power::PowerError::Io(message) => ServiceError::Transport(message),
+            })?;
+        self.baseline
+            .lock()
+            .unwrap()
+            .charge_thresholds
+            .insert(battery.into(), applied);
+        self.persist();
+        Ok(applied)
     }
 
     /// Attach an optionally discovered keyboard RGB backend.
@@ -340,23 +410,15 @@ impl Service {
     pub fn poll_fan(&self) -> Result<(), ServiceError> {
         let _ = self.clock.now_ms();
         let tdp = self.tdp_class();
+        self.sync_modes();
 
         match self.read_status() {
             Ok((status, fan_count)) => {
                 // The firmware does not report the current mode reliably, but
                 // some backends (the kernel driver) can observe it; refresh the
                 // cached values so the UI can highlight the active mode.
-                let modes = self.transport.current_modes().ok();
                 let mut guard = self.state.lock().unwrap();
                 guard.apply_status(&status, fan_count, tdp);
-                if let Some((fan, perf)) = modes {
-                    if fan.is_some() {
-                        guard.fan_mode = fan;
-                    }
-                    if perf.is_some() {
-                        guard.perf_mode = perf;
-                    }
-                }
                 Ok(())
             }
             Err(err) => {
@@ -531,6 +593,7 @@ impl Service {
 
     /// Set the performance mode by name.
     pub fn set_perf_mode(&self, name: &str) -> Result<u8, ServiceError> {
+        let _guard = self.perf_lock.lock().unwrap();
         let value = perf_mode_value(name).ok_or_else(|| ServiceError::UnknownMode(name.into()))?;
         let caps = self.read_capabilities()?;
         if !caps.power_modes.supports(value) {
@@ -544,6 +607,30 @@ impl Service {
         self.state.lock().unwrap().perf_mode = Some(value);
         self.persist();
         Ok(value)
+    }
+
+    /// Adopt externally applied modes and persist transitions without hardware writes.
+    fn sync_modes(&self) {
+        let _guard = self.perf_lock.lock().unwrap();
+        if let Ok((fan, perf)) = self.transport.current_modes() {
+            {
+                let mut state = self.state.lock().unwrap();
+                if fan.is_some() {
+                    state.fan_mode = fan;
+                }
+                if perf.is_some() {
+                    state.perf_mode = perf;
+                }
+            }
+            if let Some(perf) = perf.filter(|value| perf_mode_name(*value).is_some()) {
+                let old = self.last_perf_mode.swap(u64::from(perf), Ordering::SeqCst);
+                if old != u64::from(perf)
+                    && (old != UNSET || self.baseline.lock().unwrap().perf_mode != Some(perf))
+                {
+                    self.persist();
+                }
+            }
+        }
     }
 
     /// Send a `CMD_MAIN` sub-command write through the transport.
@@ -587,6 +674,17 @@ impl Service {
     /// The actual replay, with persistence suppressed by the caller.
     fn replay_saved(&self, config: &config::Config) -> Vec<String> {
         let mut failures = Vec::new();
+
+        for (battery, thresholds) in &config.charge_thresholds {
+            if let Err(error) = self.set_charge_window(
+                battery,
+                thresholds.start,
+                thresholds.end,
+                thresholds.enabled,
+            ) {
+                failures.push(format!("charge_thresholds {battery}: {error}"));
+            }
+        }
 
         // A persisted curve is only written when it is meant to be active:
         // `custom` (or no saved mode, where applying the curve implies
@@ -745,6 +843,7 @@ impl Service {
         let Some(path) = self.config_path.as_deref() else {
             return;
         };
+        let _guard = self.persistence_lock.lock().unwrap();
         let config = self.to_config();
         if let Err(err) = config::save(path, &config) {
             tracing::warn!(

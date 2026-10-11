@@ -24,6 +24,8 @@
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/platform_device.h>
+#include <linux/platform_profile.h>
+#include <linux/string.h>
 
 #define CLEVO_DSM_GUID "93F224E4-FBDC-4BBF-ADD6-DB71BDC0AFAD"
 #define CLEVO_PAYLOAD_LEN 256
@@ -40,6 +42,10 @@
 #define CLEVO_CMD_FAN_CURVE_WRITE 14
 #define CLEVO_CMD_MAIN 121
 #define CLEVO_CMD_KEYBOARD_RGB 103
+#define CLEVO_CMD_SETTINGS 4
+#define CLEVO_SUB_FLEXICHARGER_READ 30
+#define CLEVO_SUB_FLEXICHARGER_WRITE 31
+#define CLEVO_CHARGE_VALUES_LEN 16
 /* Read-only GCMD capability/state queries; never interpret these as status. */
 #define CLEVO_CMD_FEATURES 122
 #define CLEVO_CMD_EXTENDED_FEATURES 96
@@ -113,6 +119,16 @@ struct clevo_cc {
 	enum clevo_fan_mode fan_mode;
 	enum clevo_perf_mode perf_mode;
 	bool perf_mode_set;
+	struct mutex perf_lock;
+	struct mutex charge_lock;
+#if IS_REACHABLE(CONFIG_ACPI_PLATFORM_PROFILE)
+#ifdef CLEVO_PROFILE_DEVICE_API
+	struct device *profile_dev;
+#else
+	struct platform_profile_handler profile_handler;
+	bool profile_registered;
+#endif
+#endif
 	struct mutex keyboard_lock;
 	struct led_classdev keyboard_led;
 	u8 keyboard_color[3][3];
@@ -122,6 +138,22 @@ struct clevo_cc {
 	u8 keyboard_brightness_raw;
 	const char *keyboard_mode;
 };
+
+static int clevo_cc_gcmd_read(struct clevo_cc *cc, u32 command, u32 *value);
+
+static int clevo_cc_perf_supported(struct clevo_cc *cc)
+{
+	u32 features, apps;
+	int err;
+
+	err = clevo_cc_gcmd_read(cc, CLEVO_CMD_EXTENDED_FEATURES, &features);
+	if (err)
+		return err;
+	err = clevo_cc_gcmd_read(cc, CLEVO_CMD_SUPPORTED_APPS, &apps);
+	if (err)
+		return err;
+	return (features & BIT(2)) && (apps & BIT(0)) ? 0 : -EOPNOTSUPP;
+}
 
 /*
  * Interpret the integer a `_DSM` call returned.
@@ -345,10 +377,177 @@ static int clevo_cc_set_fan_mode(struct clevo_cc *cc, u32 mode)
  */
 static int clevo_cc_set_perf_mode(struct clevo_cc *cc, u32 mode)
 {
+	int err;
+
 	if (mode > CLEVO_PERF_ENTERTAINMENT)
 		return -EINVAL;
-	return clevo_cc_main_cmd(cc, CLEVO_SUB_PERF_MODE, mode);
+	mutex_lock(&cc->perf_lock);
+	err = clevo_cc_perf_supported(cc);
+	if (!err)
+		err = clevo_cc_main_cmd(cc, CLEVO_SUB_PERF_MODE, mode);
+	if (!err) {
+		cc->perf_mode = mode;
+		cc->perf_mode_set = true;
+	}
+	mutex_unlock(&cc->perf_lock);
+	return err;
 }
+
+#if IS_REACHABLE(CONFIG_ACPI_PLATFORM_PROFILE)
+/* Map the vendor's logical modes, not its internal APPM EC encodings. */
+static int clevo_cc_profile_get(struct clevo_cc *cc,
+			      enum platform_profile_option *profile)
+{
+	int err = 0;
+
+	mutex_lock(&cc->perf_lock);
+	if (!cc->perf_mode_set) {
+		err = -ENODATA;
+		goto out;
+	}
+	switch (cc->perf_mode) {
+	case CLEVO_PERF_QUIET:
+		*profile = PLATFORM_PROFILE_QUIET;
+		break;
+	case CLEVO_PERF_PWRSAVING:
+		*profile = PLATFORM_PROFILE_LOW_POWER;
+		break;
+	case CLEVO_PERF_PERFORMANCE:
+		*profile = PLATFORM_PROFILE_PERFORMANCE;
+		break;
+	case CLEVO_PERF_ENTERTAINMENT:
+		*profile = PLATFORM_PROFILE_BALANCED;
+		break;
+	default:
+		err = -EINVAL;
+	}
+out:
+	mutex_unlock(&cc->perf_lock);
+	return err;
+}
+
+static int clevo_cc_profile_set(struct clevo_cc *cc,
+			      enum platform_profile_option profile)
+{
+	switch (profile) {
+	case PLATFORM_PROFILE_QUIET:
+		return clevo_cc_set_perf_mode(cc, CLEVO_PERF_QUIET);
+	case PLATFORM_PROFILE_LOW_POWER:
+		return clevo_cc_set_perf_mode(cc, CLEVO_PERF_PWRSAVING);
+	case PLATFORM_PROFILE_PERFORMANCE:
+		return clevo_cc_set_perf_mode(cc, CLEVO_PERF_PERFORMANCE);
+	case PLATFORM_PROFILE_BALANCED:
+		return clevo_cc_set_perf_mode(cc, CLEVO_PERF_ENTERTAINMENT);
+	default:
+		return -EOPNOTSUPP;
+	}
+}
+
+static void clevo_cc_profile_choices(unsigned long *choices)
+{
+	set_bit(PLATFORM_PROFILE_QUIET, choices);
+	set_bit(PLATFORM_PROFILE_LOW_POWER, choices);
+	set_bit(PLATFORM_PROFILE_BALANCED, choices);
+	set_bit(PLATFORM_PROFILE_PERFORMANCE, choices);
+}
+
+#ifdef CLEVO_PROFILE_DEVICE_API
+static int clevo_cc_profile_probe(void *data, unsigned long *choices)
+{
+	clevo_cc_profile_choices(choices);
+	return 0;
+}
+
+static int clevo_cc_profile_dev_get(struct device *dev,
+				  enum platform_profile_option *profile)
+{
+	return clevo_cc_profile_get(dev_get_drvdata(dev), profile);
+}
+
+static int clevo_cc_profile_dev_set(struct device *dev,
+				  enum platform_profile_option profile)
+{
+	return clevo_cc_profile_set(dev_get_drvdata(dev), profile);
+}
+
+static const struct platform_profile_ops clevo_cc_profile_ops = {
+	.probe = clevo_cc_profile_probe,
+	.profile_get = clevo_cc_profile_dev_get,
+	.profile_set = clevo_cc_profile_dev_set,
+};
+#else
+static int clevo_cc_profile_legacy_get(struct platform_profile_handler *handler,
+				     enum platform_profile_option *profile)
+{
+	struct clevo_cc *cc = container_of(handler, struct clevo_cc,
+					 profile_handler);
+
+	return clevo_cc_profile_get(cc, profile);
+}
+
+static int clevo_cc_profile_legacy_set(struct platform_profile_handler *handler,
+				     enum platform_profile_option profile)
+{
+	struct clevo_cc *cc = container_of(handler, struct clevo_cc,
+					 profile_handler);
+
+	return clevo_cc_profile_set(cc, profile);
+}
+
+static void clevo_cc_profile_unregister(void *data)
+{
+	platform_profile_remove();
+}
+#endif
+
+static void clevo_cc_profile_notify(struct clevo_cc *cc)
+{
+#ifdef CLEVO_PROFILE_DEVICE_API
+	if (cc->profile_dev)
+		platform_profile_notify(cc->profile_dev);
+#else
+	if (cc->profile_registered)
+		platform_profile_notify();
+#endif
+}
+
+static int clevo_cc_profile_register(struct device *dev, struct clevo_cc *cc)
+{
+	int err;
+
+	err = clevo_cc_perf_supported(cc);
+	if (err)
+		return err;
+#ifdef CLEVO_PROFILE_DEVICE_API
+	cc->profile_dev = devm_platform_profile_register(dev, "clevo-cc", cc,
+						       &clevo_cc_profile_ops);
+	if (IS_ERR(cc->profile_dev)) {
+		err = PTR_ERR(cc->profile_dev);
+		cc->profile_dev = NULL;
+		return err;
+	}
+#else
+	clevo_cc_profile_choices(cc->profile_handler.choices);
+	cc->profile_handler.profile_get = clevo_cc_profile_legacy_get;
+	cc->profile_handler.profile_set = clevo_cc_profile_legacy_set;
+	err = platform_profile_register(&cc->profile_handler);
+	if (err)
+		return err;
+	err = devm_add_action_or_reset(dev, clevo_cc_profile_unregister, cc);
+	if (err)
+		return err;
+	cc->profile_registered = true;
+#endif
+	return 0;
+}
+#else
+static void clevo_cc_profile_notify(struct clevo_cc *cc) { }
+
+static int clevo_cc_profile_register(struct device *dev, struct clevo_cc *cc)
+{
+	return -EOPNOTSUPP;
+}
+#endif
 
 /*
  * Send one of the vendor RGB15 command-103 words.
@@ -1432,10 +1631,16 @@ static ssize_t perf_mode_show(struct device *dev, struct device_attribute *attr,
 			      char *buf)
 {
 	struct clevo_cc *cc = dev_get_drvdata(dev);
+	enum clevo_perf_mode mode;
+	bool known;
 
-	if (!cc->perf_mode_set)
+	mutex_lock(&cc->perf_lock);
+	known = cc->perf_mode_set;
+	mode = cc->perf_mode;
+	mutex_unlock(&cc->perf_lock);
+	if (!known)
 		return sysfs_emit(buf, "unknown\n");
-	return sysfs_emit(buf, "%s\n", clevo_cc_perf_name(cc->perf_mode));
+	return sysfs_emit(buf, "%s\n", clevo_cc_perf_name(mode));
 }
 
 static ssize_t perf_mode_store(struct device *dev, struct device_attribute *attr,
@@ -1460,11 +1665,30 @@ static ssize_t perf_mode_store(struct device *dev, struct device_attribute *attr
 	if (err)
 		return err;
 
-	cc->perf_mode = mode;
-	cc->perf_mode_set = true;
+	/* The platform-profile core holds its own lock in callbacks; notify
+	 * only from this separate sysfs path, after releasing perf_lock. */
+	clevo_cc_profile_notify(cc);
 	return count;
 }
 static DEVICE_ATTR_RW(perf_mode);
+
+static ssize_t platform_profile_available_show(struct device *dev,
+					      struct device_attribute *attr,
+					      char *buf)
+{
+	bool available = false;
+#if IS_REACHABLE(CONFIG_ACPI_PLATFORM_PROFILE)
+	struct clevo_cc *cc = dev_get_drvdata(dev);
+
+#ifdef CLEVO_PROFILE_DEVICE_API
+	available = cc->profile_dev != NULL;
+#else
+	available = cc->profile_registered;
+#endif
+#endif
+	return sysfs_emit(buf, "%u\n", available);
+}
+static DEVICE_ATTR_RO(platform_profile_available);
 
 /* GCMD reads require Package { Buffer(256) } and return integer data. */
 static int clevo_cc_gcmd_read(struct clevo_cc *cc, u32 command, u32 *value)
@@ -1509,14 +1733,210 @@ static ssize_t capabilities_show(struct device *dev,
 }
 static DEVICE_ATTR_RO(capabilities);
 
+struct clevo_charge_window {
+	u8 enabled, start, end;
+	u8 start_values[CLEVO_CHARGE_VALUES_LEN];
+	u8 end_values[CLEVO_CHARGE_VALUES_LEN];
+};
+
+static bool clevo_cc_charge_contains(const u8 *values, u8 value)
+{
+	int i;
+
+	for (i = 0; i < CLEVO_CHARGE_VALUES_LEN && values[i]; i++)
+		if (values[i] == value)
+			return true;
+	return false;
+}
+
+static bool clevo_cc_charge_values_valid(const u8 *values)
+{
+	int i;
+	bool ended = false;
+
+	if (!values[0])
+		return false;
+	for (i = 0; i < CLEVO_CHARGE_VALUES_LEN; i++) {
+		if (!values[i]) {
+			ended = true;
+			continue;
+		}
+		if (ended || values[i] > 100 || (i && values[i] <= values[i - 1]))
+			return false;
+	}
+	return true;
+}
+
+/* PK04/30 is read-only. Empty replies (including ECOK=false) are unsupported. */
+static int clevo_cc_charge_read(struct clevo_cc *cc, struct clevo_charge_window *window)
+{
+	u8 payload[CLEVO_PAYLOAD_LEN] = { CLEVO_SUB_FLEXICHARGER_READ };
+	u8 out[CLEVO_PAYLOAD_LEN];
+	size_t len = 0;
+	int err;
+
+	err = clevo_cc_dsm_payload(cc, CLEVO_CMD_SETTINGS, payload, out, sizeof(out), &len);
+	if (err)
+		return err;
+	if (len < 48)
+		return -EPROTO;
+	window->enabled = out[0];
+	window->start = out[1];
+	window->end = out[2];
+	memcpy(window->start_values, out + 16, CLEVO_CHARGE_VALUES_LEN);
+	memcpy(window->end_values, out + 32, CLEVO_CHARGE_VALUES_LEN);
+	if (!clevo_cc_charge_values_valid(window->start_values) ||
+	    !clevo_cc_charge_values_valid(window->end_values))
+		return -EOPNOTSUPP;
+	if (window->enabled > 1 || window->start >= window->end ||
+	    !clevo_cc_charge_contains(window->start_values, window->start) ||
+	    !clevo_cc_charge_contains(window->end_values, window->end))
+		return -EPROTO;
+	return 0;
+}
+
+static int clevo_cc_charge_write(struct clevo_cc *cc, const struct clevo_charge_window *window)
+{
+	u8 payload[CLEVO_PAYLOAD_LEN] = {
+		CLEVO_SUB_FLEXICHARGER_WRITE, window->enabled, window->start, window->end,
+	};
+	u8 out[CLEVO_PAYLOAD_LEN];
+	size_t len = 0;
+	int err;
+
+	err = clevo_cc_dsm_payload(cc, CLEVO_CMD_SETTINGS, payload, out, sizeof(out), &len);
+	if (err)
+		return err;
+	/* PK04 returns Buffer(256), not an SCMD integer acknowledgement. */
+	return len == CLEVO_PAYLOAD_LEN ? 0 : -EPROTO;
+}
+
+static bool clevo_cc_charge_matches(const struct clevo_charge_window *a,
+				    const struct clevo_charge_window *b)
+{
+	return a->enabled == b->enabled && a->start == b->start && a->end == b->end;
+}
+
+/* Caller holds charge_lock across read, apply, confirmation and recovery. */
+static int clevo_cc_charge_set(struct clevo_cc *cc, unsigned int enabled,
+			       unsigned int start, unsigned int end)
+{
+	struct clevo_charge_window old, target, confirmed;
+	int err, restore;
+
+	if (enabled > 1 || start >= end || end > 100)
+		return -EINVAL;
+	err = clevo_cc_charge_read(cc, &old);
+	if (err)
+		return err;
+	if (!clevo_cc_charge_contains(old.start_values, start) ||
+	    !clevo_cc_charge_contains(old.end_values, end))
+		return -EINVAL;
+	target = old;
+	target.enabled = enabled;
+	target.start = start;
+	target.end = end;
+	if (clevo_cc_charge_matches(&old, &target))
+		return 0;
+	err = clevo_cc_charge_write(cc, &target);
+	if (!err) {
+		err = clevo_cc_charge_read(cc, &confirmed);
+		if (!err && !clevo_cc_charge_matches(&confirmed, &target))
+			err = -EIO;
+	}
+	if (!err)
+		return 0;
+	restore = clevo_cc_charge_write(cc, &old);
+	if (!restore) {
+		restore = clevo_cc_charge_read(cc, &confirmed);
+		if (!restore && !clevo_cc_charge_matches(&confirmed, &old))
+			restore = -EIO;
+	}
+	if (restore)
+		dev_err(&cc->adev->dev, "FlexiCharger restore failed: %d; check charging settings\n", restore);
+	return err;
+}
+
+/* PK04/31 notifies the BAT0 sibling of DCHU; never target an unrelated battery. */
+static int clevo_cc_charge_battery(struct clevo_cc *cc, struct acpi_buffer *name)
+{
+	acpi_handle battery;
+
+	if (ACPI_FAILURE(acpi_get_handle(cc->adev->handle, "^BAT0", &battery)))
+		return -EOPNOTSUPP;
+	if (ACPI_FAILURE(acpi_get_name(battery, ACPI_FULL_PATHNAME, name)))
+		return -EIO;
+	return 0;
+}
+
+static ssize_t flexicharger_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct clevo_cc *cc = dev_get_drvdata(dev);
+	struct acpi_buffer name = { ACPI_ALLOCATE_BUFFER, NULL };
+	struct clevo_charge_window window;
+	int err, i, n;
+
+	err = clevo_cc_charge_battery(cc, &name);
+	if (err)
+		return err;
+	mutex_lock(&cc->charge_lock);
+	err = clevo_cc_charge_read(cc, &window);
+	mutex_unlock(&cc->charge_lock);
+	if (err) {
+		kfree(name.pointer);
+		return err;
+	}
+	n = sysfs_emit(buf, "battery=%s\nenabled=%u\nstart=%u\nend=%u\nstart_values=", (char *)name.pointer,
+		       window.enabled, window.start, window.end);
+	kfree(name.pointer);
+	for (i = 0; i < CLEVO_CHARGE_VALUES_LEN && window.start_values[i]; i++)
+		n += sysfs_emit_at(buf, n, "%s%u", i ? " " : "", window.start_values[i]);
+	n += sysfs_emit_at(buf, n, "\nend_values=");
+	for (i = 0; i < CLEVO_CHARGE_VALUES_LEN && window.end_values[i]; i++)
+		n += sysfs_emit_at(buf, n, "%s%u", i ? " " : "", window.end_values[i]);
+	return n + sysfs_emit_at(buf, n, "\n");
+}
+
+static ssize_t flexicharger_store(struct device *dev, struct device_attribute *attr,
+				  const char *buf, size_t count)
+{
+	struct clevo_cc *cc = dev_get_drvdata(dev);
+	struct acpi_buffer name = { ACPI_ALLOCATE_BUFFER, NULL };
+	unsigned int enabled, start, end;
+	char **words;
+	int err, argc;
+
+	words = argv_split(GFP_KERNEL, buf, &argc);
+	if (!words)
+		return -ENOMEM;
+	err = -EINVAL;
+	if (argc == 3 && !kstrtouint(words[0], 10, &enabled) &&
+	    !kstrtouint(words[1], 10, &start) && !kstrtouint(words[2], 10, &end))
+		err = 0;
+	argv_free(words);
+	if (err)
+		return err;
+	err = clevo_cc_charge_battery(cc, &name);
+	if (err)
+		return err;
+	kfree(name.pointer);
+	mutex_lock(&cc->charge_lock);
+	err = clevo_cc_charge_set(cc, enabled, start, end);
+	mutex_unlock(&cc->charge_lock);
+	return err ? err : count;
+}
+static DEVICE_ATTR_RW(flexicharger);
+
 static struct attribute *clevo_cc_attrs[] = {
 	&dev_attr_fan_mode.attr,
 	&dev_attr_fan_curve.attr,
 	&dev_attr_perf_mode.attr,
+	&dev_attr_platform_profile_available.attr,
 	&dev_attr_raw_status.attr,
 	&dev_attr_raw_curve.attr,
 	&dev_attr_keyboard_rgb.attr,
 	&dev_attr_capabilities.attr,
+	&dev_attr_flexicharger.attr,
 	NULL
 };
 ATTRIBUTE_GROUPS(clevo_cc);
@@ -1526,6 +1946,7 @@ static int clevo_cc_probe(struct platform_device *pdev)
 	struct acpi_device *adev = ACPI_COMPANION(&pdev->dev);
 	struct clevo_cc *cc;
 	struct device *hwmon;
+	int err;
 	acpi_handle h;
 	acpi_status status;
 
@@ -1537,6 +1958,8 @@ static int clevo_cc_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	cc->adev = adev;
 	mutex_init(&cc->keyboard_lock);
+	mutex_init(&cc->perf_lock);
+	mutex_init(&cc->charge_lock);
 	cc->keyboard_brightness = 100;
 	cc->keyboard_brightness_raw = CLEVO_KB_BRIGHTNESS_MAX;
 	cc->keyboard_mode = "unknown";
@@ -1570,6 +1993,9 @@ static int clevo_cc_probe(struct platform_device *pdev)
 		&pdev->dev, "clevo_cc", cc, &clevo_cc_chip_info, NULL);
 	if (IS_ERR(hwmon))
 		return PTR_ERR(hwmon);
+	err = clevo_cc_profile_register(&pdev->dev, cc);
+	if (err)
+		dev_info(&pdev->dev, "platform profile unavailable: %d\n", err);
 
 	dev_info(&pdev->dev, "clevo-cc fan and RGB15 control registered\n");
 	return 0;

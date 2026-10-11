@@ -14,7 +14,7 @@ use clevo_proto::response::response_first_record;
 use clevo_transport::Transport;
 
 use crate::snapshot::{format_json, format_row, FanSnapshot};
-use crate::{CliError, FanCommand, ProfileCommand};
+use crate::{CliError, FanCommand, PowerCommand, ProfileCommand};
 
 /// Fan mode `121/1` value for automatic control.
 pub const FAN_MODE_AUTO: u8 = 0;
@@ -506,7 +506,178 @@ pub fn run_dbus(
         }
         crate::Commands::Fan(fan) => run_fan_dbus(client, fan, watch, out),
         crate::Commands::Profile(profile) => run_profile_dbus(client, profile, out),
+        crate::Commands::Power(power) => {
+            let snapshot = client.power()?;
+            match power {
+                PowerCommand::Status { json } => print_power(&snapshot, *json, out),
+                PowerCommand::SetThresholds {
+                    battery,
+                    start,
+                    end,
+                    enabled,
+                    apply,
+                } => {
+                    let target = snapshot
+                        .batteries
+                        .iter()
+                        .find(|item| &item.name == battery)
+                        .ok_or_else(|| {
+                            CliError::Invalid(format!("battery {battery:?} not found"))
+                        })?;
+                    if !target.end_supported || (start.is_some() && !target.start_supported) {
+                        return Err(CliError::Invalid(
+                            "current driver does not provide charging threshold control".into(),
+                        ));
+                    }
+                    if !target.present
+                        || target.thresholds.is_none()
+                        || (target.start_supported && target.thresholds.unwrap().start.is_none())
+                    {
+                        return Err(CliError::Invalid(
+                            "battery or current charge thresholds are unavailable".into(),
+                        ));
+                    }
+                    let requested = clevod::power::ChargeThresholds {
+                        enabled: *enabled,
+                        start: start.or(target.thresholds.and_then(|value| value.start)),
+                        end: *end,
+                    };
+                    clevod::power::validate_thresholds(requested).map_err(CliError::Invalid)?;
+                    if let Some(native) = &target.charge_control {
+                        if !requested
+                            .start
+                            .is_some_and(|start| native.start_values.contains(&start))
+                            || !native.end_values.contains(end)
+                        {
+                            return Err(CliError::Invalid(format!(
+                                "firmware allows start={:?}, end={:?}",
+                                native.start_values, native.end_values
+                            )));
+                        }
+                    } else if enabled.is_some() {
+                        return Err(CliError::Invalid(
+                            "enable state is only supported by FlexiCharger".into(),
+                        ));
+                    }
+                    if !apply {
+                        writeln!(out, "dry run: would set {battery} charge thresholds start={:?}, end={end}, enabled={:?}; pass --apply", requested.start, enabled.or(target.charge_control.as_ref().map(|_| true)))?;
+                    } else {
+                        let applied = client.set_charge_window(battery, *start, *end, *enabled)?;
+                        writeln!(
+                            out,
+                            "set {battery} charge thresholds: start={:?}, end={}, enabled={:?}",
+                            applied.start, applied.end, applied.enabled
+                        )?;
+                    }
+                    Ok(())
+                }
+            }
+        }
     }
+}
+
+/// Read standard power interfaces directly; charge writes are D-Bus-only.
+pub fn run_power(
+    transport: &dyn Transport,
+    command: &PowerCommand,
+    out: &mut dyn Write,
+) -> Result<(), CliError> {
+    match command {
+        PowerCommand::Status { json } => {
+            let snapshot = if transport.kind() == clevo_transport::TransportKind::Mock {
+                clevod::power::PowerSnapshot::default()
+            } else {
+                clevod::power::Power::system().snapshot()
+            };
+            print_power(&snapshot, *json, out)
+        }
+        PowerCommand::SetThresholds { .. } => Err(CliError::Invalid(
+            "use --transport dbus for authorized charge threshold changes".into(),
+        )),
+    }
+}
+
+fn print_power(
+    snapshot: &clevod::power::PowerSnapshot,
+    json: bool,
+    out: &mut dyn Write,
+) -> Result<(), CliError> {
+    if json {
+        serde_json::to_writer_pretty(&mut *out, snapshot).map_err(io::Error::other)?;
+        writeln!(out)?;
+        return Ok(());
+    }
+    writeln!(
+        out,
+        "power backend: {}",
+        if snapshot.available {
+            "Linux power_supply"
+        } else {
+            "unavailable (mock)"
+        }
+    )?;
+    writeln!(
+        out,
+        "AC online: {}",
+        snapshot
+            .ac_online
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unknown".into())
+    )?;
+    for battery in &snapshot.batteries {
+        writeln!(
+            out,
+            "{}: present={}, charge={}, status={}, health={}, cycles={}",
+            battery.name,
+            battery.present,
+            battery
+                .capacity
+                .map(|value| format!("{value}%"))
+                .unwrap_or_else(|| "unknown".into()),
+            battery.status.as_deref().unwrap_or("unknown"),
+            battery
+                .health_percent
+                .map(|value| format!("{value:.1}%"))
+                .unwrap_or_else(|| battery.health.clone().unwrap_or_else(|| "unknown".into())),
+            battery
+                .cycle_count
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unknown".into())
+        )?;
+        writeln!(
+            out,
+            "  charge thresholds: {:?} (start supported={}, end supported={})",
+            battery.thresholds, battery.start_supported, battery.end_supported
+        )?;
+        if let Some(native) = &battery.charge_control {
+            writeln!(
+                out,
+                "  charge control: {}; allowed start={:?}, end={:?}",
+                native.backend, native.start_values, native.end_values
+            )?;
+        }
+        for error in &battery.errors {
+            writeln!(out, "  error: {error}")?;
+        }
+    }
+    writeln!(
+        out,
+        "platform profile: {}; choices={:?}; driver={:?}",
+        snapshot
+            .platform_profile
+            .current
+            .as_deref()
+            .unwrap_or("unknown"),
+        snapshot.platform_profile.choices,
+        snapshot.platform_profile.driver
+    )?;
+    if let Some(reason) = &snapshot.platform_profile.reason {
+        writeln!(out, "  {reason}")?;
+    }
+    for error in &snapshot.errors {
+        writeln!(out, "error: {error}")?;
+    }
+    Ok(())
 }
 
 fn run_fan_dbus(

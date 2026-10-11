@@ -204,6 +204,53 @@ impl DaemonClient {
     }
 
     /// Set the performance mode by name.
+    pub fn power(&self) -> Result<clevo_proto::power::PowerSnapshot, UiError> {
+        let json: String = self
+            .proxy()?
+            .call_method("GetPower", &())?
+            .body()
+            .deserialize()
+            .map_err(|error| UiError {
+                message: error.to_string(),
+            })?;
+        Ok(serde_json::from_str(&json)?)
+    }
+
+    /// Apply and verify standard battery charge thresholds through PolicyKit.
+    pub fn set_charge_thresholds(
+        &self,
+        battery: &str,
+        start: Option<u8>,
+        end: u8,
+    ) -> Result<clevo_proto::power::ChargeThresholds, UiError> {
+        self.set_charge_window(battery, start, end, None)
+    }
+
+    /// Preserve the older threshold API for standard controls.
+    pub fn set_charge_window(
+        &self,
+        battery: &str,
+        start: Option<u8>,
+        end: u8,
+        enabled: Option<bool>,
+    ) -> Result<clevo_proto::power::ChargeThresholds, UiError> {
+        let proxy = self.proxy()?;
+        let reply = match enabled {
+            Some(enabled) => proxy.call_method(
+                "SetChargeWindow",
+                &(battery, start.unwrap_or(255), end, enabled),
+            )?,
+            None => {
+                proxy.call_method("SetChargeThresholds", &(battery, start.unwrap_or(255), end))?
+            }
+        };
+        let json: String = reply.body().deserialize().map_err(|error| UiError {
+            message: error.to_string(),
+        })?;
+        Ok(serde_json::from_str(&json)?)
+    }
+
+    /// Set the performance mode by name.
     pub fn set_perf_mode(&self, mode: &str) -> Result<u8, UiError> {
         let reply = self.proxy()?.call_method("SetPerfMode", &(mode,))?;
         reply.body().deserialize().map_err(|e| UiError {

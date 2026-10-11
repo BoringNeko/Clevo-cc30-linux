@@ -20,6 +20,137 @@ use clevod::{Service, DBUS_INTERFACE, DBUS_NAME, DBUS_PATH};
 
 const FIXTURE: &str = include_str!("fixtures/test.fixture");
 
+#[tokio::test]
+async fn standard_charge_thresholds_read_write_and_authorization() {
+    if no_session_bus() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("clevo-dbus-power-{}", std::process::id()));
+    let battery = dir.join("sys/class/power_supply/BAT0");
+    std::fs::create_dir_all(&battery).unwrap();
+    for (attr, text) in [
+        ("type", "Battery\n"),
+        ("capacity", "72\n"),
+        ("charge_control_start_threshold", "40\n"),
+        ("charge_control_end_threshold", "80\n"),
+    ] {
+        std::fs::write(battery.join(attr), text).unwrap();
+    }
+    let path = dir.join("clevod.toml");
+    let service = Arc::new(
+        Service::new(Box::new(MockTransport::from_fixture_str(FIXTURE).unwrap()))
+            .with_power(clevod::power::Power::with_sysfs(dir.join("sys")))
+            .with_config_path(Some(path.clone())),
+    );
+    let _server = zbus::connection::Builder::session()
+        .unwrap()
+        .name("org.clevo.CC.power")
+        .unwrap()
+        .serve_at(
+            DBUS_PATH,
+            CcDaemon::with_authorizer(service.clone(), Arc::new(AllowAll)),
+        )
+        .unwrap()
+        .build()
+        .await
+        .unwrap();
+    let proxy = proxy("org.clevo.CC.power").await;
+    let json: String = proxy.call("GetPower", &()).await.unwrap();
+    let power: clevod::power::PowerSnapshot = serde_json::from_str(&json).unwrap();
+    assert_eq!(power.batteries[0].capacity, Some(72));
+    let json: String = proxy
+        .call("SetChargeThresholds", &("BAT0", 50u8, 90u8))
+        .await
+        .unwrap();
+    let applied: clevod::power::ChargeThresholds = serde_json::from_str(&json).unwrap();
+    assert_eq!(applied.start, Some(50));
+    assert_eq!(
+        clevod::config::load(&path).unwrap().charge_thresholds["BAT0"],
+        applied
+    );
+    let invalid = proxy
+        .call_method("SetChargeThresholds", &("BAT0", 95u8, 90u8))
+        .await
+        .unwrap_err();
+    assert!(invalid.to_string().contains("InvalidArgs"));
+    let unsupported = dir.join("sys/class/power_supply/BAT1");
+    std::fs::create_dir_all(&unsupported).unwrap();
+    std::fs::write(unsupported.join("type"), "Battery\n").unwrap();
+    let unsupported_error = proxy
+        .call_method("SetChargeThresholds", &("BAT1", 255u8, 80u8))
+        .await
+        .unwrap_err();
+    assert!(unsupported_error.to_string().contains("NotSupported"));
+    let _denied = zbus::connection::Builder::session()
+        .unwrap()
+        .name("org.clevo.CC.powerDenied")
+        .unwrap()
+        .serve_at(
+            DBUS_PATH,
+            CcDaemon::with_authorizer(service, Arc::new(DenyAll)),
+        )
+        .unwrap()
+        .build()
+        .await
+        .unwrap();
+    let denied = self::proxy("org.clevo.CC.powerDenied").await;
+    assert!(denied.call_method("GetPower", &()).await.is_ok());
+    let error = denied
+        .call_method("SetChargeThresholds", &("BAT0", 40u8, 80u8))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("AccessDenied"));
+    let error = denied
+        .call_method("SetChargeWindow", &("BAT0", 40u8, 80u8, false))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("AccessDenied"));
+    assert_eq!(
+        std::fs::read_to_string(battery.join("charge_control_end_threshold"))
+            .unwrap()
+            .trim(),
+        "90"
+    );
+    let error = proxy
+        .call_method("SetChargeWindow", &("BAT0", 40u8, 80u8, true))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("NotSupported"));
+    std::fs::remove_file(battery.join("charge_control_start_threshold")).unwrap();
+    std::fs::remove_file(battery.join("charge_control_end_threshold")).unwrap();
+    std::fs::create_dir_all(battery.join("device")).unwrap();
+    std::fs::write(battery.join("device/path"), "\\_SB_.BAT0\n").unwrap();
+    let control = dir.join("sys/devices/platform/CLV0001:00/flexicharger");
+    std::fs::create_dir_all(control.parent().unwrap()).unwrap();
+    let native = "battery=\\_SB_.BAT0\nenabled=0\nstart=95\nend=100\nstart_values=40 50 60 70 80 95\nend_values=60 70 80 90 100\n";
+    std::fs::write(&control, native).unwrap();
+    let json: String = proxy.call("GetPower", &()).await.unwrap();
+    let power: clevod::power::PowerSnapshot = serde_json::from_str(&json).unwrap();
+    assert!(power.batteries[0].charge_control.is_some());
+    let json: String = proxy
+        .call("SetChargeWindow", &("BAT0", 95u8, 100u8, false))
+        .await
+        .unwrap();
+    let applied: clevod::power::ChargeThresholds = serde_json::from_str(&json).unwrap();
+    assert_eq!(applied.enabled, Some(false));
+    assert_eq!(
+        clevod::config::load(&path).unwrap().charge_thresholds["BAT0"],
+        applied
+    );
+    let error = proxy
+        .call_method("SetChargeWindow", &("BAT0", 41u8, 80u8, true))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("InvalidArgs"));
+    let error = denied
+        .call_method("SetChargeWindow", &("BAT0", 40u8, 80u8, true))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("AccessDenied"));
+    assert_eq!(std::fs::read_to_string(control).unwrap(), native);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 fn service() -> Arc<Service> {
     let mock = MockTransport::from_fixture_str(FIXTURE).expect("fixture");
     Arc::new(Service::new(Box::new(mock)))

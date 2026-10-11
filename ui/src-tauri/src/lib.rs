@@ -50,6 +50,8 @@ pub fn run() {
     }
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
+            commands::tauri_commands::get_power,
+            commands::tauri_commands::set_charge_thresholds,
             commands::tauri_commands::get_fan_snapshot,
             commands::tauri_commands::poll_fan,
             commands::tauri_commands::get_hardware_usage,

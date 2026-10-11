@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use clevo_cc_cli::{commands, CliError, Commands, FanCommand, ProfileCommand};
+use clevo_cc_cli::{commands, CliError, Commands, FanCommand, PowerCommand, ProfileCommand};
 use clevo_transport::MockTransport;
 use clevod::dbus::CcDaemon;
 use clevod::policy::AllowAll;
@@ -32,7 +32,11 @@ fn host_client(name: &str) -> clevo_cc_cli::dbus::DbusClient {
 
 fn host_client_with_fixture(name: &str, fixture: &str) -> clevo_cc_cli::dbus::DbusClient {
     let mock = MockTransport::from_fixture_str(fixture).expect("fixture");
-    let service = Arc::new(Service::new(Box::new(mock)));
+    host_service(name, Service::new(Box::new(mock)))
+}
+
+fn host_service(name: &str, service: Service) -> clevo_cc_cli::dbus::DbusClient {
+    let service = Arc::new(service);
 
     // The blocking test owns its own runtime for the server side.
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -237,4 +241,109 @@ fn doctor_reports_missing_service_without_activation() {
         .iter()
         .any(|check| check["id"] == "dbus.service" && check["status"] == "fail"));
     assert!(client.diagnostic_service().unwrap().is_none());
+}
+
+#[test]
+fn power_reads_validates_and_applies_only_explicit_charge_changes() {
+    if no_session_bus() {
+        return;
+    }
+    struct Tree(std::path::PathBuf);
+    impl Drop for Tree {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+    let tree = Tree(std::env::temp_dir().join(format!("clevo-cli-power-{}", std::process::id())));
+    std::fs::create_dir(&tree.0).unwrap();
+    let battery = tree.0.join("class/power_supply/BAT0");
+    std::fs::create_dir_all(&battery).unwrap();
+    std::fs::write(battery.join("type"), "Battery\n").unwrap();
+    std::fs::write(battery.join("capacity"), "67\n").unwrap();
+    std::fs::write(battery.join("charge_control_end_threshold"), "100\n").unwrap();
+    let client = host_service(
+        "org.clevo.CC.cli.power",
+        Service::new(Box::new(MockTransport::from_fixture_str(FIXTURE).unwrap()))
+            .with_power(clevod::power::Power::with_sysfs(&tree.0)),
+    );
+    let (result, out) = run(
+        &client,
+        &Commands::Power(PowerCommand::Status { json: true }),
+    );
+    result.unwrap();
+    let snapshot: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(snapshot["batteries"][0]["capacity"], 67);
+    for apply in [false, true] {
+        let (result, out) = run(
+            &client,
+            &Commands::Power(PowerCommand::SetThresholds {
+                enabled: None,
+                battery: "BAT0".into(),
+                start: None,
+                end: 80,
+                apply,
+            }),
+        );
+        result.unwrap();
+        assert_eq!(out.contains("dry run"), !apply);
+        assert_eq!(
+            std::fs::read_to_string(battery.join("charge_control_end_threshold"))
+                .unwrap()
+                .trim(),
+            if apply { "80" } else { "100" }
+        );
+    }
+    for (name, start, end) in [
+        ("BAT0", Some(40), 80),
+        ("BAT0", None, 101),
+        ("../BAT0", None, 80),
+    ] {
+        let (result, _) = run(
+            &client,
+            &Commands::Power(PowerCommand::SetThresholds {
+                enabled: None,
+                battery: name.into(),
+                start,
+                end,
+                apply: true,
+            }),
+        );
+        assert!(result.is_err());
+        assert_eq!(
+            std::fs::read_to_string(battery.join("charge_control_end_threshold"))
+                .unwrap()
+                .trim(),
+            "80"
+        );
+    }
+    std::fs::remove_file(battery.join("charge_control_end_threshold")).unwrap();
+    std::fs::create_dir_all(battery.join("device")).unwrap();
+    std::fs::write(battery.join("device/path"), "\\_SB_.BAT0\n").unwrap();
+    let control = tree.0.join("devices/platform/CLV0001:00/flexicharger");
+    std::fs::create_dir_all(control.parent().unwrap()).unwrap();
+    let original = "battery=\\_SB_.BAT0\nenabled=0\nstart=95\nend=100\nstart_values=40 50 60 70 80 95\nend_values=60 70 80 90 100\n";
+    std::fs::write(&control, original).unwrap();
+    for (start, end, enabled, apply, succeeds) in [
+        (40, 80, Some(true), false, true),
+        (40, 80, None, false, true),
+        (41, 80, Some(true), false, false),
+        (40, 85, Some(true), false, false),
+        (95, 100, Some(false), true, true),
+    ] {
+        let (result, out) = run(
+            &client,
+            &Commands::Power(PowerCommand::SetThresholds {
+                battery: "BAT0".into(),
+                start: Some(start),
+                end,
+                enabled,
+                apply,
+            }),
+        );
+        assert_eq!(result.is_ok(), succeeds, "{out}");
+        if succeeds && !apply {
+            assert!(out.contains("enabled=Some(true)"));
+        }
+        assert_eq!(std::fs::read_to_string(&control).unwrap(), original);
+    }
 }

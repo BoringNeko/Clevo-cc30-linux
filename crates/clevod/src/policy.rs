@@ -30,6 +30,8 @@ pub const ACTION_PERF_MODE: &str = "org.clevo.CC.set-perf-mode";
 pub const ACTION_FAN_CURVE: &str = "org.clevo.CC.set-fan-curve";
 /// PolicyKit action for keyboard RGB writes.
 pub const ACTION_KEYBOARD: &str = "org.clevo.CC.set-keyboard";
+/// PolicyKit action for standard battery charge thresholds.
+pub const ACTION_CHARGE_THRESHOLDS: &str = "org.clevo.CC.set-charge-thresholds";
 
 /// Identity of the process requesting a write.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

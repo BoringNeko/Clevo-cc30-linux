@@ -59,6 +59,7 @@ fn run(
         }
         Commands::Fan(fan) => commands::run_fan(transport, fan, out),
         Commands::Profile(profile) => commands::run_profile(transport, profile, out),
+        Commands::Power(power) => commands::run_power(transport, power, out),
     }
 }
 

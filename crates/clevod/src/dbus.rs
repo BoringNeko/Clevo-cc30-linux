@@ -153,6 +153,67 @@ pub async fn serve(connection: &zbus::Connection, daemon: CcDaemon) -> zbus::Res
 
 #[interface(name = "org.clevo.CC")]
 impl CcDaemon {
+    /// Return battery and desktop power-profile information independently of EC polling.
+    async fn get_power(&self) -> zbus::fdo::Result<String> {
+        serde_json::to_string(&self.service.power_snapshot())
+            .map_err(|error| zbus::fdo::Error::Failed(error.to_string()))
+    }
+
+    /// Set and verify battery thresholds. 255 preserves the start threshold.
+    async fn set_charge_thresholds(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(signal_context)] emitter: SignalEmitter<'_>,
+        battery: &str,
+        start: u8,
+        end: u8,
+    ) -> zbus::fdo::Result<String> {
+        self.require(header.sender(), &emitter, policy::ACTION_CHARGE_THRESHOLDS)
+            .await?;
+        let thresholds = self
+            .service
+            .set_charge_thresholds(battery, (start != 255).then_some(start), end)
+            .map_err(|error| match error {
+                crate::service::ServiceError::Unsupported(message) => {
+                    zbus::fdo::Error::NotSupported(message)
+                }
+                crate::service::ServiceError::Protocol(message) => {
+                    zbus::fdo::Error::InvalidArgs(message)
+                }
+                other => zbus::fdo::Error::Failed(other.to_string()),
+            })?;
+        serde_json::to_string(&thresholds)
+            .map_err(|error| zbus::fdo::Error::Failed(error.to_string()))
+    }
+
+    /// Atomically change FlexiCharger enable state and its charge window.
+    async fn set_charge_window(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(signal_context)] emitter: SignalEmitter<'_>,
+        battery: &str,
+        start: u8,
+        end: u8,
+        enabled: bool,
+    ) -> zbus::fdo::Result<String> {
+        self.require(header.sender(), &emitter, policy::ACTION_CHARGE_THRESHOLDS)
+            .await?;
+        let thresholds = self
+            .service
+            .set_charge_window(battery, (start != 255).then_some(start), end, Some(enabled))
+            .map_err(|error| match error {
+                crate::service::ServiceError::Unsupported(message) => {
+                    zbus::fdo::Error::NotSupported(message)
+                }
+                crate::service::ServiceError::Protocol(message) => {
+                    zbus::fdo::Error::InvalidArgs(message)
+                }
+                other => zbus::fdo::Error::Failed(other.to_string()),
+            })?;
+        serde_json::to_string(&thresholds)
+            .map_err(|error| zbus::fdo::Error::Failed(error.to_string()))
+    }
+
     /// Return capabilities as JSON, including their source and raw GCMD values.
     async fn get_capabilities(&self) -> zbus::fdo::Result<String> {
         let caps = self

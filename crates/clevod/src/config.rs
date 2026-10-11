@@ -21,9 +21,8 @@ use serde::{Deserialize, Serialize};
 
 /// Current on-disk schema version.
 ///
-/// Version 6 is retained so existing files that contained the removed RGB15
-/// effect-speed field continue to migrate cleanly; unknown fields are ignored.
-pub const SCHEMA_VERSION: u32 = 6;
+/// Version 7 adds standard battery charge thresholds, keyed by power_supply name.
+pub const SCHEMA_VERSION: u32 = 7;
 
 /// A fan-curve point in the versioned configuration file.
 ///
@@ -201,6 +200,9 @@ pub struct Config {
     /// Whether to re-apply the saved modes on daemon startup.
     #[serde(default = "default_true")]
     pub apply_on_start: bool,
+    /// Confirmed battery thresholds and optional native enable state, restored on startup.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub charge_thresholds: std::collections::BTreeMap<String, crate::power::ChargeThresholds>,
 }
 
 /// Parse a configured TDP class string.
@@ -269,6 +271,7 @@ impl Default for Config {
             keyboard: None,
             cpu_tdp_class: None,
             apply_on_start: true,
+            charge_thresholds: Default::default(),
         }
     }
 }
@@ -412,6 +415,14 @@ mod tests {
             }),
             cpu_tdp_class: Some("47W".to_string()),
             apply_on_start: true,
+            charge_thresholds: std::collections::BTreeMap::from([(
+                "BAT0".into(),
+                crate::power::ChargeThresholds {
+                    enabled: None,
+                    start: Some(40),
+                    end: 80,
+                },
+            )]),
         };
         let text = to_toml(&config).unwrap();
         let parsed = parse(&text).unwrap();

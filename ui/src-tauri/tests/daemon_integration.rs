@@ -17,6 +17,59 @@ use clevod::Service;
 
 const FIXTURE: &str = include_str!("../../../crates/clevod/tests/fixtures/test.fixture");
 
+#[test]
+fn power_and_charge_thresholds_round_trip_through_daemon() {
+    if no_session_bus() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("clevo-ui-power-{}", std::process::id()));
+    let battery = dir.join("class/power_supply/BAT0");
+    std::fs::create_dir_all(&battery).unwrap();
+    for (attr, text) in [
+        ("type", "Battery\n"),
+        ("capacity", "72\n"),
+        ("charge_control_end_threshold", "100\n"),
+    ] {
+        std::fs::write(battery.join(attr), text).unwrap();
+    }
+    let service = Arc::new(
+        Service::new(Box::new(MockTransport::from_fixture_str(FIXTURE).unwrap()))
+            .with_power(clevod::power::Power::with_sysfs(&dir)),
+    );
+    start_daemon_with_service("org.clevo.CC.uiPower", service, Arc::new(AllowAll));
+    let client = DaemonClient::session_with_name("org.clevo.CC.uiPower").unwrap();
+    assert_eq!(client.power().unwrap().batteries[0].capacity, Some(72));
+    assert_eq!(
+        client.set_charge_thresholds("BAT0", None, 80).unwrap().end,
+        80
+    );
+    assert_eq!(
+        client.power().unwrap().batteries[0].thresholds.unwrap().end,
+        80
+    );
+    assert!(client.set_charge_thresholds("BAT0", Some(40), 80).is_err());
+    assert!(client
+        .set_charge_window("BAT0", None, 80, Some(false))
+        .is_err());
+    std::fs::remove_file(battery.join("charge_control_end_threshold")).unwrap();
+    std::fs::create_dir_all(battery.join("device")).unwrap();
+    std::fs::write(battery.join("device/path"), "\\_SB_.BAT0\n").unwrap();
+    let control = dir.join("devices/platform/CLV0001:00/flexicharger");
+    std::fs::create_dir_all(control.parent().unwrap()).unwrap();
+    std::fs::write(control, "battery=\\_SB_.BAT0\nenabled=0\nstart=95\nend=100\nstart_values=40 50 60 70 80 95\nend_values=60 70 80 90 100\n").unwrap();
+    assert!(client.power().unwrap().batteries[0]
+        .charge_control
+        .is_some());
+    assert_eq!(
+        client
+            .set_charge_window("BAT0", Some(95), 100, Some(false))
+            .unwrap()
+            .enabled,
+        Some(false)
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 fn no_session_bus() -> bool {
     if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none() {
         eprintln!("skipping: no session bus; run under `dbus-run-session -- cargo test`");
