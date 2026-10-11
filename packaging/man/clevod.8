@@ -1,6 +1,6 @@
-.TH CLEVOD 8 "2026-10-11" "clevo-cc-linux 0.2.1" "System Administration"
+.TH CLEVOD 8 "2026-10-11" "clevo-cc-linux 0.2.2" "System Administration"
 .SH NAME
-clevod \- privileged Clevo control-center daemon (fan and performance mode)
+clevod \- privileged Clevo fan, keyboard and battery control daemon
 .SH SYNOPSIS
 .B clevod
 [\fB\-\-driver\fR]
@@ -11,14 +11,14 @@ clevod \- privileged Clevo control-center daemon (fan and performance mode)
 [\fB\-\-session\-bus\fR]
 .SH DESCRIPTION
 .B clevod
-is the only long-lived process that talks to the Clevo DCHU fan controller. It
-polls the embedded controller, caches the last reading with an explicit
+controls the Clevo DCHU fan controller, keyboard lighting and battery charging
+interfaces. It polls the embedded controller, caches the last reading with an explicit
 freshness state
 .RI ( fresh / stale / unknown ),
 persists user choices in a versioned TOML file, and serves
 .B org.clevo.CC
-on the system D\-Bus. The CLI and the graphical UI are clients and never touch
-hardware directly.
+on the system D\-Bus. The graphical UI and the CLI's dbus transport are clients;
+the CLI also offers direct driver and read-only acpi-call transports.
 .PP
 Reads are open to any local user. The write methods
 .BR SetFanMode (),
@@ -36,7 +36,8 @@ Use the
 kernel driver sysfs/hwmon backend (read and write). This is the enabled write
 path. Without it the daemon uses the read-only
 .B acpi_call
-backend.
+backend for fan control. Standard power-supply interfaces remain available
+independently of the fan transport.
 .TP
 .BI \-\-mock " Fixture"
 Replay a recorded fixture instead of touching hardware; never writes.
@@ -76,30 +77,40 @@ the EC still holds the daemon's own curve) is deliberately not captured.
 .PP
 Power methods:
 .B GetPower
-reads standard battery and platform-profile information as JSON independently
-of fan polling.
+reads battery, standard or native charge-window and platform-profile information
+as JSON independently of fan polling. Missing readings remain unknown.
 .B SetChargeThresholds
 takes a battery name, start and end percentages; start=255 preserves an
 existing start threshold. It requires
 .B org.clevo.CC.set\-charge\-thresholds
 authorization, checks readback and attempts restoration on failure.
 Unsupported devices return NotSupported and invalid windows return InvalidArgs.
+.PP
+.B SetChargeWindow
+takes the battery name, start byte, end byte and enabled boolean, using the same
+PolicyKit action as SetChargeThresholds. Native FlexiCharger is bound to the
+matching ACPI battery path and validates firmware-advertised discrete percentages.
+Disabling retains the window. Standard threshold interfaces reject the native
+enabled option. Successful readback confirms the saved firmware variables;
+actual charging stop/restart behavior requires a complete charge-cycle test.
+.PP
 Desktop profile transitions are observed by the background poll and persisted;
-using --no-poll disables this automatic synchronization.
+using
+.B \-\-no\-poll
+disables this automatic synchronization. UI/CLI only change the clevo-cc provider;
+desktop integration also depends on an available desktop power service.
 .SH FILES
 .TP
 .I /etc/clevo-cc/clevod.toml
-Versioned daemon configuration (schema v7). The fan mode, performance mode and
-the custom fan curve are saved after every successful write and re-applied on
-startup; the curve is written before the
+Versioned daemon configuration (schema v7). Fan mode, performance mode, keyboard
+settings and the custom fan curve are saved after successful writes. When
+.B apply_on_start
+is true, saved settings are re-applied on startup; the curve is written before the
 .BR custom
 mode is selected.
 Successful charge thresholds are stored per battery in charge_thresholds,
 including the optional native enabled state, and restored when apply_on_start
-is true. SetChargeWindow takes
-the battery name, start byte, end byte and enabled boolean, using the same
-PolicyKit action as SetChargeThresholds. Native control is bound to the ACPI
-battery path and validates the firmware-advertised discrete percentages.
+is true. Failed writes do not replace the saved threshold configuration.
 .SH SEE ALSO
 .BR clevo-cc (1),
 .BR systemctl (1),

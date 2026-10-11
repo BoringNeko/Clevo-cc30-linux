@@ -122,6 +122,11 @@ dkms install -m clevo-cc -v %{version} >/dev/null 2>&1 || :
 /usr/src/clevo-cc-%{version}
 
 %changelog
+* Sun Oct 11 2026 BoringNeko <noreply@github.com> - 0.2.2-1
+- Restore capabilities and profile listing through GCMD
+- Add battery status, charge thresholds and desktop power modes
+- Add tray-only UI login autostart and read-only doctor diagnostics
+
 * Sun Oct 04 2026 BoringNeko <noreply@github.com> - 0.2.1-1
 - Keep keyboard lighting to off/static and remove audio-driven animations
 - Replace the keyboard drawing with a static color preview

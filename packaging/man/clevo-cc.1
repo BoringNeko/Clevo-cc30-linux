@@ -1,6 +1,6 @@
-.TH CLEVO-CC 1 "2026-10-11" "clevo-cc-linux 0.2.1" "User Commands"
+.TH CLEVO-CC 1 "2026-10-11" "clevo-cc-linux 0.2.2" "User Commands"
 .SH NAME
-clevo-cc \- command-line client for the Clevo fan and performance controls
+clevo-cc \- command-line client for Clevo fan, performance and battery controls
 .SH SYNOPSIS
 .B clevo-cc
 [\fB\-\-transport\fR \fImock|driver|acpi-call|dbus\fR]
@@ -8,7 +8,8 @@ clevo-cc \- command-line client for the Clevo fan and performance controls
 \fISubcommand\fR [\fIOptions\fR]
 .SH DESCRIPTION
 .B clevo-cc
-reads fan status, the fan curve and the current modes. It is dry-run by default:
+reads fan status, fan curves, capabilities and power information.
+It is dry-run by default:
 every write needs
 .B \-\-apply
 and, when talking to
@@ -17,8 +18,7 @@ a PolicyKit authorization.
 .SH TRANSPORTS
 .TP
 .B mock
-(default with
-.BR \-\-fixture )
+(default)
 Replay a fixture; never touches hardware.
 .TP
 .B acpi-call
@@ -29,6 +29,7 @@ Rejects every write before any I/O.
 .B driver
 Read the clevo-cc kernel driver's sysfs/hwmon interface directly.
 Direct writes require appropriate file permissions.
+Charging-limit writes require the dbus transport.
 .TP
 .B dbus
 Talk to
@@ -45,6 +46,9 @@ sudo clevo\-cc \-\-transport acpi\-call fan watch \-\-interval\-ms 1000
 clevo\-cc \-\-transport dbus fan status
 clevo\-cc \-\-transport dbus fan set\-mode max \-\-apply
 clevo\-cc \-\-transport dbus fan set\-curve \-\-cpu "40,20 60,40 80,70 100,100" \-\-apply
+clevo\-cc \-\-transport dbus power status \-\-json
+clevo\-cc \-\-transport dbus power set\-thresholds BAT0 \-\-start 40 \-\-end 80 \-\-enabled true
+clevo\-cc \-\-transport dbus power set\-thresholds BAT0 \-\-start 40 \-\-end 80 \-\-enabled true \-\-apply
 .fi
 .SH DIAGNOSTICS
 .B doctor
@@ -67,19 +71,27 @@ Doctor exits 1 if any check fails, or 0 when only passes, warnings and skips rem
 .PP
 The acpi-call backend sends read-only queries through /proc/acpi/call;
 this writes query requests to the interface but never sends settings commands.
+.PP
+Doctor checks standard charging nodes and legacy platform-profile paths. Their
+absence does not rule out native FlexiCharger or a modern platform-profile
+provider. Use
+.B \-\-transport dbus power status \-\-json
+to inspect the daemon's detected backend; doctor does not test charging writes.
 .SH POWER
 .B power status
-reads standard Linux battery and platform-profile interfaces. Add
+reads Linux battery and platform-profile interfaces, including native
+FlexiCharger when available. Add
 .B \-\-json
 for structured output. Missing measurements remain unknown.
 .PP
-.B power set\-thresholds BAT0 \-\-end 80
+.B \-\-transport dbus power set\-thresholds BAT0 \-\-end 80
 validates a charging limit without writing. Add
 .B \-\-start 40
 only when the battery supports a start threshold, and
 .B \-\-apply
 to commit through the dbus transport and PolicyKit. Omitting start preserves
 the existing start threshold. Require 0 <= start < end <= 100.
+For an existing 95/100 window, lowering end to 80 also requires lowering start.
 Native FlexiCharger uses firmware-advertised discrete percentages; add
 .B \-\-enabled true
 or
@@ -88,6 +100,9 @@ to enable or disable its charge window. Standard threshold drivers do not
 accept this option. Disabling preserves the selected window.
 The daemon verifies readback, attempts restoration on failure and persists
 successful settings for startup replay. Unsupported hardware is refused.
+Setting an end limit does not discharge a battery already above it. Kernel
+Not charging and UPower fully-charged can both describe a battery drawing no
+charging current; a plugged-in desktop icon alone is not a charging measurement.
 .PP
 The kernel platform-profile provider maps quiet/low-power/balanced/performance
 to vendor modes 0/1/3/2 respectively. The daemon observes desktop changes and

@@ -45,7 +45,11 @@
 - Electron：`ui/electron/main.cjs`（窗口、托盘、性能模式菜单）
 
 两者都实现相同的外观与交互：自绘标题栏、关闭到托盘、托盘里的性能模式菜单
-（`▶`/`・` 标记当前项）、`customize` 风扇曲线模式。
+（`▶`/`・` 标记当前项）、`customize` 风扇曲线模式及电源与电池页面。
+电源页左侧为外接电源和桌面模式，右侧为电池状态与充电阈值；原生 FlexiCharger
+开关和档位经 daemon 授权保存。两种壳均支持设置中的登录自启动，登录时仅驻留托盘。
+页面说明见 [desktop-ui.md](desktop-ui.md)，充电验收见 [power.md](power.md)，
+自启动路径与壳切换见 [autostart.md](autostart.md)。
 
 产物与文件名：
 

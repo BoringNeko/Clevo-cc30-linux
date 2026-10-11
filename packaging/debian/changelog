@@ -1,3 +1,13 @@
+clevo-cc-linux (0.2.2-1) unstable; urgency=medium
+
+  * Restore capabilities and profile listing through GCMD when AppSettings
+    pages are unavailable.
+  * Add the power and battery page, desktop power mode switching, battery
+    status and charge threshold controls.
+  * Add tray-only UI login autostart and complete read-only doctor diagnostics.
+
+ -- BoringNeko <noreply@github.com>  Sun, 11 Oct 2026 00:00:00 +0800
+
 clevo-cc-linux (0.2.1-1) unstable; urgency=medium
 
   * Restrict keyboard lighting to off and static modes, removing audio-driven

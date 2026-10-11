@@ -305,10 +305,22 @@ all-ones error returns fail discovery. `set_perf_mode` requires successful
 discovery and a supported mode before sending a write or persisting a choice;
 it no longer silently ignores capability-read errors.
 
-GCMD query values have been checked against the stored DSDT and synthetic
-fixtures; live verification requires loading the updated kernel module.
-Older loaded modules without `capabilities` must be upgraded/reloaded, along
-with the daemon providing `GetCapabilities`.
+On 2026-10-11, the updated module returned the following live values:
+
+```text
+122=0x70020053
+96=0x0000021c
+16=0x00000893
+60=0x00000000
+82=0x04680025
+```
+
+Direct sysfs, driver CLI and D-Bus returned matching values; `profile list`
+advertised all four modes. A D-Bus dry run and an applied performance-mode 2
+write both succeeded. Unsupported-mode rejection is covered by offline tests;
+the local firmware advertises all four modes. Older loaded modules without
+`capabilities` must be upgraded/reloaded, along with the daemon providing
+`GetCapabilities`.
 
 ## 10. LIVE READ VERIFICATION (acpi_call, read-only) — SUCCESS
 
@@ -1146,7 +1158,7 @@ USB HID 逐键控制。
 硬件，而不是三区协议失败。按 `docs/install.md` 完成的可逆手测中，静态红色保持
 35 秒未熄灭，说明实时 RGB15 控制和睡眠定时器关闭路径均已验证。
 
-## 15. Battery and desktop power (2026-10-11)
+## 17. Battery and desktop power (2026-10-11)
 
 The standard power_supply read on COLORFUL P15 23 reported BAT0 present,
 capacity 100, status Full, cycle_count 0 and external power online. The matching
@@ -1183,7 +1195,10 @@ The new platform_profile provider uses the verified 121/25 logical values:
 quiet=0, low-power=1, balanced=3, performance=2. Both GCMD gates are checked
 before registering or writing. The real driver compiled against the local
 7.2.9-arch1-1 headers; an extracted-helper firmware mock covers all four mappings,
-unknown initial state, rejected gates and failed writes. Desktop switching and
-notification on the actual machine still require installation of the new module
-and the procedure in [power.md](power.md). These offline checks are not a claim
-of successful hardware profile switching.
+unknown initial state, rejected gates and failed writes. With the new module
+installed, the live power snapshot reports the clevo-cc provider, performance
+and all four choices. The KDE screenshot reports its desktop power service
+unavailable; this does not contradict the kernel provider readback. Desktop
+switching, notification and daemon persistence still require the procedure in
+[power.md](power.md). Provider readback and offline checks are not a claim of
+successful KDE/GNOME profile switching.

@@ -30,7 +30,8 @@
 
 ### 2.1 功能验证状态（COLORFUL P15 23）
 
-逐项在真机上验证过；详细证据与偏移见 `hardware-notes.md`。
+以下区分真机验证、离线测试和待验收项目；截至 2026-10-11，详细证据与偏移见
+[hardware-notes.md](hardware-notes.md)。
 
 | 功能 | 状态 | 验证方式 |
 |---|---|---|
@@ -48,15 +49,19 @@
 | 安装器：旧模块重载 / 陈旧构建重建 / 运行中 UI 替换 | ✅ 已验证 | 真机 `install.sh` + `scripts/tests-install-*.sh` |
 | 内核稳定性（写入路径） | ✅ 已验证 | 无 `BUG`/`Oops`/`usercopy_abort` |
 | 键盘 RGB | ✅ 已验证，单区 RGB | 本机 `kb_type=6` 通过内核 `keyboard_rgb` 节点走命令 103；整块键盘共用一个 RGB 通道，静态红色已实测保持 35 秒不熄灭，EC 有效亮度范围确认是 `0..191`。无该节点时明确显示不可写，`048d:8910` 设备使用 USB HID |
-| 电池状态 | 标准接口已实现 | `power_supply` 容量、状态、健康度、循环次数；缺失字段显示未知 |
-| 标准充电阈值 | 已实现；本机无接口 | 本机未暴露 start/end threshold，写入明确拒绝；支持机型需单独真机验收 |
+| 电池状态 | 真机读取已验证 | BAT0 容量、状态、健康度、循环次数及外接电源可读；缺失字段显示未知 |
+| 标准充电阈值 | 已实现；本机无标准接口 | 本机使用下列原生通道；提供标准 start/end threshold 的其他机型需单独真机验收 |
 | 原生 FlexiCharger | 真机读写已验证 | 4/30、4/31 通道已通过 D-Bus 设置并回读启用 40–80% 窗口；当前未充电；完整充电周期及重启重放待验收。失败恢复已离线验证 |
-| 桌面电源模式 | 已实现，待真机联动验收 | `platform_profile` 驱动编译和四模式映射测试通过；安装后按 `power.md` 验收 |
+| 桌面电源模式 | 内核 provider 读取已验证；桌面联动待验收 | 本机 `clevo-cc` provider 上报 performance 及四种 choices；四模式映射离线测试通过，KDE/GNOME 双向切换仍需按 `power.md` 验收 |
 | 超频 | ❌ 不在二期范围 | 不提供频率或电压写入 |
 
 > 写入相关的语义细节（整表替换、read-modify-write、成功码 `0x14`）见
 > `hardware-notes.md` §7.2；**写入实际存了什么**（只写中间两点、duty 单位、
 > 部分通道）见 §7.4；sysfs 文本格式的读写差异见 §13.4；温度换算与偏移见 §10.4。
+
+电池阈值的完整充电周期、重启恢复及 KDE 状态差异见 [power.md](power.md)。
+桌面 UI 与仅驻留托盘的登录自启动见 [desktop-ui.md](desktop-ui.md) 和
+[autostart.md](autostart.md)；安装排障先运行 `clevo-cc --transport dbus doctor`。
 
 ## 3. 系统依赖（按发行版）
 

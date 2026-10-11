@@ -1,7 +1,7 @@
 name: Release
 
 # Build deb / rpm / AppImage packages and attach them to a GitHub Release when
-# a version tag is pushed (e.g. v0.2.1). Can also be run manually.
+# a version tag is pushed (e.g. v0.2.2). Can also be run manually.
 on:
   push:
     tags:
@@ -107,15 +107,17 @@ jobs:
             dist/*.rpm
             dist/*.AppImage
           body: |
-            > ⚠️ **构建包未经测试，不保证可用。** 仅作方便尝试，请自行评估风险。
+            > **构建包未经完整验收，不保证所有机型可用。** 仅作方便尝试，请自行评估风险。
             > AppImage **仅包含 UI 界面**（不含守护进程与内核驱动）。
 
             ### Fix
-            - 修复可以启动多个客户端
+            - 修复 AppSettings 通道不可用时能力信息缺失的问题
+            - 通过 GCMD 补齐 capabilities 和 profile list 数据。
 
             ### Add
-            - 添加键盘 RGB 灯的颜色与亮度自定义
-
-            ### Note
-            - 因键盘 RGB 灯光效果会导致音频出现问题，暂时进行搁置
+            - 添加电源与电池页面
+            - 添加切换电源模式和查看电池状态
+            - 添加设置充电阈值
+            - 添加 UI 登录自启动
+            - 完善只读 doctor 诊断
           fail_on_unmatched_files: true

@@ -10,8 +10,9 @@
 > D-Bus / PolicyKit / udev / CLI / 写入）。
 
 安装会改动系统（装入内核模块、systemd 单元、D-Bus/PolicyKit/udev 配置）。
-**所有步骤都可以用 `packaging/uninstall.sh` 完整回滚**，且安装时默认不会
-写入硬件、不会自动启用服务（除非显式 `--enable`）。
+安装文件可用 `packaging/uninstall.sh` 卸载。安装器会重启已经运行的 daemon；
+daemon 启动时会按 `apply_on_start` 恢复保存的硬件配置。停止的服务可用 `--enable`
+启用并启动；卸载应用并不等于恢复之前的充电策略。
 
 ---
 
@@ -35,7 +36,8 @@ sudo packaging/install.sh --enable   # 顺带启用并启动 clevod
 
 | 路径 | 内容 |
 |---|---|
-| `/usr/bin/clevod` | 守护进程（唯一的硬件访问者） |
+| `/usr/bin/clevod` | 长期运行的硬件控制与状态缓存服务 |
+| `/usr/bin/clevo-cc` | CLI；推荐用 `--transport dbus` 访问已安装 daemon |
 | `/usr/share/dbus-1/system.d/org.clevo.CC.conf` | D-Bus 策略 |
 | `/usr/share/polkit-1/actions/org.clevo.CC.policy` | 写操作的 PolicyKit 授权 |
 | `/usr/lib/systemd/system/clevod.service` | systemd 单元（使用 `--driver`） |
@@ -49,12 +51,12 @@ sudo packaging/install.sh --enable   # 顺带启用并启动 clevod
 --prefix DIR     安装前缀（默认 /usr）
 --version VER    DKMS 版本号（默认取 Cargo.toml）
 --bin-dir DIR    使用 DIR 里预编译好的 clevod/clevo-cc，跳过 cargo 构建
---no-driver      不装内核驱动（只用只读 acpi_call 回退）
+--no-driver      跳过驱动安装；已有驱动仍可使用，否则风扇控制依赖只读 acpi_call 回退
 --no-udev        不装 udev 规则、不建 clevo-cc 组
 --ui             安装 Tauri 2 桌面 UI（缺失或过期时构建）
 --electron       安装 Electron 桌面 UI（缺失或过期时构建）
 --no-ui-build    配合上面两个，只装已有产物、不构建
---enable         安装后 systemctl enable --now clevod
+--enable         启动停止的服务并启用；已运行的 clevod 无论是否传此项都会重启
 --dry-run        只打印将要执行的操作
 ```
 
@@ -84,7 +86,38 @@ sudo systemctl enable --now clevod
 systemctl status clevod
 # 通过系统 D-Bus 读取（无需 root）：
 clevo-cc --transport dbus fan status
+clevo-cc --transport dbus power status --json
 ```
+
+### 电池、充电阈值与桌面模式
+
+第一次安装这些功能时同时更新驱动、daemon 和 UI：
+
+```bash
+cargo build --release -p clevod -p clevo-cc-cli
+sudo packaging/install.sh --bin-dir target/release --enable --electron
+# Tauri 用户将 --electron 换成 --ui。
+clevo-cc --transport dbus power status --json
+```
+
+COLORFUL P15 23 使用原生 `flexicharger`，初始配置实测为关闭、95–100%。
+其他机器可能使用标准阈值节点，或没有已验证的控制通道。先确认 JSON 中能力，
+本机再按以下方式预览、写入和回读：
+
+```bash
+cat /sys/devices/platform/CLV0001:00/flexicharger
+clevo-cc --transport dbus power set-thresholds BAT0 --start 40 --end 80 --enabled true
+clevo-cc --transport dbus power set-thresholds BAT0 --start 40 --end 80 --enabled true --apply
+cat /sys/devices/platform/CLV0001:00/flexicharger
+```
+
+本机已确认读写 40–80% 窗口；完整充电周期和重启重放仍需验收。省略 start 会
+保留当前开始值，设置停止阈值不会主动降低已有电量。CLI 与 UI 写入需要
+PolicyKit 授权；UI 中修改后需点击「保存」。详细流程与状态差异见 [power.md](power.md)。
+
+桌面模式节点优先为 `/sys/class/platform-profile/*/{name,profile,choices}`，
+旧内核使用 `/sys/firmware/acpi/platform_profile*`。驱动提供节点与 KDE 电源服务
+可用是两回事；KDE 电源方案仍不可用时，按 [power.md](power.md) 检查桌面服务。
 
 ### 键盘 RGB 手动测试（COLORFUL P15 23）
 
@@ -271,7 +304,7 @@ EC 断电即忘（[`hardware-notes.md` §13.3](hardware-notes.md)），是守护
 改过 `kernel/` 或 Rust 代码之后，**必须重装**才会生效：
 
 ```bash
-sudo packaging/install.sh            # DKMS 模块 + clevod/clevo-cc + UI
+sudo packaging/install.sh --enable --electron  # DKMS + daemon/CLI + Electron UI
 cat /sys/module/clevo_cc/srcversion  # 与内核目录下的 .ko 比对
 modinfo -F srcversion kernel/clevo-cc/clevo-cc.ko
 ```
@@ -310,6 +343,17 @@ enable --now` 对已在运行的服务是空操作，换了二进制却不重启
 
 **内核模块与用户态是分开的**：只改 Rust（`clevod` / CLI / UI）时，重装即可，
 `.ko` 未变、`srcversion` 也不会变。
+
+仅升级 daemon/CLI 可跳过驱动和 UI 构建；已有驱动保持加载，安装器重启 daemon：
+
+```bash
+cargo build --release -p clevod -p clevo-cc-cli
+sudo packaging/install.sh --bin-dir target/release --no-driver --enable
+```
+
+配置使用 schema 7，充电阈值按电池名称保存在 `[charge_thresholds.BAT0]`，原生
+开关保存为 `enabled`。已有旧配置按 daemon 迁移规则读取，勿覆盖成空白配置；
+`apply_on_start = false` 可关闭启动恢复。
 
 ### 离线自测（不碰硬件、无需安装）
 
@@ -373,7 +417,7 @@ hwmon 节点设为组可读。**加入该组等同授予写入 EC 的能力，�
 
 UI 有两个可选的壳，**共用同一套前端**：默认 **Tauri 2**，另有 **Electron**。
 两者都只通过 D-Bus 读取/控制，不直接接触硬件。完整说明见
-[`electron.md`](electron.md)。
+[desktop-ui.md](desktop-ui.md)，壳的差异见 [electron.md](electron.md)。
 
 ### 4.1 Tauri 2（默认）
 
@@ -392,7 +436,7 @@ cd .. && sudo packaging/install.sh --ui
 
 ### 4.2 Electron（NVIDIA 驱动推荐）
 
-在 NVIDIA 专有驱动上 WebKitGTK 有启动/退出崩溃（见 `hardware-notes.md` §15），
+在 NVIDIA 专有驱动上 WebKitGTK 有启动/退出崩溃（见 [electron.md](electron.md)），
 此时用 Electron 壳更稳：
 
 ```bash
@@ -404,6 +448,9 @@ cd .. && sudo packaging/install.sh --electron
 ```
 
 Electron 版与 Tauri 版可**同时安装**，二进制名、桌面项、图标互不冲突。
+
+设置中的「登录自启动」属于当前用户，登录时仅驻留托盘；它与 systemd 的
+`clevod` 开机启动独立。路径迁移和壳切换见 [autostart.md](autostart.md)。
 
 > **重复安装是安全的**：安装器会比较 `ui/release/linux-unpacked` 与前端源码
 > （`ui/src`、`ui/electron`、`index.html`、`package.json`）及无壳后端的时间，

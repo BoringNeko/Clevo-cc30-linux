@@ -54,6 +54,20 @@ D-Bus 检查先查询现有名称所有者，并固定到该实例的唯一名�
 它不调用 `Poll`，所以缓存未知或陈旧时会警告；能力读取可能触发只读固件查询。
 acpi_call 为发送只读查询会写入 `/proc/acpi/call` 的请求接口，且不会发送设置命令。
 
+电源检查目前读取标准 `power_supply` 阈值节点和旧式
+`/sys/firmware/acpi/platform_profile*`。它不检查原生 FlexiCharger，也不枚举新式
+`/sys/class/platform-profile` provider；这些标准节点缺失而显示 `Skip`，不能据此
+认定充电控制或桌面模式不可用。查看 daemon 实际发现的后端与当前状态：
+
+```bash
+clevo-cc --transport dbus power status --json
+# 仅在该原生节点存在时：
+cat /sys/devices/platform/CLV0001:00/flexicharger
+```
+
+原生档位、PolicyKit 拒绝、阈值验收及 UI/KDE 状态差异见 [power.md](power.md)。
+doctor 不做写入测试，因此报告通过不等于已验证阈值的实际停止/恢复行为。
+
 ## 结果与退出码
 
 | 状态 | 含义 |
