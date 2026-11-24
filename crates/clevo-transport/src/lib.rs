@@ -59,6 +59,18 @@ pub trait Transport: Send + Sync {
     /// to parse with `clevo-proto`.
     fn execute(&self, command: u32, payload: &[u8; PAYLOAD_BYTES]) -> TransportResult<Vec<u8>>;
 
+    /// Whether the backend exposes rotation periods without a full status read.
+    fn supports_fan_periods(&self) -> bool {
+        false
+    }
+
+    /// Read CPU, GPU1 and GPU2 rotation periods without issuing command 12.
+    fn read_fan_periods(&self) -> TransportResult<[u16; 3]> {
+        Err(TransportError::Unsupported(
+            "direct fan periods unavailable".into(),
+        ))
+    }
+
     /// Read `len` bytes from AppSettings `page` at `offset`.
     fn read_app_settings(&self, page: u8, offset: u16, len: u16) -> TransportResult<Vec<u8>>;
 

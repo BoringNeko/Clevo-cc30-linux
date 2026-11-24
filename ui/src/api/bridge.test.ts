@@ -5,20 +5,23 @@
 // Tauri as the fallback) and the window-control mapping.
 
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { invokeBridge, isElectron, windowBridge } from "./bridge";
+import { invokeBridge, isElectron, isWindowVisible, windowBridge } from "./bridge";
 
 const tauriInvoke = vi.hoisted(() => vi.fn());
+const isTauri = vi.hoisted(() => vi.fn());
 const tauriWindow = vi.hoisted(() => ({
   minimize: vi.fn(),
   setFullscreen: vi.fn(),
   isFullscreen: vi.fn(),
+  isVisible: vi.fn(),
+  isMinimized: vi.fn(),
   setSize: vi.fn(),
   hide: vi.fn(),
   close: vi.fn(),
   onResized: vi.fn(),
 }));
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: tauriInvoke }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: tauriInvoke, isTauri }));
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => tauriWindow,
   LogicalSize: class {
@@ -105,5 +108,44 @@ describe("windowBridge", () => {
     await bridge!.minimize();
     expect(win.minimize).toHaveBeenCalled();
     expect(tauriWindow.minimize).not.toHaveBeenCalled();
+  });
+});
+
+describe("isWindowVisible", () => {
+  let hidden: boolean;
+
+  beforeEach(() => {
+    hidden = false;
+    vi.spyOn(document, "hidden", "get").mockImplementation(() => hidden);
+    isTauri.mockReturnValue(true);
+    tauriWindow.isVisible.mockReset().mockResolvedValue(true);
+    tauriWindow.isMinimized.mockReset().mockResolvedValue(false);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    removeElectron();
+  });
+
+  it("checks native Tauri visibility even when the document is visible", async () => {
+    await expect(isWindowVisible()).resolves.toBe(true);
+    tauriWindow.isMinimized.mockResolvedValue(true);
+    await expect(isWindowVisible()).resolves.toBe(false);
+    tauriWindow.isMinimized.mockResolvedValue(false);
+    tauriWindow.isVisible.mockResolvedValue(false);
+    await expect(isWindowVisible()).resolves.toBe(false);
+  });
+
+  it("uses document visibility in Electron without native Tauri calls", async () => {
+    installElectron();
+    await expect(isWindowVisible()).resolves.toBe(true);
+    hidden = true;
+    await expect(isWindowVisible()).resolves.toBe(false);
+    expect(tauriWindow.isVisible).not.toHaveBeenCalled();
+  });
+
+  it("does not assume the window is visible if the native query fails", async () => {
+    tauriWindow.isVisible.mockRejectedValue(new Error("window unavailable"));
+    await expect(isWindowVisible()).resolves.toBe(false);
   });
 });

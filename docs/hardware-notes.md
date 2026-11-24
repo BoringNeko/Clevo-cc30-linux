@@ -104,10 +104,17 @@ Built as a 0x100 buffer; EC fields copied in:
 | `0x17` | W014 | EC `0xC0 0x01` byte | (fan/thermal) |
 | `0x18` | W015 | EC `0xC0 0x01` byte | (fan/thermal) |
 
-Note: `RPM1/2/3` are 16-bit EC fields; the buffer stores them **little-endian**.
-The reference doc said "big-endian: a[3] + a[2]<<8"; on this machine the value is
-placed as a native `WordField` (LE). This must be reconciled in `fan_status.rs`
-before enabling real reads.
+`RPM1/2/3` are 16-bit ACPI fields in the `RAM` SystemMemory region, not in
+the `EC81` EmbeddedControl region. AML copies their integer values into native
+`WordField`s. The period itself is decoded as **big-endian** from the reply;
+byte-swap the integer when reading the ACPI field directly.
+
+On BIOS `1.07.04COLO2`, a read-only test of these three fields returned the same
+raw periods as three paired command-12 reads. CPU fan speeds were 1985–1991 RPM;
+both GPU periods were zero throughout the test. Direct reads (including five
+reads two seconds apart) added no `gpe6E` interrupts in that test, whereas
+command 12 added 111–114 interrupts per read. This comparison does not cover a
+spinning GPU fan or other firmware versions.
 
 ## 6. Command 13 — fan curve read (`PK0D`), verified offsets
 

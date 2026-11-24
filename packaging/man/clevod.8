@@ -1,4 +1,4 @@
-.TH CLEVOD 8 "2026-10-11" "clevo-cc-linux 0.2.2" "System Administration"
+.TH CLEVOD 8 "2026-11-25" "clevo-cc-linux 0.2.3" "System Administration"
 .SH NAME
 clevod \- privileged Clevo fan, keyboard and battery control daemon
 .SH SYNOPSIS
@@ -12,7 +12,7 @@ clevod \- privileged Clevo fan, keyboard and battery control daemon
 .SH DESCRIPTION
 .B clevod
 controls the Clevo DCHU fan controller, keyboard lighting and battery charging
-interfaces. It polls the embedded controller, caches the last reading with an explicit
+interfaces. It samples the embedded controller, caches the last reading with an explicit
 freshness state
 .RI ( fresh / stale / unknown ),
 persists user choices in a versioned TOML file, and serves
@@ -47,10 +47,20 @@ Configuration file (default
 .IR /etc/clevo\-cc/clevod.toml ).
 .TP
 .BI \-\-interval\-ms " Ms"
-Poll interval in milliseconds (default 2000).
+Fan sampling interval in milliseconds (default 2000).
+On COLORFUL P15 23 with the direct fan-periods driver interface, the daemon
+samples rotation periods without reading full status. Without this interface
+there is one startup sample but no recurring sampling by default on that
+model; specifying an interval enables it, with a minimum of 60000 milliseconds.
+The same interval limits D\-Bus
+.B Poll
+requests, including retries after failed samples.
 .TP
 .B \-\-no\-poll
-Do not start the background poll loop.
+Disable background fan sampling and desktop mode synchronization.
+Explicit D\-Bus
+.B Poll
+requests remain available and rate\-limited.
 .TP
 .B \-\-session\-bus
 Bind to the per-user session bus instead of the system bus (testing).
@@ -94,7 +104,8 @@ Disabling retains the window. Standard threshold interfaces reject the native
 enabled option. Successful readback confirms the saved firmware variables;
 actual charging stop/restart behavior requires a complete charge-cycle test.
 .PP
-Desktop profile transitions are observed by the background poll and persisted;
+Desktop profile transitions are observed and persisted even when recurring fan
+sampling is disabled;
 using
 .B \-\-no\-poll
 disables this automatic synchronization. UI/CLI only change the clevo-cc provider;

@@ -271,12 +271,16 @@ impl CcDaemon {
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
 
-    /// Refresh the cached fan state from the hardware.
+    /// Refresh the cached fan state when the sampling interval permits.
     async fn poll(
         &self,
         #[zbus(signal_context)] emitter: SignalEmitter<'_>,
     ) -> zbus::fdo::Result<()> {
-        match self.service.poll_fan() {
+        let service = Arc::clone(&self.service);
+        let result = tokio::task::spawn_blocking(move || service.poll_fan())
+            .await
+            .map_err(|err| zbus::fdo::Error::Failed(err.to_string()))?;
+        match result {
             Ok(()) => {
                 self.emit_fan_changed(&emitter).await;
                 Ok(())
@@ -441,7 +445,7 @@ impl CcDaemon {
     /// Freshness of the cached fan readings: `fresh`, `stale` or `unknown`.
     #[zbus(property)]
     fn fan_freshness(&self) -> String {
-        freshness_str(self.service.state().lock().unwrap().fan.freshness)
+        freshness_str(self.service.fan_freshness())
     }
 
     /// CPU fan speed in rpm.

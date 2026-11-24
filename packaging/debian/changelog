@@ -1,3 +1,9 @@
+clevo-cc-linux (0.2.3-1) unstable; urgency=medium
+
+  * Fix the gpe6E ACPI interrupt storm caused by fan RPM polling.
+
+ -- BoringNeko <noreply@github.com>  Wed, 25 Nov 2026 00:00:00 +0800
+
 clevo-cc-linux (0.2.2-1) unstable; urgency=medium
 
   * Restore capabilities and profile listing through GCMD when AppSettings

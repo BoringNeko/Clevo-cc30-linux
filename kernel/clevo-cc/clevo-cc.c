@@ -18,6 +18,7 @@
 
 #include <linux/acpi.h>
 #include <linux/delay.h>
+#include <linux/dmi.h>
 #include <linux/hwmon.h>
 #include <linux/hwmon-sysfs.h>
 #include <linux/leds.h>
@@ -26,6 +27,7 @@
 #include <linux/platform_device.h>
 #include <linux/platform_profile.h>
 #include <linux/string.h>
+#include <linux/swab.h>
 
 #define CLEVO_DSM_GUID "93F224E4-FBDC-4BBF-ADD6-DB71BDC0AFAD"
 #define CLEVO_PAYLOAD_LEN 256
@@ -115,6 +117,7 @@ enum clevo_perf_mode {
 
 struct clevo_cc {
 	struct acpi_device *adev;
+	acpi_handle fan_period_ec;
 	u8 dsm_guid[16];
 	enum clevo_fan_mode fan_mode;
 	enum clevo_perf_mode perf_mode;
@@ -972,18 +975,70 @@ static const char *clevo_cc_perf_name(enum clevo_perf_mode mode)
 	}
 }
 
-/*
- * Read fan speeds (command 12).
- *
- * The reply carries a rotation period for each fan; rpm is derived with the
- * Control Center formula `2156250 / period`.
- *
- * Temperature is *not* returned here: the CPU byte at [18] needs the vendor's
- * `CalCPUTemp` curve (a TDP-class-dependent piecewise function), which belongs
- * in userspace where the CPU model is known, and the GPU bytes at [21]/[24] are
- * direct Celsius. hwmon callers that want a temperature use
- * clevo_cc_read_temp(), which reads those directly.
- */
+static const char * const clevo_cc_fan_period_fields[] = { "RPM1", "RPM2", "RPM3" };
+
+static acpi_handle clevo_cc_find_fan_periods(void)
+{
+	acpi_handle ec, field;
+	unsigned int index;
+
+	if (!dmi_match(DMI_SYS_VENDOR, "COLORFUL") ||
+	    !dmi_match(DMI_PRODUCT_NAME, "P15 23") ||
+	    !dmi_match(DMI_BOARD_NAME, "P15 23") ||
+	    !dmi_match(DMI_BIOS_VERSION, "1.07.04COLO2"))
+		return NULL;
+
+	if (ACPI_FAILURE(acpi_get_handle(NULL, "\\_SB.PC00.LPCB.EC", &ec)))
+		return NULL;
+
+	for (index = 0; index < ARRAY_SIZE(clevo_cc_fan_period_fields); index++) {
+		acpi_object_type type;
+
+		if (ACPI_FAILURE(acpi_get_handle(ec, (acpi_string)clevo_cc_fan_period_fields[index],
+						&field)) ||
+		    ACPI_FAILURE(acpi_get_type(field, &type)) ||
+		    (type != ACPI_TYPE_LOCAL_REGION_FIELD && type != ACPI_TYPE_FIELD_UNIT))
+			return NULL;
+	}
+
+	return ec;
+}
+
+static int clevo_cc_read_fan_periods(struct clevo_cc *cc, u16 periods[3])
+{
+	unsigned int index;
+
+	if (!cc->fan_period_ec)
+		return -EOPNOTSUPP;
+
+	for (index = 0; index < ARRAY_SIZE(clevo_cc_fan_period_fields); index++) {
+		unsigned long long value;
+
+		if (ACPI_FAILURE(acpi_evaluate_integer(cc->fan_period_ec,
+					(acpi_string)clevo_cc_fan_period_fields[index], NULL, &value)))
+			return -EIO;
+		if (value > U16_MAX)
+			return -EPROTO;
+		periods[index] = swab16((u16)value);
+	}
+
+	return 0;
+}
+
+static ssize_t fan_periods_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct clevo_cc *cc = dev_get_drvdata(dev);
+	u16 periods[3];
+	int err;
+
+	err = clevo_cc_read_fan_periods(cc, periods);
+	if (err)
+		return err;
+
+	return sysfs_emit(buf, "%u %u %u\n", periods[0], periods[1], periods[2]);
+}
+static DEVICE_ATTR_RO(fan_periods);
+
 static int clevo_cc_read_fan(struct clevo_cc *cc, u32 *cpu_rpm, u32 *gpu_rpm)
 {
 	u8 payload[CLEVO_PAYLOAD_LEN];
@@ -991,17 +1046,25 @@ static int clevo_cc_read_fan(struct clevo_cc *cc, u32 *cpu_rpm, u32 *gpu_rpm)
 	u16 cpu_period, gpu_period;
 	int err;
 
-	err = clevo_cc_dsm_buffer(cc, CLEVO_CMD_FAN_STATUS, payload,
-				  sizeof(payload), &len);
-	if (err)
-		return err;
+	if (cc->fan_period_ec) {
+		u16 periods[3];
 
-	if (len < CLEVO_FAN_STATUS_MIN_LEN)
-		return -EPROTO;
+		err = clevo_cc_read_fan_periods(cc, periods);
+		if (err)
+			return err;
+		cpu_period = periods[0];
+		gpu_period = periods[1];
+	} else {
+		err = clevo_cc_dsm_buffer(cc, CLEVO_CMD_FAN_STATUS, payload,
+					  sizeof(payload), &len);
+		if (err)
+			return err;
+		if (len < CLEVO_FAN_STATUS_MIN_LEN)
+			return -EPROTO;
 
-	/* Command 12 stores the rotation period, big-endian. */
-	cpu_period = (payload[2] << 8) | payload[3];
-	gpu_period = (payload[4] << 8) | payload[5];
+		cpu_period = (payload[2] << 8) | payload[3];
+		gpu_period = (payload[4] << 8) | payload[5];
+	}
 
 	/* rpm = 60 / (5.565217391304348e-05 * period) * 2 = 2156250 / period */
 	*cpu_rpm = cpu_period ? DIV_ROUND_CLOSEST(2156250, cpu_period) : 0;
@@ -1932,6 +1995,7 @@ static struct attribute *clevo_cc_attrs[] = {
 	&dev_attr_fan_curve.attr,
 	&dev_attr_perf_mode.attr,
 	&dev_attr_platform_profile_available.attr,
+	&dev_attr_fan_periods.attr,
 	&dev_attr_raw_status.attr,
 	&dev_attr_raw_curve.attr,
 	&dev_attr_keyboard_rgb.attr,
@@ -1939,7 +2003,21 @@ static struct attribute *clevo_cc_attrs[] = {
 	&dev_attr_flexicharger.attr,
 	NULL
 };
-ATTRIBUTE_GROUPS(clevo_cc);
+
+static umode_t clevo_cc_attr_visible(struct kobject *kobj, struct attribute *attr, int index)
+{
+	struct clevo_cc *cc = dev_get_drvdata(kobj_to_dev(kobj));
+
+	if (attr == &dev_attr_fan_periods.attr && (!cc || !cc->fan_period_ec))
+		return 0;
+	return attr->mode;
+}
+
+static const struct attribute_group clevo_cc_group = {
+	.attrs = clevo_cc_attrs,
+	.is_visible = clevo_cc_attr_visible,
+};
+__ATTRIBUTE_GROUPS(clevo_cc);
 
 static int clevo_cc_probe(struct platform_device *pdev)
 {
@@ -1987,6 +2065,7 @@ static int clevo_cc_probe(struct platform_device *pdev)
 	       "\xe4\x24\xf2\x93\xdc\xfb\xbf\x4b\xad\xd6\xdb\x71\xbd\xc0\xaf\xad",
 	       16);
 
+	cc->fan_period_ec = clevo_cc_find_fan_periods();
 	platform_set_drvdata(pdev, cc);
 
 	hwmon = devm_hwmon_device_register_with_info(

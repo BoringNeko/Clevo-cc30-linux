@@ -2,25 +2,23 @@ import Chip from "@mui/material/Chip";
 import type { Freshness } from "../api/daemon";
 import { statusColors, freshnessTone } from "../theme";
 
-const LABELS: Record<Freshness, string> = {
-  fresh: "实时",
+type Unfresh = Exclude<Freshness, "fresh">;
+
+const LABELS: Record<Unfresh, string> = {
   stale: "已过期",
   unknown: "未知",
 };
 
-const TOOLTIPS: Record<Freshness, string> = {
-  fresh: "最近一次轮询读取成功",
-  stale: "最近一次读取失败，显示的是更早的值",
+const TOOLTIPS: Record<Unfresh, string> = {
+  stale: "读数已过期或最近一次读取失败",
   unknown: "从未成功读取",
 };
 
 /**
- * Freshness badge.
- *
- * A stale or unknown reading is never presented as live: the badge is what
- * tells the user whether the number beside it can be trusted.
+ * Warn when a reading is stale or unavailable.
  */
 export function FreshnessBadge({ freshness }: { freshness: Freshness }) {
+  if (freshness === "fresh") return null;
   const tone = statusColors[freshnessTone(freshness)];
   return (
     <Chip

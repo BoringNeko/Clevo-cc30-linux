@@ -6,16 +6,14 @@ import { FreshnessBadge } from "./FreshnessBadge";
 import { renderToStaticMarkup } from "react-dom/server";
 
 describe("FreshnessBadge", () => {
-  it("labels fresh as 实时", () => {
+  it("does not show a badge for fresh readings", () => {
     const html = renderToStaticMarkup(<FreshnessBadge freshness="fresh" />);
-    expect(html).toContain("实时");
-    expect(html).toContain("data-testid=\"freshness\"");
+    expect(html).toBe("");
   });
 
   it("labels stale distinctly so it is not mistaken for fresh", () => {
     const html = renderToStaticMarkup(<FreshnessBadge freshness="stale" />);
     expect(html).toContain("已过期");
-    expect(html).not.toContain(">实时<");
   });
 
   it("labels unknown", () => {

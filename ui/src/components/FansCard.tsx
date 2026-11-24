@@ -3,7 +3,8 @@ import Typography from "@mui/material/Typography";
 import MemoryIcon from "@mui/icons-material/Memory";
 import { CardHeader, GlassCard } from "./GlassCard";
 import { CircularGauge } from "./CircularGauge";
-import type { FanSnapshot, HardwareUsage } from "../api/daemon";
+import { FreshnessBadge } from "./FreshnessBadge";
+import type { FanReading, FanSnapshot, HardwareUsage } from "../api/daemon";
 import { rgbString, type ExtractedPalette } from "../lib/color";
 
 interface FansCardProps {
@@ -20,13 +21,14 @@ export function FansCard({ palette, snapshot, usage }: FansCardProps) {
   const gpu = usage?.gpu_percent;
   const temp = (value: number | null | undefined) => value == null ? "n/a" : `${value}°C`;
   const freq = (value: number | null | undefined) => value == null ? "n/a" : `${value.toLocaleString()} MHz`;
-  const fan = (value: number) => `${value.toLocaleString()} RPM`;
+  const fan = (reading: FanReading) =>
+    snapshot.freshness !== "unknown" && reading.available ? `${reading.rpm.toLocaleString()} RPM` : "n/a";
 
   const details = (
     label: string,
     tempValue: number | null | undefined,
     freqValue: number | null | undefined,
-    fanValue: number,
+    fanReading: FanReading,
   ) => (
     <Box sx={{ display: "flex", minWidth: 0, flexDirection: "column", gap: 0.75 }}>
       <Typography sx={{ fontSize: "0.875rem", lineHeight: 1.2, fontWeight: 600, color: "text.secondary", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
@@ -39,14 +41,17 @@ export function FansCard({ palette, snapshot, usage }: FansCardProps) {
         频率 {freq(freqValue)}
       </Typography>
       <Typography sx={{ fontSize: "0.75rem", color: "text.secondary", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
-        风扇 {fan(fanValue)}
+        风扇 {fan(fanReading)}
       </Typography>
     </Box>
   );
 
   return (
     <GlassCard sx={{ gap: 2.5, minHeight: 220 }}>
-      <CardHeader icon={<MemoryIcon sx={{ fontSize: 16 }} />} title="硬件占用"/>
+      <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <CardHeader icon={<MemoryIcon sx={{ fontSize: 16 }} />} title="硬件占用"/>
+        <FreshnessBadge freshness={snapshot.freshness} />
+      </Box>
 
       <Box sx={{ flex: 1, width: "100%", minWidth: 0, position: "relative" }}>
         <Box
@@ -70,7 +75,7 @@ export function FansCard({ palette, snapshot, usage }: FansCardProps) {
             }}
           >
             <CircularGauge value={cpu} label="" color={cpuColor} />
-            {details("CPU", usage?.cpu_temp_c ?? snapshot.cpu.temp_c, usage?.cpu_freq_mhz, snapshot.cpu.rpm)}
+            {details("CPU", usage?.cpu_temp_c ?? snapshot.cpu.temp_c, usage?.cpu_freq_mhz, snapshot.cpu)}
           </Box>
           <Box
             sx={{
@@ -88,7 +93,7 @@ export function FansCard({ palette, snapshot, usage }: FansCardProps) {
             ) : (
               <CircularGauge value={gpu} label="" color={gpuColor} />
             )}
-            {details("GPU", usage?.gpu_temp_c ?? snapshot.gpu1.temp_c, usage?.gpu_freq_mhz, snapshot.gpu1.rpm)}
+            {details("GPU", usage?.gpu_temp_c ?? snapshot.gpu1.temp_c, usage?.gpu_freq_mhz, snapshot.gpu1)}
           </Box>
         </Box>
       </Box>

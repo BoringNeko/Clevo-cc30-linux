@@ -99,6 +99,20 @@ export async function windowBridge(): Promise<WindowControlsBridge | null> {
   }
 }
 
+export async function isWindowVisible(): Promise<boolean> {
+  if (document.hidden) return false;
+  if (isElectron()) return true;
+  try {
+    const { isTauri } = await import("@tauri-apps/api/core");
+    if (!isTauri()) return false;
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    const win = getCurrentWindow();
+    return !(await win.isMinimized()) && (await win.isVisible());
+  } catch {
+    return false;
+  }
+}
+
 /** Quit the whole application (tray included) in whichever shell is hosting. */
 export async function quitBridge(): Promise<void> {
   if (isElectron()) {

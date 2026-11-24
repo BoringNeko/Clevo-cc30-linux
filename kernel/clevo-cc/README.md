@@ -19,6 +19,7 @@ exposes fan monitoring and fan-mode control through `hwmon` and sysfs.
 |---|---|---|
 | `hwmon fan1_input` / `fan2_input` | read | implemented (CPU, GPU1 rpm) |
 | `hwmon temp1_input` | read | implemented (GPU1 °C; `-ENODATA` when the EC reports none) |
+| `sysfs fan_periods` | read | CPU, GPU1 and GPU2 rotation periods as decimal integers; verified COLORFUL P15 23 firmware only |
 | `sysfs fan_mode` | rw | `auto` / `quiet` / `max` / `maxq` / `custom` |
 | `sysfs fan_curve` | rw | read (command 13) and write (command 14) |
 | `sysfs raw_status` / `raw_curve` | read | diagnostic hex dumps (for re-verifying offsets) |
@@ -30,6 +31,12 @@ exposes fan monitoring and fan-mode control through `hwmon` and sysfs.
 `fan_mode` values map to `121/1`: `auto`=0, `max`=1, `maxq`=5, `custom`=6,
 `quiet`=8. `perf_mode` values map to `121/25`: quiet=0, pwrsaving=1,
 performance=2, entertainment=3.
+
+On COLORFUL P15 23 with BIOS `1.07.04COLO2`, `fan_periods` and the hwmon fan
+inputs read the same named ACPI memory fields as command 12, but skip its
+extra EC transactions. A zero period means zero RPM. If the direct read
+fails, these interfaces return an error rather than running command 12.
+`raw_status` and the hwmon GPU temperature still use command 12.
 
 `fan_mode`/`perf_mode` report the last value written this session (fan_mode
 defaults to `auto`, perf_mode to `unknown`); the firmware does not report the

@@ -117,6 +117,9 @@ pub struct Service {
     keyboard_firmware_type: std::sync::atomic::AtomicU8,
     state: Shared,
     clock: Box<dyn Clock>,
+    fan_periods_only: bool,
+    fan_poll_interval_ms: u64,
+    fan_poll: Mutex<FanPoll>,
     /// Last applied fan mode, mirrored for persistence.
     last_fan_mode: AtomicU64,
     /// Last applied perf mode; `u64::MAX` means "unset".
@@ -131,6 +134,12 @@ pub struct Service {
     /// True while `apply_saved` replays stored values, so those writes do not
     /// bounce straight back to disk on every startup.
     applying: std::sync::atomic::AtomicBool,
+}
+
+#[derive(Default)]
+struct FanPoll {
+    last_attempt: Option<(u64, Result<(), ServiceError>)>,
+    probed_curve: bool,
 }
 
 /// Sentinel for "no mode applied yet" in the atomics above.
@@ -196,6 +205,7 @@ impl Service {
     pub fn new(transport: Box<dyn Transport>) -> Self {
         let power = (transport.kind() != clevo_transport::TransportKind::Mock)
             .then(crate::power::Power::system);
+        let fan_periods_only = transport.supports_fan_periods();
         Self {
             transport,
             power,
@@ -206,6 +216,9 @@ impl Service {
             keyboard_firmware_type: std::sync::atomic::AtomicU8::new(UNKNOWN_KEYBOARD_TYPE),
             state: Arc::new(Mutex::new(DaemonState::default())),
             clock: Box::new(SystemClock::default()),
+            fan_periods_only,
+            fan_poll_interval_ms: 0,
+            fan_poll: Mutex::new(FanPoll::default()),
             last_fan_mode: AtomicU64::new(UNSET),
             last_perf_mode: AtomicU64::new(UNSET),
             // No conversion by default: correct on the reference machine and
@@ -403,22 +416,60 @@ impl Service {
         Ok(())
     }
 
-    /// Poll fan status (command 12) and the curve (command 13, for fan count).
+    /// Whether fan polls use direct rotation periods rather than command 12.
+    pub fn uses_fan_periods(&self) -> bool {
+        self.fan_periods_only
+    }
+
+    /// Share a minimum sampling interval across background and D-Bus requests.
+    pub fn with_fan_poll_interval_ms(mut self, interval_ms: u64) -> Self {
+        self.fan_poll_interval_ms = interval_ms;
+        self
+    }
+
+    /// Read the cache's freshness without sampling the hardware.
+    pub fn fan_freshness(&self) -> Freshness {
+        let state = self.state.lock().unwrap();
+        if state.fan.freshness == Freshness::Fresh
+            && state.fan_sampled_at_ms.is_some_and(|sampled_at| {
+                self.clock.now_ms().saturating_sub(sampled_at)
+                    >= self.fan_poll_interval_ms.max(2000).saturating_mul(2)
+            })
+        {
+            Freshness::Stale
+        } else {
+            state.fan.freshness
+        }
+    }
+
+    /// Poll fan telemetry, reusing the last result during cooldown.
     ///
-    /// A failed command 12 poll marks the cached readings stale; a failed curve
-    /// read leaves the previous fan count in effect (best-effort).
+    /// Fan topology comes from the cached curve. If no curve was read on
+    /// startup, probe it at most once here, not on every telemetry sample.
     pub fn poll_fan(&self) -> Result<(), ServiceError> {
-        let _ = self.clock.now_ms();
-        let tdp = self.tdp_class();
+        let mut poll = self.fan_poll.lock().unwrap();
+        if let Some((last_attempt, result)) = &poll.last_attempt {
+            if self.clock.now_ms().saturating_sub(*last_attempt) < self.fan_poll_interval_ms {
+                return result.clone();
+            }
+        }
         self.sync_modes();
 
-        match self.read_status() {
-            Ok((status, fan_count)) => {
-                // The firmware does not report the current mode reliably, but
-                // some backends (the kernel driver) can observe it; refresh the
-                // cached values so the UI can highlight the active mode.
+        let status = self.read_status();
+        if status.is_ok() && !poll.probed_curve {
+            poll.probed_curve = true;
+            let missing_curve = self.state.lock().unwrap().curve.is_none();
+            if missing_curve {
+                let _ = self.read_curve();
+            }
+        }
+        let now = self.clock.now_ms();
+        let result = match status {
+            Ok(status) => {
                 let mut guard = self.state.lock().unwrap();
-                guard.apply_status(&status, fan_count, tdp);
+                let fan_count = guard.curve.map_or(0, |info| info.fan_count);
+                guard.apply_status(&status, fan_count, self.tdp_class());
+                guard.fan_sampled_at_ms = Some(now);
                 Ok(())
             }
             Err(err) => {
@@ -426,26 +477,28 @@ impl Service {
                 guard.mark_fan_stale();
                 Err(err)
             }
-        }
+        };
+        poll.last_attempt = Some((now, result.clone()));
+        result
     }
 
-    fn read_status(&self) -> Result<(clevo_proto::FanStatus, u8), ServiceError> {
+    fn read_status(&self) -> Result<clevo_proto::FanStatus, ServiceError> {
+        if self.fan_periods_only {
+            let [cpu_period, gpu1_period, gpu2_period] = self.transport.read_fan_periods()?;
+            return Ok(clevo_proto::FanStatus {
+                cpu_period,
+                gpu1_period,
+                gpu2_period,
+                cpu_temp_raw: 0,
+                gpu1_temp_c: None,
+                gpu2_temp_c: None,
+            });
+        }
         let raw = self
             .transport
             .execute(CMD_FAN_STATUS.get(), &empty_payload())?;
         let payload = response_first_record(&raw)?;
-        let status = parse_fan_status(payload)?;
-        let fan_count = self.read_fan_count().unwrap_or(0);
-        Ok((status, fan_count))
-    }
-
-    /// Read just the fan count from command 13.
-    pub fn read_fan_count(&self) -> Result<u8, ServiceError> {
-        let raw = self
-            .transport
-            .execute(CMD_FAN_CURVE_READ.get(), &empty_payload())?;
-        let payload = response_first_record(&raw)?;
-        Ok(parse_curve(payload)?.fan_count)
+        Ok(parse_fan_status(payload)?)
     }
 
     /// Read and cache the fan curve.
@@ -610,7 +663,7 @@ impl Service {
     }
 
     /// Adopt externally applied modes and persist transitions without hardware writes.
-    fn sync_modes(&self) {
+    pub fn sync_modes(&self) {
         let _guard = self.perf_lock.lock().unwrap();
         if let Ok((fan, perf)) = self.transport.current_modes() {
             {

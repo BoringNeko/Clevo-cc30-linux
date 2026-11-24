@@ -311,18 +311,9 @@ impl DaemonClient {
         Ok(())
     }
 
-    /// Read the full cached snapshot.
-    ///
-    /// The daemon's `FanCount` property is only populated after a curve read, so
-    /// when it is `0` (unknown) we fill it in from `GetCurve`; the curve is
-    /// cheap and changes rarely.
+    /// Read the full cached snapshot without invoking hardware reads.
     pub fn snapshot(&self) -> Result<FanSnapshot, UiError> {
-        let mut fan_count: u8 = self.prop("FanCount")?;
-        if fan_count == 0 {
-            if let Ok(curve) = self.curve() {
-                fan_count = curve.fan_count;
-            }
-        }
+        let fan_count: u8 = self.prop("FanCount")?;
         let reading = |rpm: u32, temp_c: u8, index: u8| FanReading {
             rpm,
             temp_c: (temp_c != 0).then_some(temp_c),

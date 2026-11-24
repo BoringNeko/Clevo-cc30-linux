@@ -122,6 +122,9 @@ dkms install -m clevo-cc -v %{version} >/dev/null 2>&1 || :
 /usr/src/clevo-cc-%{version}
 
 %changelog
+* Wed Nov 25 2026 BoringNeko <noreply@github.com> - 0.2.3-1
+- Fix the gpe6E ACPI interrupt storm caused by fan RPM polling
+
 * Sun Oct 11 2026 BoringNeko <noreply@github.com> - 0.2.2-1
 - Restore capabilities and profile listing through GCMD
 - Add battery status, charge thresholds and desktop power modes

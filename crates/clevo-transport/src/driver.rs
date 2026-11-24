@@ -10,19 +10,20 @@
 //!
 //! | Command | Driver interface |
 //! |---|---|
-//! | `12` fan status | hwmon `fan1_input`, `fan2_input` |
+//! | `12` fan status | sysfs `raw_status` (legacy fallback: hwmon fan inputs) |
+//! | RPM-only polling | sysfs `fan_periods` (optional, verified firmware only) |
 //! | `13` fan curve  | sysfs `fan_curve` |
 //! | `14` fan curve write | sysfs `fan_curve` |
 //! | `121/1` fan mode | sysfs `fan_mode` |
 //! | `121/25` perf mode | sysfs `perf_mode` |
 //! | `122/96/16/60/82` GCMD reads | sysfs `capabilities` |
 //!
-//! Only the values the driver actually reports are filled in; temperature and
-//! duty fields are left at zero (which the parser surfaces as "not reported")
-//! rather than invented.
+//! The raw status preserves the EC's periods and temperatures in one read.
+//! With a legacy driver only the reported speeds are filled in.
 
 use crate::error::{TransportError, TransportResult};
 use crate::{Transport, TransportKind, PAYLOAD_BYTES};
+use clevo_proto::fan_status::MIN_FAN_STATUS_LEN;
 
 /// Default platform device path for the `CLV0001` ACPI device.
 pub const DEFAULT_PLATFORM_PATH: &str = "/sys/devices/platform/CLV0001:00";
@@ -96,54 +97,37 @@ impl DriverTransport {
             .map_err(|e| TransportError::MalformedResponse(format!("{}: {e}", path.display())))
     }
 
-    /// Build a synthetic command `12` reply.
-    ///
-    /// The reply carries rotation *periods*, not rpm, and `clevo-proto` converts
-    /// them with `period = RPM_PERIOD_SCALE / rpm`. hwmon already reports rpm,
-    /// so we invert that formula here; writing rpm straight into the period
-    /// field would convert twice and under-report the speed.
-    ///
-    /// Temperatures come from the driver's `raw_status` dump, which returns the
-    /// EC's bytes verbatim. That matters for the CPU: its byte at `[18]` is
-    /// **raw** and must be converted by the protocol layer using the CPU's TDP
-    /// class. Taking it from hwmon instead would be both lossy (millidegrees
-    /// cannot be inverted for every class) and a double conversion. The GPU
-    /// bytes are direct Celsius.
-    ///
-    /// If `raw_status` is unavailable (an older module), the reply still carries
-    /// the speeds and reports no temperatures rather than inventing any.
     fn fan_status_reply(&self) -> TransportResult<Vec<u8>> {
+        let path = self.attr("raw_status");
+        match std::fs::read_to_string(&path) {
+            Ok(text) => return Self::parse_raw_status(&text).map(|raw| wrap_payload(&raw)),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(TransportError::Io(format!("{}: {err}", path.display()))),
+        }
         let cpu_rpm = self.read_rpm("fan1_input")?;
         let gpu_rpm = self.read_rpm("fan2_input").unwrap_or(0);
-        let mut payload = vec![0u8; 42];
+        let mut payload = [0u8; MIN_FAN_STATUS_LEN];
         payload[2..4].copy_from_slice(&rpm_to_period(cpu_rpm).to_be_bytes());
         payload[4..6].copy_from_slice(&rpm_to_period(gpu_rpm).to_be_bytes());
-
-        // Prefer the EC's own bytes so temperatures survive the round trip.
-        if let Some(raw) = self.read_raw_status() {
-            if raw.len() >= 25 {
-                payload[18] = raw[18];
-                payload[21] = raw[21];
-                payload[24] = raw[24];
-            }
-        }
         Ok(wrap_payload(&payload))
     }
 
-    /// Read the driver's `raw_status` attribute and decode its hex dump.
-    ///
-    /// Returns `None` when the attribute is absent or unparsable, so callers can
-    /// fall back rather than fail the whole read.
-    fn read_raw_status(&self) -> Option<Vec<u8>> {
-        let text = self.read_attr("raw_status").ok()?;
-        // Format: "len=256\n<hex bytes>\n".
-        let hex = text.lines().find(|l| !l.starts_with("len="))?;
+    fn parse_raw_status(text: &str) -> TransportResult<Vec<u8>> {
+        let invalid = || TransportError::MalformedResponse("invalid raw_status hex dump".into());
+        let (header, hex) = text.split_once('\n').ok_or_else(invalid)?;
+        let len: usize = header
+            .strip_prefix("len=")
+            .and_then(|value| value.parse().ok())
+            .filter(|len| (MIN_FAN_STATUS_LEN..=PAYLOAD_BYTES).contains(len))
+            .ok_or_else(invalid)?;
         let hex = hex.trim();
-        if hex.len() % 2 != 0 {
-            return None;
+        if hex.len() != len * 2 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(invalid());
         }
-        (0..hex.len() / 2)
-            .map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok())
+        (0..len)
+            .map(|index| {
+                u8::from_str_radix(&hex[index * 2..index * 2 + 2], 16).map_err(|_| invalid())
+            })
             .collect()
     }
 
@@ -353,6 +337,27 @@ fn wrap_record(data: &[u8]) -> Vec<u8> {
 }
 
 impl Transport for DriverTransport {
+    fn supports_fan_periods(&self) -> bool {
+        self.attr("fan_periods").is_file()
+    }
+
+    fn read_fan_periods(&self) -> TransportResult<[u16; 3]> {
+        let text = self.read_attr("fan_periods")?;
+        let mut fields = text.split_whitespace();
+        let invalid = || TransportError::MalformedResponse("invalid fan_periods reading".into());
+        let mut periods = [0; 3];
+        for period in &mut periods {
+            *period = fields
+                .next()
+                .and_then(|field| field.parse().ok())
+                .ok_or_else(invalid)?;
+        }
+        if fields.next().is_some() {
+            return Err(invalid());
+        }
+        Ok(periods)
+    }
+
     fn read_capabilities(&self) -> TransportResult<clevo_proto::Capabilities> {
         // One sysfs read evaluates all five commands once, keeping the snapshot
         // together and avoiding five complete firmware scans.
@@ -479,6 +484,7 @@ mod tests {
             std::fs::write(root.join("perf_mode"), "unknown\n").unwrap();
             // A raw_status dump shaped like the driver's: len line + hex.
             let mut raw = [0u8; 42];
+            raw[2..8].copy_from_slice(&[0x02, 0x44, 0x04, 0xb6, 0x08, 0x00]);
             raw[18] = 87; // CPU temp raw
             raw[21] = 35; // GPU1 temp, Celsius
             let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
@@ -646,27 +652,57 @@ mod tests {
     }
 
     #[test]
-    fn reads_fan_status_from_hwmon() {
-        use clevo_proto::fan_status::period_raw_to_rpm;
-
+    fn reads_fan_status_without_hwmon_when_raw_status_exists() {
         let fake = FakeSysfs::new("status");
+        std::fs::remove_dir_all(fake.root.join("hwmon")).unwrap();
         let t = fake.transport();
         assert!(t.writable());
         let reply = t.execute(CMD_FAN_STATUS.get(), &empty_payload()).unwrap();
         let status = parse_fan_status(response_first_record(&reply).unwrap()).unwrap();
-        // The reply carries a period; converting it back must recover the rpm
-        // hwmon reported (3718 and 1788) within the granularity of the 16-bit
-        // period field, not a double-converted value.
-        let cpu = status.cpu_rpm();
-        let gpu = status.gpu1_rpm();
-        assert!((cpu as i64 - 3718).abs() < 50, "cpu back = {cpu}");
-        assert!((gpu as i64 - 1788).abs() < 50, "gpu back = {gpu}");
-        assert_eq!(period_raw_to_rpm(status.cpu_period), cpu);
-        // Temperatures come from raw_status, so they survive the round trip.
-        // The CPU byte is raw and is converted by the protocol layer.
+        assert_eq!(status.cpu_period, 580);
+        assert_eq!(status.gpu1_period, 1206);
+        assert_eq!(status.gpu2_period, 2048);
         assert_eq!(status.cpu_temp_raw, 87);
         assert_eq!(status.cpu_temp_c(clevo_proto::TdpClass::Raw), Some(87));
         assert_eq!(status.gpu1_temp_c, Some(35));
+    }
+
+    #[test]
+    fn reads_only_verified_periods_and_never_falls_back_to_full_status() {
+        let fake = FakeSysfs::new("fan-periods");
+        let transport = fake.transport();
+        let path = fake.root.join("fan_periods");
+        assert!(!transport.supports_fan_periods());
+        assert!(matches!(
+            transport.read_fan_periods(),
+            Err(TransportError::Io(_))
+        ));
+
+        std::fs::write(&path, "1085 0 683\n").unwrap();
+        assert!(transport.supports_fan_periods());
+        assert_eq!(transport.read_fan_periods().unwrap(), [1085, 0, 683]);
+
+        for invalid in ["1085 0", "0 1 2 3", "bad 0 0", "65536 0 0"] {
+            std::fs::write(&path, invalid).unwrap();
+            assert!(matches!(
+                transport.read_fan_periods(),
+                Err(TransportError::MalformedResponse(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn does_not_retry_through_hwmon_when_raw_status_is_invalid() {
+        let fake = FakeSysfs::new("badstatus");
+        let t = fake.transport();
+        let invalid_hex = format!("len=25\n{}gg\n", "00".repeat(24));
+        for raw in ["len=42\n00\n", &invalid_hex, "len=1\n00\n"] {
+            std::fs::write(fake.root.join("raw_status"), raw).unwrap();
+            assert!(matches!(
+                t.execute(CMD_FAN_STATUS.get(), &empty_payload()),
+                Err(TransportError::MalformedResponse(_))
+            ));
+        }
     }
 
     #[test]

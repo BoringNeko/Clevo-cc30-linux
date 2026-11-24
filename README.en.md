@@ -73,6 +73,11 @@ UI added.
 - **System tray**: a native menu that switches the performance mode (`▶` marks
   the active one), opens the control center and quits; closing the window returns
   to the tray and keeps the process running.
+- **P15 23 fan telemetry**: on verified firmware and with the updated kernel
+  driver, the daemon samples rotation periods every two seconds without the
+  full-status command that causes `gpe6E` bursts. The control center updates
+  automatically. Without direct period reads, the 60-second rate limit
+  remains in place. See [`docs/desktop-ui.md`](docs/desktop-ui.md).
 - **Login autostart**: a switch in Settings > Application starts the current
   user's UI in the tray at login, with no main window. Both shells support it;
   see [`docs/autostart.md`](docs/autostart.md).

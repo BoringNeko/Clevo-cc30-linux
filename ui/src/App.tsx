@@ -10,7 +10,6 @@ import {
   getHardwareUsage,
   getFanSnapshot,
   isCustomizeMode,
-  pollFan,
   type FanCurve,
   type FanSnapshot,
   type HardwareUsage,
@@ -31,6 +30,7 @@ import { useWallpaper } from "./hooks/useWallpaper";
 import { useLogo } from "./hooks/useLogo";
 import { useWindowSize } from "./hooks/useWindowSize";
 import { useDesignScale } from "./hooks/useDesignScale";
+import { useFanRefresh } from "./hooks/useFanRefresh";
 import {
   loadCompatibilityPrefs,
   readCompatibilityPrefs,
@@ -64,7 +64,7 @@ function isPageId(id: string): id is PageId {
 /**
  * Glass dashboard over the daemon.
  *
- * Polls `clevod` for fan status and reads the curve once; the accent colour is
+ * Reads cached fan status from `clevod` and reads the curve once; the accent colour is
  * derived from the wallpaper. Writes are handled by the Performance card and go
  * through the daemon's PolicyKit gate.
  */
@@ -143,13 +143,21 @@ export default function App() {
 
   const applySnapshot = useCallback((snap: FanSnapshot) => {
     setSnapshot(snap);
-    setCpuHistory((prev) => [...prev, snap.cpu.rpm].slice(-HISTORY_LEN));
-    setGpuHistory((prev) => [...prev, snap.gpu1.rpm].slice(-HISTORY_LEN));
+    if (snap.freshness === "fresh") {
+      if (snap.cpu.available) setCpuHistory((prev) => [...prev, snap.cpu.rpm].slice(-HISTORY_LEN));
+      if (snap.gpu1.available) setGpuHistory((prev) => [...prev, snap.gpu1.rpm].slice(-HISTORY_LEN));
+    }
   }, []);
+
+  useFanRefresh(
+    active === "overview" || active === "fans",
+    applySnapshot,
+    setError,
+  );
 
   const refresh = useCallback(async () => {
     try {
-      const [snap, usage] = await Promise.all([pollFan(), getHardwareUsage()]);
+      const [snap, usage] = await Promise.all([getFanSnapshot(), getHardwareUsage()]);
       applySnapshot(snap);
       setHardwareUsage(usage);
       setError(null);
@@ -175,9 +183,6 @@ export default function App() {
         setFactoryCurve(factory);
         setHardwareUsage(usage);
         setError(null);
-        await pollFan()
-          .then((fresh) => !cancelled && applySnapshot(fresh))
-          .catch(() => {});
       } catch (e) {
         if (!cancelled) setError(String(e));
       }
@@ -370,7 +375,11 @@ export default function App() {
                 {active === "overview" ? (
                     <>
                       <Box sx={{ display: "grid", gridTemplateRows: "max-content max-content minmax(0, 1fr)", gap: 2, minHeight: 0, minWidth: 0, width: "100%", height: "100%" }}>
-                        <FansCard palette={accentPalette} snapshot={snapshot} usage={hardwareUsage} />
+                        <FansCard
+                          palette={accentPalette}
+                          snapshot={snapshot}
+                          usage={hardwareUsage}
+                        />
                         <ResourceUsageCard
                           palette={accentPalette}
                           memoryPercent={hardwareUsage?.memory_percent ?? null}
@@ -426,6 +435,7 @@ export default function App() {
                           palette={accentPalette}
                           cpuHistory={cpuHistory}
                           gpuHistory={gpuHistory}
+                          freshness={snapshot.freshness}
                         />
                       </Box>
                     </>

@@ -1,7 +1,9 @@
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import ActivityIcon from "@mui/icons-material/ShowChart";
+import type { Freshness } from "../api/daemon";
 import { CardHeader, GlassCard } from "./GlassCard";
+import { FreshnessBadge } from "./FreshnessBadge";
 import { LineChart } from "./LineChart";
 import { rgbString, type ExtractedPalette } from "../lib/color";
 
@@ -9,30 +11,29 @@ interface TelemetryCardProps {
   palette: ExtractedPalette;
   cpuHistory: number[];
   gpuHistory: number[];
+  freshness: Freshness;
 }
 
 /**
  * Rolling fan-speed history.
  *
- * Each poll contributes one sample; the chart is smoothed by the same cubic
- * path used elsewhere. It is explicitly labelled as recent samples, not a
- * device-reported series.
+ * Plots recent reads of the daemon cache, not a device-reported series.
  */
-export function TelemetryCard({ palette, cpuHistory, gpuHistory }: TelemetryCardProps) {
+export function TelemetryCard({ palette, cpuHistory, gpuHistory, freshness }: TelemetryCardProps) {
   const cpuColor = rgbString(palette.primary);
   const gpuColor = rgbString(palette.secondary);
 
   const metrics = [
     {
       label: "CPU 风扇",
-      value: cpuHistory.length ? cpuHistory[cpuHistory.length - 1] : 0,
+      value: cpuHistory[cpuHistory.length - 1],
       unit: "rpm",
       data: cpuHistory,
       color: cpuColor,
     },
     {
       label: "GPU1 风扇",
-      value: gpuHistory.length ? gpuHistory[gpuHistory.length - 1] : 0,
+      value: gpuHistory[gpuHistory.length - 1],
       unit: "rpm",
       data: gpuHistory,
       color: gpuColor,
@@ -41,7 +42,10 @@ export function TelemetryCard({ palette, cpuHistory, gpuHistory }: TelemetryCard
 
   return (
     <GlassCard sx={{ gap: 2 }}>
-      <CardHeader icon={<ActivityIcon sx={{ fontSize: 16 }} />} title="转速历史" />
+      <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 1 }}>
+        <CardHeader icon={<ActivityIcon sx={{ fontSize: 16 }} />} title="转速历史" />
+        <FreshnessBadge freshness={freshness} />
+      </Box>
 
       {/* Fixed two columns: the design surface is a constant 1600x900, so a
           viewport breakpoint would collapse this on a scaled-down window. */}
@@ -60,7 +64,7 @@ export function TelemetryCard({ palette, cpuHistory, gpuHistory }: TelemetryCard
                   color: "text.primary",
                 }}
               >
-                {m.value.toLocaleString()}
+                {m.value?.toLocaleString() ?? "—"}
                 <Box component="span" sx={{ ml: 0.25, fontSize: "0.625rem", color: "text.disabled" }}>
                   {m.unit}
                 </Box>
@@ -89,7 +93,7 @@ export function TelemetryCard({ palette, cpuHistory, gpuHistory }: TelemetryCard
                     color: "text.disabled",
                   }}
                 >
-                  采集中…
+                  {freshness === "unknown" ? "等待转速读数" : "暂无历史"}
                 </Box>
               )}
             </Box>

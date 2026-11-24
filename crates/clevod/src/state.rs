@@ -20,7 +20,7 @@ pub const MAX_FANS: usize = 3;
 pub enum Freshness {
     /// Read successfully during the most recent poll.
     Fresh,
-    /// Last read failed; the value shown is from an earlier poll.
+    /// Last read failed or the value is no longer recent.
     Stale,
     /// Never read successfully.
     #[default]
@@ -137,6 +137,8 @@ impl FanState {
 pub struct DaemonState {
     /// Cached fan state.
     pub fan: FanState,
+    /// Monotonic timestamp of the last successful firmware sample.
+    pub fan_sampled_at_ms: Option<u64>,
     /// Cached fan curve, if it has ever been read.
     pub curve: Option<FanCurveInfo>,
     /// User-saved curve used for local persistence.
@@ -161,11 +163,9 @@ impl DaemonState {
 
     /// Mark fan readings stale after a failed poll.
     pub fn mark_fan_stale(&mut self) {
-        self.fan.freshness = if self.fan.freshness == Freshness::Fresh {
-            Freshness::Stale
-        } else {
-            Freshness::Unknown
-        };
+        if self.fan.freshness.has_value() {
+            self.fan.freshness = Freshness::Stale;
+        }
     }
 }
 
@@ -219,6 +219,7 @@ mod tests {
     fn failure_marks_stale_but_keeps_value() {
         let mut st = DaemonState::default();
         st.apply_status(&status(), 2, TdpClass::Raw);
+        st.mark_fan_stale();
         st.mark_fan_stale();
         assert_eq!(st.fan.freshness, Freshness::Stale);
         assert_eq!(st.fan.cpu.rpm, 4770);

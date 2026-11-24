@@ -1,5 +1,6 @@
-//! Host CPU/GPU utilisation sampling for the dashboard.
+//! Host CPU/GPU utilisation and temperature sampling for the dashboard.
 
+use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
 use serde::Serialize;
@@ -117,6 +118,56 @@ fn parse_percent(value: &str) -> Option<u8> {
         .map(|value| value.min(100))
 }
 
+fn parse_temperature(raw: &str) -> Option<u8> {
+    let degrees = raw.trim().parse::<f32>().ok()?.round();
+    (1.0..=150.0).contains(&degrees).then_some(degrees as u8)
+}
+
+fn hwmon_temp_c(hwmon: &Path, input: &str) -> Option<u8> {
+    let raw = std::fs::read_to_string(hwmon.join(input)).ok()?;
+    let millidegrees: u32 = raw.trim().parse().ok()?;
+    u8::try_from(millidegrees.saturating_add(500) / 1_000)
+        .ok()
+        .filter(|temp| (1..=150).contains(temp))
+}
+
+fn cpu_temp_c(hwmon_root: &Path) -> Option<u8> {
+    std::fs::read_dir(hwmon_root)
+        .ok()?
+        .flatten()
+        .filter_map(|entry| {
+            let hwmon = entry.path();
+            let driver = std::fs::read_to_string(hwmon.join("name")).ok()?;
+            match driver.trim() {
+                "coretemp" => hwmon_temp_c(&hwmon, "temp1_input"),
+                "k10temp" => {
+                    let is_tdie = std::fs::read_to_string(hwmon.join("temp2_label"))
+                        .is_ok_and(|label| label.trim() == "Tdie");
+                    is_tdie
+                        .then(|| hwmon_temp_c(&hwmon, "temp2_input"))
+                        .flatten()
+                        .or_else(|| hwmon_temp_c(&hwmon, "temp1_input"))
+                }
+                _ => None,
+            }
+        })
+        .max()
+}
+
+fn gpu_temp_from_hwmon(hwmon_root: &Path) -> Option<u8> {
+    std::fs::read_dir(hwmon_root)
+        .ok()?
+        .flatten()
+        .find_map(|entry| {
+            let hwmon = entry.path();
+            let driver = std::fs::read_to_string(hwmon.join("name")).ok()?;
+            match driver.trim() {
+                "amdgpu" | "nouveau" | "nvidia" => hwmon_temp_c(&hwmon, "temp1_input"),
+                _ => None,
+            }
+        })
+}
+
 fn gpu_percent_from_sysfs() -> Option<u8> {
     let entries = std::fs::read_dir("/sys/class/drm").ok()?;
     for entry in entries.flatten() {
@@ -134,10 +185,31 @@ fn gpu_percent_from_sysfs() -> Option<u8> {
     None
 }
 
-fn gpu_percent_from_nvidia_smi() -> Option<u8> {
+#[derive(Debug, Default, PartialEq, Eq)]
+struct GpuSample {
+    percent: Option<u8>,
+    temp_c: Option<u8>,
+    freq_mhz: Option<u32>,
+}
+
+fn parse_nvidia_sample(csv: &str) -> Option<GpuSample> {
+    csv.lines().find_map(|line| {
+        let mut fields = line.split(',');
+        let percent = parse_percent(fields.next()?);
+        let temp_c = parse_temperature(fields.next()?);
+        let freq_mhz = fields.next()?.trim().parse().ok();
+        (percent.is_some() || temp_c.is_some() || freq_mhz.is_some()).then_some(GpuSample {
+            percent,
+            temp_c,
+            freq_mhz,
+        })
+    })
+}
+
+fn gpu_sample_from_nvidia_smi() -> Option<GpuSample> {
     let output = std::process::Command::new("nvidia-smi")
         .args([
-            "--query-gpu=utilization.gpu",
+            "--query-gpu=utilization.gpu,temperature.gpu,clocks.current.graphics",
             "--format=csv,noheader,nounits",
         ])
         .output()
@@ -145,14 +217,7 @@ fn gpu_percent_from_nvidia_smi() -> Option<u8> {
     if !output.status.success() {
         return None;
     }
-    output
-        .stdout
-        .split(|byte| *byte == b'\n' || *byte == b'\r')
-        .find_map(|line| parse_percent(std::str::from_utf8(line).ok()?))
-}
-
-fn gpu_percent() -> Option<u8> {
-    gpu_percent_from_sysfs().or_else(gpu_percent_from_nvidia_smi)
+    parse_nvidia_sample(std::str::from_utf8(&output.stdout).ok()?)
 }
 
 fn gpu_freq_from_sysfs() -> Option<u32> {
@@ -182,25 +247,20 @@ fn gpu_freq_from_sysfs() -> Option<u32> {
     None
 }
 
-fn gpu_freq_from_nvidia_smi() -> Option<u32> {
-    let output = std::process::Command::new("nvidia-smi")
-        .args([
-            "--query-gpu=clocks.current.graphics",
-            "--format=csv,noheader,nounits",
-        ])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
+fn gpu_sample(hwmon_root: &Path) -> GpuSample {
+    let percent = gpu_percent_from_sysfs();
+    let temp_c = gpu_temp_from_hwmon(hwmon_root);
+    let freq_mhz = gpu_freq_from_sysfs();
+    let nvidia = if percent.is_none() || temp_c.is_none() || freq_mhz.is_none() {
+        gpu_sample_from_nvidia_smi().unwrap_or_default()
+    } else {
+        GpuSample::default()
+    };
+    GpuSample {
+        percent: percent.or(nvidia.percent),
+        temp_c: temp_c.or(nvidia.temp_c),
+        freq_mhz: freq_mhz.or(nvidia.freq_mhz),
     }
-    output
-        .stdout
-        .split(|byte| *byte == b'\n' || *byte == b'\r')
-        .find_map(|line| std::str::from_utf8(line).ok()?.trim().parse::<u32>().ok())
-}
-
-fn gpu_freq_mhz() -> Option<u32> {
-    gpu_freq_from_sysfs().or_else(gpu_freq_from_nvidia_smi)
 }
 
 fn memory_percent() -> u8 {
@@ -303,23 +363,27 @@ fn disk_usage() -> Vec<DiskUsage> {
 }
 
 pub fn read() -> Result<HardwareUsage, String> {
-    // Host resource readings remain useful even when the fan daemon is
-    // temporarily unavailable. Temperatures and fan availability are optional
-    // enrichments from the daemon snapshot.
-    let snapshot = DaemonClient::system().ok().and_then(|client| client.snapshot().ok());
-    let gpu_percent = gpu_percent();
+    let hwmon_root = Path::new("/sys/class/hwmon");
+    let snapshot = DaemonClient::system()
+        .ok()
+        .and_then(|client| client.snapshot().ok());
+    let gpu = gpu_sample(hwmon_root);
     Ok(HardwareUsage {
         cpu_percent: cpu_percent(),
-        cpu_temp_c: snapshot.as_ref().and_then(|snapshot| snapshot.cpu.temp_c),
+        cpu_temp_c: cpu_temp_c(hwmon_root)
+            .or_else(|| snapshot.as_ref().and_then(|snapshot| snapshot.cpu.temp_c)),
         cpu_freq_mhz: cpu_freq_mhz(),
-        gpu_percent,
-        gpu_temp_c: snapshot.as_ref().and_then(|snapshot| snapshot.gpu1.temp_c),
-        gpu_freq_mhz: gpu_freq_mhz(),
+        gpu_percent: gpu.percent,
+        gpu_temp_c: gpu
+            .temp_c
+            .or_else(|| snapshot.as_ref().and_then(|snapshot| snapshot.gpu1.temp_c)),
+        gpu_freq_mhz: gpu.freq_mhz,
         gpu_available: snapshot
             .as_ref()
             .map(|snapshot| snapshot.gpu1.available)
             .unwrap_or(false)
-            || gpu_percent.is_some(),
+            || gpu.percent.is_some()
+            || gpu.temp_c.is_some(),
         memory_percent: memory_percent(),
         swap_percent: swap_percent(),
         disks: disk_usage(),
@@ -347,5 +411,40 @@ mod tests {
     fn converts_cpu_khz_to_mhz_but_keeps_gpu_mhz() {
         assert_eq!(super::parse_mhz("2113972"), Some(2113));
         assert_eq!(super::parse_mhz("1200"), Some(1200));
+    }
+
+    #[test]
+    fn reads_chip_temperatures_without_using_the_clevo_ec_sensor() {
+        let root = std::env::temp_dir().join(format!("clevo-ui-hwmon-{}", std::process::id()));
+        for (index, driver, temp) in [
+            (0, "clevo_cc", "96000"),
+            (1, "coretemp", "61400"),
+            (2, "amdgpu", "51500"),
+        ] {
+            let hwmon = root.join(format!("hwmon{index}"));
+            std::fs::create_dir_all(&hwmon).unwrap();
+            std::fs::write(hwmon.join("name"), driver).unwrap();
+            std::fs::write(hwmon.join("temp1_input"), temp).unwrap();
+        }
+        assert_eq!(super::cpu_temp_c(&root), Some(61));
+        assert_eq!(super::gpu_temp_from_hwmon(&root), Some(52));
+        std::fs::remove_dir_all(root.join("hwmon1")).unwrap();
+        std::fs::remove_dir_all(root.join("hwmon2")).unwrap();
+        assert_eq!(super::cpu_temp_c(&root), None);
+        assert_eq!(super::gpu_temp_from_hwmon(&root), None);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn parses_nvidia_temperature_even_when_other_fields_are_unavailable() {
+        assert_eq!(
+            super::parse_nvidia_sample("N/A, N/A, N/A\n[Not Supported], 54.6, 1920\n"),
+            Some(super::GpuSample {
+                percent: None,
+                temp_c: Some(55),
+                freq_mhz: Some(1920),
+            })
+        );
+        assert_eq!(super::parse_temperature("34.45"), Some(34));
     }
 }

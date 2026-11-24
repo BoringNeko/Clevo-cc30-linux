@@ -38,13 +38,16 @@ pub const DBUS_INTERFACE: &str = "org.clevo.CC";
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clevo_proto::command::{CMD_FAN_CURVE_WRITE, CMD_MAIN, SUB_FAN_MODE};
+    use clevo_proto::command::{
+        CMD_FAN_CURVE_READ, CMD_FAN_CURVE_WRITE, CMD_FAN_STATUS, CMD_MAIN, SUB_FAN_MODE,
+    };
     use clevo_proto::constants::PAYLOAD_LEN;
     use clevo_proto::fan_curve::{FanCurve, FanPoint};
     use clevo_transport::{
         AcpiKeyboard, Color, KeyboardMode, MockKeyboard, MockTransport, Transport, TransportError,
         TransportKind,
     };
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
 
     fn mock(fixture: &str) -> Box<dyn clevo_transport::Transport> {
@@ -59,7 +62,9 @@ mod tests {
     #[derive(Clone, Default)]
     struct RecordingTransport {
         calls: Arc<Mutex<Vec<RecordedCall>>>,
+        fan_periods: Option<Arc<Mutex<Option<[u16; 3]>>>>,
         fail_command: Option<u32>,
+        replay: Option<MockTransport>,
     }
 
     impl RecordingTransport {
@@ -83,6 +88,17 @@ mod tests {
     }
 
     impl Transport for RecordingTransport {
+        fn supports_fan_periods(&self) -> bool {
+            self.fan_periods.is_some()
+        }
+
+        fn read_fan_periods(&self) -> Result<[u16; 3], TransportError> {
+            self.fan_periods
+                .as_ref()
+                .and_then(|periods| *periods.lock().unwrap())
+                .ok_or_else(|| TransportError::Io("could not read fan periods".into()))
+        }
+
         fn execute(
             &self,
             command: u32,
@@ -92,7 +108,9 @@ mod tests {
             if self.fail_command == Some(command) {
                 return Err(TransportError::Io(format!("command {command} failed")));
             }
-            Ok(Vec::new())
+            self.replay
+                .as_ref()
+                .map_or_else(|| Ok(Vec::new()), |replay| replay.execute(command, payload))
         }
 
         fn read_app_settings(
@@ -423,6 +441,109 @@ mod tests {
         assert!(!state.fan.gpu2.available);
     }
 
+    struct TestClock(Arc<AtomicU64>);
+
+    impl service::Clock for TestClock {
+        fn now_ms(&self) -> u64 {
+            self.0.load(Ordering::Relaxed)
+        }
+    }
+
+    #[test]
+    fn fan_polls_share_a_cooldown_and_reuse_curve_metadata() {
+        let transport = RecordingTransport {
+            replay: Some(MockTransport::from_fixture_str(FIXTURE).unwrap()),
+            ..RecordingTransport::default()
+        };
+        let now = Arc::new(AtomicU64::new(0));
+        let service = Service::new(Box::new(transport.clone()))
+            .with_clock(Box::new(TestClock(now.clone())))
+            .with_fan_poll_interval_ms(60_000);
+        service.read_curve().unwrap();
+        assert_eq!(service.fan_freshness(), state::Freshness::Unknown);
+
+        std::thread::scope(|scope| {
+            let first = scope.spawn(|| service.poll_fan());
+            let second = scope.spawn(|| service.poll_fan());
+            first.join().unwrap().unwrap();
+            second.join().unwrap().unwrap();
+        });
+        now.store(59_999, Ordering::Relaxed);
+        service.poll_fan().unwrap();
+        assert_eq!(transport.calls().len(), 2);
+        assert_eq!(service.fan_freshness(), state::Freshness::Fresh);
+
+        now.store(60_000, Ordering::Relaxed);
+        service.poll_fan().unwrap();
+        assert_eq!(
+            transport
+                .calls()
+                .into_iter()
+                .map(|(command, _)| command)
+                .collect::<Vec<_>>(),
+            [
+                CMD_FAN_CURVE_READ.get(),
+                CMD_FAN_STATUS.get(),
+                CMD_FAN_STATUS.get()
+            ]
+        );
+        assert!(!service.state().lock().unwrap().fan.gpu2.available);
+        now.store(180_000, Ordering::Relaxed);
+        assert_eq!(service.fan_freshness(), state::Freshness::Stale);
+        assert_eq!(transport.calls().len(), 3);
+    }
+
+    #[test]
+    fn failed_fan_polls_are_also_rate_limited() {
+        let transport = RecordingTransport {
+            fail_command: Some(CMD_FAN_STATUS.get()),
+            ..RecordingTransport::default()
+        };
+        let service = Service::new(Box::new(transport.clone())).with_fan_poll_interval_ms(60_000);
+        let failure = service.poll_fan().unwrap_err();
+        assert_eq!(service.poll_fan().unwrap_err(), failure);
+        assert_eq!(service.fan_freshness(), state::Freshness::Unknown);
+        assert_eq!(transport.calls().len(), 1);
+    }
+
+    #[test]
+    fn direct_period_polls_never_retry_through_full_status() {
+        let periods = Arc::new(Mutex::new(Some([1085, 0, 0])));
+        let transport = RecordingTransport {
+            fan_periods: Some(periods.clone()),
+            replay: Some(MockTransport::from_fixture_str(FIXTURE).unwrap()),
+            ..RecordingTransport::default()
+        };
+        let now = Arc::new(AtomicU64::new(0));
+        let service = Service::new(Box::new(transport.clone()))
+            .with_clock(Box::new(TestClock(now.clone())))
+            .with_fan_poll_interval_ms(2_000);
+        assert!(service.uses_fan_periods());
+        service.poll_fan().unwrap();
+        let state = service.state();
+        assert_eq!(state.lock().unwrap().fan.cpu.rpm, 1987);
+        assert_eq!(state.lock().unwrap().fan.cpu.temp_c, None);
+
+        *periods.lock().unwrap() = None;
+        now.store(1_999, Ordering::Relaxed);
+        service.poll_fan().unwrap();
+        now.store(2_000, Ordering::Relaxed);
+        assert!(service.poll_fan().is_err());
+        assert_eq!(service.fan_freshness(), state::Freshness::Stale);
+        assert_eq!(state.lock().unwrap().fan.cpu.rpm, 1987);
+
+        *periods.lock().unwrap() = Some([1083, 683, 0]);
+        now.store(4_000, Ordering::Relaxed);
+        service.poll_fan().unwrap();
+        assert_eq!(service.fan_freshness(), state::Freshness::Fresh);
+        assert_eq!(state.lock().unwrap().fan.cpu.rpm, 1991);
+        assert_eq!(state.lock().unwrap().fan.gpu1.rpm, 3157);
+        assert_eq!(
+            transport.calls(),
+            [(CMD_FAN_CURVE_READ.get(), [0; PAYLOAD_LEN])]
+        );
+    }
+
     #[test]
     fn service_rejects_unknown_mode_before_io() {
         let service = Service::new(mock(FIXTURE));
@@ -517,8 +638,8 @@ mod tests {
     #[test]
     fn failed_curve_restore_does_not_select_custom_mode() {
         let transport = RecordingTransport {
-            calls: Arc::new(Mutex::new(Vec::new())),
             fail_command: Some(CMD_FAN_CURVE_WRITE.get()),
+            ..RecordingTransport::default()
         };
         let service = Service::new(Box::new(transport.clone()));
         let config = config::Config {
@@ -577,8 +698,8 @@ mod tests {
     #[test]
     fn a_failed_curve_write_is_not_persisted() {
         let transport = RecordingTransport {
-            calls: Arc::new(Mutex::new(Vec::new())),
             fail_command: Some(CMD_FAN_CURVE_WRITE.get()),
+            ..RecordingTransport::default()
         };
         let path = temp_config("curve-fail");
         let service =

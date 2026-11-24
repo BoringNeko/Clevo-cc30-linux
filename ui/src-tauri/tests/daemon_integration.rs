@@ -131,6 +131,9 @@ fn snapshot_from_real_daemon() {
     start_daemon(clevo_cc_ui::dbus::DBUS_NAME);
 
     let client = DaemonClient::session().expect("client");
+    let unsampled = client.snapshot().expect("cached snapshot");
+    assert_eq!(unsampled.fan_count, 0);
+    assert_eq!(unsampled.freshness, "unknown");
     client.poll().expect("poll");
     let snap = client.snapshot().expect("snapshot");
     assert_eq!(snap.cpu.rpm, 4667);

@@ -9,9 +9,11 @@
 //! and never writes. This makes the D-Bus surface testable offline and is the
 //! safe default when no machine is present.
 
+use std::num::NonZeroU64;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::time::Duration;
 
 use clap::Parser;
 use tracing::{info, warn};
@@ -22,6 +24,9 @@ use clevo_transport::{
 };
 use clevod::dbus::CcDaemon;
 use clevod::{config, DBUS_NAME, DBUS_PATH};
+
+const DEFAULT_INTERVAL_MS: u64 = 2_000;
+const P15_MIN_FAN_INTERVAL_MS: u64 = 60_000;
 
 #[derive(Debug, Parser)]
 #[command(name = "clevod", version, about = "Clevo control-center daemon")]
@@ -45,13 +50,41 @@ struct Args {
     #[arg(long)]
     session_bus: bool,
 
-    /// Poll interval in milliseconds.
-    #[arg(long, default_value_t = 2000)]
-    interval_ms: u64,
+    /// Fan poll interval in milliseconds (default 2000; no recurring full-status polls on P15 23).
+    #[arg(long)]
+    interval_ms: Option<NonZeroU64>,
 
-    /// Do not start the background poll loop.
+    /// Disable background fan sampling and mode synchronization.
     #[arg(long)]
     no_poll: bool,
+}
+
+fn is_p15_23(vendor: &str, product: &str) -> bool {
+    vendor.trim().eq_ignore_ascii_case("COLORFUL") && product.trim().eq_ignore_ascii_case("P15 23")
+}
+
+fn host_is_p15_23() -> bool {
+    match (
+        std::fs::read_to_string("/sys/class/dmi/id/sys_vendor"),
+        std::fs::read_to_string("/sys/class/dmi/id/product_name"),
+    ) {
+        (Ok(vendor), Ok(product)) => is_p15_23(&vendor, &product),
+        _ => false,
+    }
+}
+
+fn fan_poll_intervals(
+    requested: Option<NonZeroU64>,
+    is_p15: bool,
+    rpm_only: bool,
+) -> (Option<u64>, u64) {
+    if is_p15 && !rpm_only {
+        let interval = requested.map(|value| value.get().max(P15_MIN_FAN_INTERVAL_MS));
+        (interval, interval.unwrap_or(P15_MIN_FAN_INTERVAL_MS))
+    } else {
+        let interval = requested.map_or(DEFAULT_INTERVAL_MS, NonZeroU64::get);
+        (Some(interval), interval)
+    }
 }
 
 fn build_transport(args: &Args) -> Result<Box<dyn Transport>, String> {
@@ -112,7 +145,24 @@ async fn main() -> ExitCode {
     } else {
         Some(args.config.clone())
     };
+    let is_p15 = args.mock.is_none() && host_is_p15_23();
     let service = clevod::Service::new(transport).with_config_path(persist_path);
+    let rpm_only = service.uses_fan_periods();
+    let (fan_interval_ms, min_fan_interval_ms) =
+        fan_poll_intervals(args.interval_ms, is_p15, rpm_only);
+    if rpm_only {
+        info!(
+            background_fan_interval_ms = ?fan_interval_ms.filter(|_| !args.no_poll),
+            "using direct fan periods without command 12"
+        );
+    } else if is_p15 {
+        info!(
+            background_fan_interval_ms = ?fan_interval_ms.filter(|_| !args.no_poll),
+            min_fan_interval_ms,
+            "COLORFUL P15 23: limiting EC fan telemetry to avoid gpe6E interrupt bursts"
+        );
+    }
+    let service = service.with_fan_poll_interval_ms(min_fan_interval_ms);
     let firmware_curve = service.read_curve().ok();
     let firmware_keyboard_type = firmware_curve.as_ref().map(|curve| curve.kb_type);
     if let Some(curve) = firmware_curve {
@@ -173,18 +223,30 @@ async fn main() -> ExitCode {
 
     if !args.no_poll {
         let service = Arc::clone(&service);
-        let interval = std::time::Duration::from_millis(args.interval_ms);
         tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(interval);
-            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
-                ticker.tick().await;
                 let poll = Arc::clone(&service);
                 match tokio::task::spawn_blocking(move || poll.poll_fan()).await {
                     Ok(Err(err)) => warn!("fan poll failed: {err}"),
                     Err(err) => warn!("fan poll task failed: {err}"),
                     _ => {}
                 }
+                let Some(interval_ms) = fan_interval_ms else {
+                    break;
+                };
+                tokio::time::sleep(Duration::from_millis(interval_ms)).await;
+            }
+        });
+    }
+    if is_p15 && !args.no_poll && fan_interval_ms.unwrap_or(u64::MAX) > DEFAULT_INTERVAL_MS {
+        let service = Arc::clone(&service);
+        tokio::spawn(async move {
+            loop {
+                let sync = Arc::clone(&service);
+                if let Err(err) = tokio::task::spawn_blocking(move || sync.sync_modes()).await {
+                    warn!("mode sync task failed: {err}");
+                }
+                tokio::time::sleep(Duration::from_millis(DEFAULT_INTERVAL_MS)).await;
             }
         });
     }
@@ -221,4 +283,40 @@ async fn main() -> ExitCode {
     }
 
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn matches_only_the_affected_dmi_model() {
+        assert!(is_p15_23("COLORFUL\n", "P15 23\n"));
+        assert!(!is_p15_23("COLORFUL", "P15 24"));
+        assert!(!is_p15_23("CLEVO", "P15 23"));
+    }
+
+    #[test]
+    fn affected_model_has_no_recurring_sampling_by_default_and_clamps_opt_in() {
+        assert_eq!(fan_poll_intervals(None, true, false), (None, 60_000));
+        assert_eq!(
+            fan_poll_intervals(NonZeroU64::new(2_000), true, false),
+            (Some(60_000), 60_000)
+        );
+        assert_eq!(
+            fan_poll_intervals(NonZeroU64::new(120_000), true, false),
+            (Some(120_000), 120_000)
+        );
+        assert_eq!(fan_poll_intervals(None, false, false), (Some(2_000), 2_000));
+        assert!(Args::try_parse_from(["clevod", "--interval-ms", "0"]).is_err());
+    }
+
+    #[test]
+    fn direct_periods_allow_recurring_sampling_on_p15() {
+        assert_eq!(fan_poll_intervals(None, true, true), (Some(2_000), 2_000));
+        assert_eq!(
+            fan_poll_intervals(NonZeroU64::new(3_000), true, true),
+            (Some(3_000), 3_000)
+        );
+    }
 }
