@@ -7,19 +7,20 @@ UI 的「电源与电池」页面和 `clevo-cc power` 使用同一组 daemon 接
 
 ## 当前验证结果
 
-截至 2026-10-11，COLORFUL P15 23 已确认：
+COLORFUL P15 23 的真机验证记录：
 
 | 项目 | 结果 |
 |---|---|
 | 电池读取 | BAT0 电量、状态、容量健康度、循环次数及外接电源可读 |
 | 标准充电阈值 | 本机没有标准 start/end threshold 节点 |
 | 原生 FlexiCharger | 已通过 D-Bus 设置并回读 `enabled=1/start=40/end=80` |
-| 当前充电状态 | 99% 时内核 `Not charging`、电流 0，UPower `fully-charged`、功率 0 W |
-| 内核桌面模式 | `clevo-cc` provider 可读，当前 performance，上报四种 profile |
-| 待验收 | 从低电量充到停止阈值、跌破开始阈值后的恢复、重启重放、KDE/GNOME 双向切换 |
+| 原生阈值行为 | 2026-11-25 快速对照通过：接电且显示 93% 时，80–90% 窗口不充电，切换到 95–100% 窗口后开始充电 |
+| 内核桌面模式 | `clevo-cc` provider 可读，上报四种 profile |
+| KDE 桌面联动 | 2026-11-25 双向验收通过：KDE 切「节能」后控制中心自动跟随；控制中心切「均衡」后 KDE 自动跟随，内核、守护进程和保存值一致 |
+| 待验收 | 从低电量充到停止阈值、跌破开始阈值后的恢复、充电阈值重启重放、GNOME 双向切换 |
 
-固件阈值读回是固件变量，不是独立的 EC 应答。当前无充电电流不能替代一次完整的
-充电周期验收；其他机型也需要单独验证。
+固件阈值读回是固件变量，不是独立的 EC 应答。快速对照确认窗口能改变实际充电状态，
+但不能替代固定窗口的完整充电周期验收；其他机型也需要单独验证。
 
 ## 电池和充电阈值
 
@@ -168,7 +169,10 @@ grep perf_mode /etc/clevo-cc/clevod.toml
 
 桌面具体显示哪些档位取决于其电源服务和内核 provider；可用时用
 `powerprofilesctl list` / `powerprofilesctl get` 辅助检查，不强行同时启动多个电源管理器。
-本机已读到 provider 的四种 choices 和 performance 状态；桌面双向联动仍待验收。
+双向验收时，先在桌面切「节能」，确认控制中心自动跟随且内核为 `low-power`、
+保存值为 `perf_mode = 1`；再在控制中心切「均衡」，确认桌面自动跟随且内核为
+`balanced`、保存值为 `perf_mode = 3`。两步均无需手动刷新。
+
 KDE 提示「电源管理方案不可用」并建议安装 `power-profiles-daemon`，表示桌面的
 电源服务尚不可用，不等于 `clevo-cc` 的内核 provider 或充电阈值控制失效。先检查
 发行版配置的电源服务，再测试桌面切换：
@@ -179,10 +183,30 @@ powerprofilesctl list
 powerprofilesctl get
 ```
 
+如果升级或重载驱动后，内核已提供 `platform_profile`，但 `powerprofilesctl list`
+仍显示 `PlatformDriver: placeholder`，可用 `sudo systemctl restart power-profiles-daemon.service`
+让服务重新探测。本机在 `power-profiles-daemon 0.30` 上重启后显示
+`PlatformDriver: platform_profile`。服务重启可能重新应用桌面保存的档位。
+
 未安装工具或使用其他电源管理器时，按发行版的实际配置处理；无需为读取本项目
 UI 或使用 CLI 阈值控制额外启用该服务。
 
 ## 阈值真机验收
+
+### 快速对照
+
+2026-11-25，COLORFUL P15 23 接电（`AC/online=1`）、电量显示 93%，
+保持 FlexiCharger 启用并切换窗口：
+
+| 窗口 | `BAT0/status` | `BAT0/current_now`（µA） |
+|---|---|---:|
+| 80–90% | `Not charging` | 0 |
+| 95–100% | `Charging` | 506000 |
+
+这确认阈值能影响实际充电，而不只是保存和回读。两次设置的开始值和停止值均有变化，
+因此不能据此判定固定窗口下跨越任一阈值时的行为。
+
+### 完整周期与重启
 
 先记录原来的 enabled/start/end 和配置文件内容。测试会改变充电策略，完成后
 通过 D-Bus 恢复记录的原值，避免 daemon 下次启动又重放测试配置。

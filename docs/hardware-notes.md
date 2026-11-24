@@ -116,6 +116,19 @@ reads two seconds apart) added no `gpe6E` interrupts in that test, whereas
 command 12 added 111–114 interrupts per read. This comparison does not cover a
 spinning GPU fan or other firmware versions.
 
+On 2026-11-25, an end-to-end check on the same P15 23 firmware used the v0.2.3
+driver and `clevod` with two-second RPM-only polling and `gpe6E` unmasked:
+
+| 60-second run | `gpe6E` increase | Peak one-second increase |
+|---|---:|---:|
+| Low load | 0 | 0 |
+| Light web load, GPU fan spinning | 12 | 2 |
+
+The Control Center displayed approximately 2,000–3,000 RPM for the GPU fan
+without manual refresh. Neither run reproduced the recurring interrupt bursts
+from full-status polling. This validates the GPU fan display under light load,
+not a paired RPM comparison against command 12 while that fan was spinning.
+
 ## 6. Command 13 — fan curve read (`PK0D`), verified offsets
 
 | Buffer offset | EC field |
@@ -1203,9 +1216,29 @@ quiet=0, low-power=1, balanced=3, performance=2. Both GCMD gates are checked
 before registering or writing. The real driver compiled against the local
 7.2.9-arch1-1 headers; an extracted-helper firmware mock covers all four mappings,
 unknown initial state, rejected gates and failed writes. With the new module
-installed, the live power snapshot reports the clevo-cc provider, performance
-and all four choices. The KDE screenshot reports its desktop power service
-unavailable; this does not contradict the kernel provider readback. Desktop
-switching, notification and daemon persistence still require the procedure in
-[power.md](power.md). Provider readback and offline checks are not a claim of
-successful KDE/GNOME profile switching.
+installed, the live power snapshot reported the clevo-cc provider, performance
+and all four choices. The KDE desktop power service was unavailable during
+that initial check, so the provider readback did not establish desktop switching.
+
+### 17.1. KDE desktop power acceptance (2026-11-25)
+
+On COLORFUL P15 23 with Arch Linux and power-profiles-daemon 0.30, the daemon
+still showed `PlatformDriver: placeholder` after a driver upgrade. Restarting
+the desktop power service after the Clevo provider was available selected
+`PlatformDriver: platform_profile`. Its initial `balanced` setting was
+reflected in the kernel, in the daemon's D-Bus `PerfMode` (`3`), and in the
+saved `perf_mode = 3`.
+
+The user then confirmed both directions of the [acceptance procedure](power.md):
+KDE → Control Center for power-saver and Control Center → KDE for balanced.
+This confirms KDE on this machine; GNOME and the FlexiCharger charge-cycle and
+reboot tests are still pending.
+
+### 17.2. FlexiCharger live comparison (2026-11-25)
+
+The user compared two enabled windows with AC online and BAT0 reporting 93%
+in both samples. With the 80–90% window, BAT0 reported `Not charging` and
+`current_now=0`. With the 95–100% window, it reported `Charging` and
+`current_now=506000` µA. This confirms that changing the window affects actual
+charging. It does not establish natural threshold crossings with the window
+held fixed or replay after reboot.
