@@ -439,11 +439,7 @@ impl AcpiKeyboard {
 
     fn update_zone(&self, _zone: KeyboardZone, color: Color) {
         if let Ok(mut state) = self.state.lock() {
-            for row in 0..KEYBOARD_ROWS {
-                for col in KeyboardZone::All.columns() {
-                    state.keys[row][col] = color;
-                }
-            }
+            state.keys.fill([color; KEYBOARD_COLS]);
         }
     }
 }
@@ -584,10 +580,8 @@ impl Keyboard for MockKeyboard {
 
     fn set_zone(&self, zone: KeyboardZone, color: Color) -> Result<(), KeyboardError> {
         let mut state = self.state()?;
-        for row in 0..KEYBOARD_ROWS {
-            for col in zone.columns() {
-                state.keys[row][col] = color;
-            }
+        for row in &mut state.keys {
+            row[zone.columns()].fill(color);
         }
         Ok(())
     }

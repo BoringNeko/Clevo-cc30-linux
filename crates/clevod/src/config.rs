@@ -16,7 +16,7 @@
 use std::path::{Path, PathBuf};
 
 use clevo_proto::fan_curve::{FanCurve, FanPoint, CURVE_POINTS};
-use clevo_transport::{Color, KeyboardMode, KeyboardSnapshot, KEYBOARD_COLS, KEYBOARD_ROWS};
+use clevo_transport::{Color, KeyboardMode, KeyboardSnapshot};
 use serde::{Deserialize, Serialize};
 
 /// Current on-disk schema version.
@@ -107,9 +107,8 @@ impl KeyboardConfig {
     /// Convert the successful in-memory writes into a compact TOML value.
     pub fn from_snapshot(snapshot: &KeyboardSnapshot) -> Self {
         let mut keys = Vec::new();
-        for row in 0..KEYBOARD_ROWS {
-            for col in 0..KEYBOARD_COLS {
-                let color = snapshot.keys[row][col];
+        for (row, colors) in snapshot.keys.iter().enumerate() {
+            for (col, &color) in colors.iter().enumerate() {
                 if color != Color::default() {
                     keys.push(KeyboardKeyWire {
                         row: row as u8,
