@@ -45,6 +45,11 @@
 #define CLEVO_CMD_MAIN 121
 #define CLEVO_CMD_KEYBOARD_RGB 103
 #define CLEVO_CMD_SETTINGS 4
+#define CLEVO_SUB_MUX_READ 0x15
+#define CLEVO_SUB_MUX_WRITE 0x16
+#define CLEVO_MUX_INTEGRATED 1
+#define CLEVO_MUX_HYBRID 3
+#define CLEVO_MUX_SUPPORTED_BITS GENMASK(CLEVO_MUX_HYBRID - 1, 0)
 #define CLEVO_SUB_FLEXICHARGER_READ 30
 #define CLEVO_SUB_FLEXICHARGER_WRITE 31
 #define CLEVO_CHARGE_VALUES_LEN 16
@@ -124,6 +129,9 @@ struct clevo_cc {
 	bool perf_mode_set;
 	struct mutex perf_lock;
 	struct mutex charge_lock;
+	struct mutex mux_lock;
+	bool mux_available;
+	u8 mux_requested;
 #if IS_REACHABLE(CONFIG_ACPI_PLATFORM_PROFILE)
 #ifdef CLEVO_PROFILE_DEVICE_API
 	struct device *profile_dev;
@@ -233,6 +241,10 @@ static int clevo_cc_dsm_call(struct clevo_cc *cc, u32 function,
 	}
 
 	ret = buf.pointer;
+	if (!ret) {
+		err = -EPROTO;
+		goto out;
+	}
 	if (ret->type == ACPI_TYPE_BUFFER) {
 		size_t n = min(out_cap, (size_t)ret->buffer.length);
 
@@ -977,15 +989,20 @@ static const char *clevo_cc_perf_name(enum clevo_perf_mode mode)
 
 static const char * const clevo_cc_fan_period_fields[] = { "RPM1", "RPM2", "RPM3" };
 
+static bool clevo_cc_is_p15_23_colo2(void)
+{
+	return dmi_match(DMI_SYS_VENDOR, "COLORFUL") &&
+	       dmi_match(DMI_PRODUCT_NAME, "P15 23") &&
+	       dmi_match(DMI_BOARD_NAME, "P15 23") &&
+	       dmi_match(DMI_BIOS_VERSION, "1.07.04COLO2");
+}
+
 static acpi_handle clevo_cc_find_fan_periods(void)
 {
 	acpi_handle ec, field;
 	unsigned int index;
 
-	if (!dmi_match(DMI_SYS_VENDOR, "COLORFUL") ||
-	    !dmi_match(DMI_PRODUCT_NAME, "P15 23") ||
-	    !dmi_match(DMI_BOARD_NAME, "P15 23") ||
-	    !dmi_match(DMI_BIOS_VERSION, "1.07.04COLO2"))
+	if (!clevo_cc_is_p15_23_colo2())
 		return NULL;
 
 	if (ACPI_FAILURE(acpi_get_handle(NULL, "\\_SB.PC00.LPCB.EC", &ec)))
@@ -1990,6 +2007,91 @@ static ssize_t flexicharger_store(struct device *dev, struct device_attribute *a
 }
 static DEVICE_ATTR_RW(flexicharger);
 
+static bool clevo_cc_mux_mode_valid(u8 mode)
+{
+	return mode >= CLEVO_MUX_INTEGRATED && mode <= CLEVO_MUX_HYBRID;
+}
+
+/* Leave room to detect oversized replies because dsm_payload truncates to out_cap. */
+static int clevo_cc_mux_request(struct clevo_cc *cc, u8 command, u8 mode, u8 *out)
+{
+	u8 payload[CLEVO_PAYLOAD_LEN] = { command, mode };
+	size_t len = 0;
+	int err;
+
+	err = clevo_cc_dsm_payload(cc, CLEVO_CMD_SETTINGS, payload, out,
+				   CLEVO_PAYLOAD_LEN + 1, &len);
+	if (err)
+		return err;
+	return len == CLEVO_PAYLOAD_LEN ? 0 : -EPROTO;
+}
+
+static int clevo_cc_mux_read(struct clevo_cc *cc, u8 *mode, u8 *mask)
+{
+	u8 out[CLEVO_PAYLOAD_LEN + 1];
+	int err;
+
+	err = clevo_cc_mux_request(cc, CLEVO_SUB_MUX_READ, 0, out);
+	if (err)
+		return err;
+
+	*mode = out[0];
+	*mask = out[1] & CLEVO_MUX_SUPPORTED_BITS;
+	if (!clevo_cc_mux_mode_valid(*mode) || !*mask)
+		return -EOPNOTSUPP;
+	return 0;
+}
+
+static ssize_t mux_status_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct clevo_cc *cc = dev_get_drvdata(dev);
+	u8 mode, mask, requested;
+	int err;
+
+	mutex_lock(&cc->mux_lock);
+	err = clevo_cc_mux_read(cc, &mode, &mask);
+	requested = cc->mux_requested;
+	mutex_unlock(&cc->mux_lock);
+	if (err)
+		return err;
+	return sysfs_emit(buf, "%u %u %u\n", mode, mask, requested);
+}
+static DEVICE_ATTR_RO(mux_status);
+
+static ssize_t mux_mode_store(struct device *dev, struct device_attribute *attr,
+			      const char *buf, size_t count)
+{
+	struct clevo_cc *cc = dev_get_drvdata(dev);
+	u8 out[CLEVO_PAYLOAD_LEN + 1];
+	u8 target, mode, mask;
+	int err;
+
+	err = kstrtou8(buf, 10, &target);
+	if (err)
+		return err;
+	if (!clevo_cc_mux_mode_valid(target))
+		return -EINVAL;
+
+	mutex_lock(&cc->mux_lock);
+	err = clevo_cc_mux_read(cc, &mode, &mask);
+	if (err)
+		goto out_unlock;
+	if (!(mask & BIT(target - 1))) {
+		err = -EOPNOTSUPP;
+		goto out_unlock;
+	}
+
+	/* Writing the active mode can replace an earlier request, even after a rebind. */
+	err = clevo_cc_mux_request(cc, CLEVO_SUB_MUX_WRITE, target, out);
+	/* The reply reports submission only. The mode becomes observable after reboot. */
+	cc->mux_requested = err ? 0 : target;
+
+out_unlock:
+	mutex_unlock(&cc->mux_lock);
+	return err ? err : count;
+}
+static DEVICE_ATTR_WO(mux_mode);
+
 static struct attribute *clevo_cc_attrs[] = {
 	&dev_attr_fan_mode.attr,
 	&dev_attr_fan_curve.attr,
@@ -2001,6 +2103,8 @@ static struct attribute *clevo_cc_attrs[] = {
 	&dev_attr_keyboard_rgb.attr,
 	&dev_attr_capabilities.attr,
 	&dev_attr_flexicharger.attr,
+	&dev_attr_mux_status.attr,
+	&dev_attr_mux_mode.attr,
 	NULL
 };
 
@@ -2009,6 +2113,9 @@ static umode_t clevo_cc_attr_visible(struct kobject *kobj, struct attribute *att
 	struct clevo_cc *cc = dev_get_drvdata(kobj_to_dev(kobj));
 
 	if (attr == &dev_attr_fan_periods.attr && (!cc || !cc->fan_period_ec))
+		return 0;
+	if ((attr == &dev_attr_mux_status.attr || attr == &dev_attr_mux_mode.attr) &&
+	    (!cc || !cc->mux_available))
 		return 0;
 	return attr->mode;
 }
@@ -2038,6 +2145,7 @@ static int clevo_cc_probe(struct platform_device *pdev)
 	mutex_init(&cc->keyboard_lock);
 	mutex_init(&cc->perf_lock);
 	mutex_init(&cc->charge_lock);
+	mutex_init(&cc->mux_lock);
 	cc->keyboard_brightness = 100;
 	cc->keyboard_brightness_raw = CLEVO_KB_BRIGHTNESS_MAX;
 	cc->keyboard_mode = "unknown";
@@ -2066,6 +2174,7 @@ static int clevo_cc_probe(struct platform_device *pdev)
 	       16);
 
 	cc->fan_period_ec = clevo_cc_find_fan_periods();
+	cc->mux_available = clevo_cc_is_p15_23_colo2();
 	platform_set_drvdata(pdev, cc);
 
 	hwmon = devm_hwmon_device_register_with_info(

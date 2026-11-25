@@ -149,6 +149,11 @@ fn dispatch(command: &str, args: &Value) -> Result<Value, String> {
             let mode = str_arg(args, "mode")?;
             ok(commands::set_perf_mode(mode)?)
         }
+        "get_mux_status" => ok(commands::get_mux_status()?),
+        "set_mux_mode" => {
+            commands::set_mux_mode(str_arg(args, "mode")?)?;
+            Ok(Value::Null)
+        }
         "set_fan_curve" => {
             let curve = args
                 .get("curve")

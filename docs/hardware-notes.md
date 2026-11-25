@@ -1242,3 +1242,67 @@ in both samples. With the 80–90% window, BAT0 reported `Not charging` and
 `current_now=506000` µA. This confirms that changing the window affects actual
 charging. It does not establish natural threshold crossings with the window
 held fixed or replay after reboot.
+
+## 18. Graphics MUX
+
+The `clevo-cc` driver exposes MUX controls on COLORFUL P15 23 with a matching
+P15 23 board and BIOS `1.07.04COLO2`. It calls `CLV0001` DCHU `_DSM`
+function 4 with `Package { Buffer(256) }`. Selector `0x15` reads the boot
+mode and supported mask from reply bytes 0 and 1. Selector `0x16` submits
+the target mode in request byte 1. The driver serializes reads and writes and
+checks the requested mode against the firmware mask before submitting it.
+
+On this firmware the mask is `0x06`. Bit 0 corresponds to mode 1, so the
+firmware offers `discrete` (2) and `hybrid` (3). The bit for `integrated`
+(1) is clear.
+
+`GetMuxStatus()` returns three D-Bus bytes (`yyy`) in the same order as
+`/sys/devices/platform/CLV0001:00/mux_status`.
+
+| Field | Meaning |
+|---|---|
+| `current_mode` | Firmware mode in use for this boot |
+| `supported_mask` | Supported modes, shown in decimal by `busctl` and sysfs |
+| `requested_mode` | Last target submitted during the current driver binding. `0` means unknown. |
+
+`SetMuxMode(s)` submits a mode name after PolicyKit checks
+`org.clevo.CC.set-mux-mode`. The following command requests hybrid mode.
+
+```bash
+busctl --system --allow-interactive-authorization=yes call \
+    org.clevo.CC /org/clevo/CC org.clevo.CC SetMuxMode s hybrid
+```
+
+The firmware applies the target on reboot. Use `discrete` for discrete mode.
+To replace a pending change before reboot, submit the current boot mode.
+
+### Hardware verification
+
+On Arch Linux with kernel `7.3.5-arch1-1`, both directions were tested with
+`clevod`'s system D-Bus methods. The user read `GetMuxStatus` before and after
+each reboot and checked PCI device enumeration and the DRM eDP connectors after boot.
+
+| Transition | After submission | After reboot | PCI GPUs after reboot | Connected internal eDP |
+|---|---|---|---|---|
+| Discrete → hybrid | `yyy 2 6 3` | `yyy 3 6 0` | Intel `0000:00:02.0` and NVIDIA RTX 4060 `0000:01:00.0` | Intel `0x8086` |
+| Hybrid → discrete | `yyy 3 6 2` | `yyy 2 6 0` | NVIDIA RTX 4060 `0000:01:00.0` | NVIDIA `0x10de` |
+
+In hybrid mode, a separate OpenGL check used Intel by default and NVIDIA with
+`prime-run glxinfo -B`. External display routing and NVIDIA Runtime D3 in
+hybrid mode still need hardware verification.
+
+Use the following commands to read the boot mode and inspect the display
+topology after reboot.
+
+```bash
+busctl --system call org.clevo.CC /org/clevo/CC org.clevo.CC GetMuxStatus
+lspci -Dnn | awk '/VGA compatible controller|3D controller|Display controller/'
+for connector in /sys/class/drm/card*-eDP-*; do
+    [[ -r "$connector/status" && -r "$connector/device/device/vendor" ]] || continue
+    device=$(readlink -f "$connector/device/device")
+    printf '%s status=%s pci=%s vendor=%s\n' "${connector##*/}" \
+        "$(<"$connector/status")" "${device##*/}" "$(<"$device/vendor")"
+done
+```
+
+[Desktop controls](desktop-ui.md#显卡模式mux) · [Installation and status checks](install.md#显卡模式mux)

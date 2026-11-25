@@ -89,6 +89,33 @@ clevo-cc --transport dbus fan status
 clevo-cc --transport dbus power status --json
 ```
 
+### 显卡模式（MUX）
+
+首次安装或从旧版升级 MUX 时，在项目根目录运行安装器，更新 DKMS 驱动、`clevod`、
+PolicyKit 规则和桌面端。Electron 使用 `--electron`，Tauri 使用 `--ui`。
+
+```bash
+sudo packaging/install.sh --enable --electron
+```
+
+使用登录用户在终端检查已安装的驱动和 D-Bus 接口。
+
+```bash
+cat /sys/devices/platform/CLV0001:00/mux_status
+busctl --system call org.clevo.CC /org/clevo/CC org.clevo.CC GetMuxStatus
+```
+
+已验证固件上的独显直连示例为 `2 6 0` 和 `yyy 2 6 0`。中间的 `6` 是支持位图
+`0x06`。已装好 MUX 后端且 `target/release` 中已有对应的 `clevod` 和 `clevo-cc`
+时，可以复用预编译产物并跳过 DKMS。
+
+```bash
+sudo packaging/install.sh --bin-dir target/release --no-driver --no-udev --enable --electron
+```
+
+安装后从应用菜单打开控制中心，在概览页使用显卡模式卡片。
+[切换与重启提示](desktop-ui.md#显卡模式mux)
+
 ### 电池、充电阈值与桌面模式
 
 第一次安装这些功能时同时更新驱动、daemon 和 UI：

@@ -1,4 +1,4 @@
-//! Read-only client for the `org.clevo.CC` daemon.
+//! Client for the `org.clevo.CC` daemon.
 //!
 //! The UI backend never touches hardware: it speaks to `clevod` over the system
 //! D-Bus and maps the replies into the `serde` types the frontend expects. The
@@ -71,6 +71,14 @@ pub struct FanSnapshot {
     pub writable: bool,
     /// Whether a custom fan curve can be written.
     pub curve_writable: bool,
+}
+
+/// Firmware boot mode, supported-mode mask and last submitted target.
+#[derive(Debug, serde::Serialize)]
+pub struct MuxStatus {
+    pub current_mode: u8,
+    pub supported_mask: u8,
+    pub requested_mode: u8,
 }
 
 /// A single curve point, as sent to the frontend.
@@ -256,6 +264,33 @@ impl DaemonClient {
         reply.body().deserialize().map_err(|e| UiError {
             message: format!("could not decode SetPerfMode reply: {e}"),
         })
+    }
+
+    /// Read MUX status, or return None on older daemons or unsupported hardware.
+    pub fn mux_status(&self) -> Result<Option<MuxStatus>, UiError> {
+        match self.proxy()?.call("GetMuxStatus", &()) {
+            Ok((current_mode, supported_mask, requested_mode)) => Ok(Some(MuxStatus {
+                current_mode,
+                supported_mask,
+                requested_mode,
+            })),
+            Err(zbus::Error::MethodError(name, _, _))
+                if matches!(
+                    name.as_str(),
+                    "org.freedesktop.DBus.Error.UnknownMethod"
+                        | "org.freedesktop.DBus.Error.NotSupported"
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// Submit a MUX mode through PolicyKit. It takes effect on reboot.
+    pub fn set_mux_mode(&self, mode: &str) -> Result<(), UiError> {
+        self.proxy()?.call_method("SetMuxMode", &(mode,))?;
+        Ok(())
     }
 
     /// Write a custom fan curve and select the `custom` fan mode.

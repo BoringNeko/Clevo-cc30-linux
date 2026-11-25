@@ -5,8 +5,8 @@
 <!--
   PolicyKit actions for org.clevo.CC.
 
-  Reads are not gated by PolicyKit (any local user may monitor). These two
-  actions guard the write methods. `auth_admin_keep` prompts for an
+  Reads are available to any local user. These actions guard the write
+  methods. `auth_admin_keep` prompts for an
   administrator password and remembers the result for a short time, which is
   the usual desktop expectation for a hardware control action.
 -->
@@ -56,6 +56,15 @@
   <action id="org.clevo.CC.set-charge-thresholds">
     <description>Set battery charging thresholds</description>
     <message>Authentication is required to change battery charging thresholds</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+  </action>
+  <action id="org.clevo.CC.set-mux-mode">
+    <description>Set the graphics MUX mode for the next boot</description>
+    <message>Authentication is required to change the graphics MUX mode</message>
     <defaults>
       <allow_any>no</allow_any>
       <allow_inactive>no</allow_inactive>

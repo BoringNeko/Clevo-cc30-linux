@@ -40,14 +40,14 @@ override_dh_auto_install:
 # machine against the installed kernel headers.
 override_dh_install:
 	# Driver sources + dkms.conf into /usr/src/clevo-cc-<version>.
-	install -d debian/clevo-cc-linux-dkms/usr/src/clevo-cc-0.2.3
-	cp -a kernel/clevo-cc/. debian/clevo-cc-linux-dkms/usr/src/clevo-cc-0.2.3/
-	rm -f debian/clevo-cc-linux-dkms/usr/src/clevo-cc-0.2.3/*.ko \
-	      debian/clevo-cc-linux-dkms/usr/src/clevo-cc-0.2.3/*.o \
-	      debian/clevo-cc-linux-dkms/usr/src/clevo-cc-0.2.3/*.mod* \
-	      debian/clevo-cc-linux-dkms/usr/src/clevo-cc-0.2.3/Module.symvers \
-	      debian/clevo-cc-linux-dkms/usr/src/clevo-cc-0.2.3/modules.order
-	sed -i 's/@VERSION@/0.2.3/g' debian/clevo-cc-linux-dkms/usr/src/clevo-cc-0.2.3/dkms.conf
+	install -d debian/clevo-cc-linux-dkms/usr/src/clevo-cc-0.2.4
+	cp -a kernel/clevo-cc/. debian/clevo-cc-linux-dkms/usr/src/clevo-cc-0.2.4/
+	rm -f debian/clevo-cc-linux-dkms/usr/src/clevo-cc-0.2.4/*.ko \
+	      debian/clevo-cc-linux-dkms/usr/src/clevo-cc-0.2.4/*.o \
+	      debian/clevo-cc-linux-dkms/usr/src/clevo-cc-0.2.4/*.mod* \
+	      debian/clevo-cc-linux-dkms/usr/src/clevo-cc-0.2.4/Module.symvers \
+	      debian/clevo-cc-linux-dkms/usr/src/clevo-cc-0.2.4/modules.order
+	sed -i 's/@VERSION@/0.2.4/g' debian/clevo-cc-linux-dkms/usr/src/clevo-cc-0.2.4/dkms.conf
 
 override_dh_strip:
 	dh_strip --no-automatic-dbgsym

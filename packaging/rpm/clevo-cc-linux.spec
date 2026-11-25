@@ -122,6 +122,9 @@ dkms install -m clevo-cc -v %{version} >/dev/null 2>&1 || :
 /usr/src/clevo-cc-%{version}
 
 %changelog
+* Thu Nov 26 2026 BoringNeko <noreply@github.com> - 0.2.4-1
+- Add GPU mode switching between discrete and hybrid modes on the overview page
+
 * Wed Nov 25 2026 BoringNeko <noreply@github.com> - 0.2.3-1
 - Fix the gpe6E ACPI interrupt storm caused by fan RPM polling
 

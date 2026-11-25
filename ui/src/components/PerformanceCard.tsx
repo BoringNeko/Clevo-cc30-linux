@@ -5,7 +5,8 @@ import SpeedIcon from "@mui/icons-material/Speed";
 import CheckIcon from "@mui/icons-material/Check";
 import { CardHeader, GlassCard } from "./GlassCard";
 import { PERF_MODE_CHOICES, setPerfMode, type FanSnapshot } from "../api/daemon";
-import { rgbString, type ExtractedPalette } from "../lib/color";
+import type { ExtractedPalette } from "../lib/color";
+import { modeButtonSx } from "./modeButtonSx";
 
 interface PerformanceCardProps {
   palette: ExtractedPalette;
@@ -45,27 +46,7 @@ export function PerformanceCard({ palette, snapshot, onRefresh, onError }: Perfo
               variant="outlined"
               aria-pressed={active}
               startIcon={active ? <CheckIcon sx={{ fontSize: 15 }} /> : undefined}
-              sx={{
-                width: "100%",
-                py: 1.25,
-                fontSize: "0.75rem",
-                fontWeight: active ? 700 : 600,
-                letterSpacing: "0.02em",
-                color: active ? "#fff" : "text.secondary",
-                borderWidth: active ? 2 : 1,
-                borderColor: active ? rgbString(palette.primary, 0.95) : "divider",
-                backgroundColor: active ? rgbString(palette.primary, 0.42) : "action.hover",
-                boxShadow: active
-                  ? `0 4px 18px ${rgbString(palette.primary, 0.45)}, inset 0 0 0 1px ${rgbString(palette.primary, 0.35)}`
-                  : "none",
-                "& .MuiButton-startIcon": { mr: 0.5, ml: 0 },
-                "&:hover": {
-                  borderWidth: active ? 2 : 1,
-                  backgroundColor: active ? rgbString(palette.primary, 0.52) : "divider",
-                  borderColor: active ? rgbString(palette.primary, 1) : "divider",
-                  color: "text.primary",
-                },
-              }}
+              sx={modeButtonSx(palette.primary, active)}
             >
               {choice.label}
             </Button>

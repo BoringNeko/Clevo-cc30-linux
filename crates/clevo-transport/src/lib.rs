@@ -43,6 +43,29 @@ pub enum TransportKind {
 /// The command payload size, re-exported for callers.
 pub const PAYLOAD_BYTES: usize = clevo_proto::constants::PAYLOAD_LEN;
 
+/// Graphics MUX modes defined by the firmware.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum MuxMode {
+    /// Integrated graphics only.
+    Integrated = 1,
+    /// Discrete graphics with direct display output.
+    Discrete = 2,
+    /// Integrated display output with the discrete GPU available for rendering.
+    Hybrid = 3,
+}
+
+/// One snapshot of the kernel driver's MUX interface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MuxStatus {
+    /// Mode reported by the firmware for this boot.
+    pub current_mode: u8,
+    /// Supported modes, with bit zero corresponding to mode 1.
+    pub supported_mask: u8,
+    /// Last submitted mode since driver bind, or 0 if unknown.
+    pub requested_mode: u8,
+}
+
 /// A channel that can execute DCHU commands and read/write app settings.
 ///
 /// Implementations must be `Send + Sync` so a single transport can be shared by
@@ -68,6 +91,20 @@ pub trait Transport: Send + Sync {
     fn read_fan_periods(&self) -> TransportResult<[u16; 3]> {
         Err(TransportError::Unsupported(
             "direct fan periods unavailable".into(),
+        ))
+    }
+
+    /// Read the active graphics mode and its supported targets.
+    fn read_mux_status(&self) -> TransportResult<MuxStatus> {
+        Err(TransportError::Unsupported(
+            "graphics MUX unavailable".into(),
+        ))
+    }
+
+    /// Submit a graphics mode for the next boot.
+    fn set_mux_mode(&self, _mode: MuxMode) -> TransportResult<()> {
+        Err(TransportError::Unsupported(
+            "graphics MUX unavailable".into(),
         ))
     }
 

@@ -65,6 +65,8 @@ pub fn run() {
             commands::tauri_commands::set_keyboard_key,
             commands::tauri_commands::set_fan_mode,
             commands::tauri_commands::set_perf_mode,
+            commands::tauri_commands::get_mux_status,
+            commands::tauri_commands::set_mux_mode,
             commands::tauri_commands::get_launch_prefs,
             commands::tauri_commands::set_launch_prefs,
             commands::tauri_commands::get_autostart,

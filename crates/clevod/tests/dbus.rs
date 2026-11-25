@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use futures_util::StreamExt;
 
-use clevo_transport::MockTransport;
+use clevo_transport::{DriverTransport, MockTransport};
 use clevod::dbus::CcDaemon;
 use clevod::policy::{AllowAll, DenyAll, PolicyKitAuthorizer};
 use clevod::{Service, DBUS_INTERFACE, DBUS_NAME, DBUS_PATH};
@@ -165,13 +165,83 @@ fn no_session_bus() -> bool {
     }
 }
 
+#[tokio::test]
+async fn mux_status_and_switch_use_the_driver_and_require_authorization() {
+    if no_session_bus() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("clevo-dbus-mux-{}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    let transport = DriverTransport::with_platform_path(&dir);
+    let service = Arc::new(Service::new(Box::new(transport)));
+    let _server = host_service("org.clevo.CC.mux", service.clone(), Arc::new(AllowAll)).await;
+    let client = proxy("org.clevo.CC.mux").await;
+
+    let absent = client.call_method("GetMuxStatus", &()).await.unwrap_err();
+    assert!(absent.to_string().contains("NotSupported"));
+    let absent = client
+        .call_method("SetMuxMode", &("hybrid",))
+        .await
+        .unwrap_err();
+    assert!(absent.to_string().contains("NotSupported"));
+    let control = dir.join("mux_mode");
+    assert!(!control.exists());
+
+    let status = dir.join("mux_status");
+    std::fs::write(&status, "2 6 0\n").unwrap();
+    std::fs::write(&control, "2\n").unwrap();
+    let _denied = host_service("org.clevo.CC.muxDenied", service, Arc::new(DenyAll)).await;
+    let denied = proxy("org.clevo.CC.muxDenied").await;
+    let snapshot: (u8, u8, u8) = denied.call("GetMuxStatus", &()).await.unwrap();
+    assert_eq!(snapshot, (2, 6, 0));
+    let error = denied
+        .call_method("SetMuxMode", &("hybrid",))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("AccessDenied"));
+    assert!(error.to_string().contains("org.clevo.CC.set-mux-mode"));
+    let error = client
+        .call_method("SetMuxMode", &("dynamic",))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("InvalidArgs"));
+    assert_eq!(std::fs::read_to_string(&control).unwrap(), "2\n");
+
+    client
+        .call::<_, _, ()>("SetMuxMode", &("hybrid",))
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(&control).unwrap(), "3\n");
+    std::fs::write(&status, "2 6 3\n").unwrap();
+    let snapshot: (u8, u8, u8) = client.call("GetMuxStatus", &()).await.unwrap();
+    assert_eq!(snapshot, (2, 6, 3));
+
+    client
+        .call::<_, _, ()>("SetMuxMode", &("discrete",))
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(&control).unwrap(), "2\n");
+    std::fs::write(&status, "2 6\n").unwrap();
+    let error = client.call_method("GetMuxStatus", &()).await.unwrap_err();
+    assert!(error.to_string().contains("malformed response"));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// Host `daemon` under `name` on the session bus, returning the server guard.
 async fn host(name: &str, authorizer: Arc<dyn clevod::policy::Authorizer>) -> zbus::Connection {
+    host_service(name, service(), authorizer).await
+}
+
+async fn host_service(
+    name: &str,
+    service: Arc<Service>,
+    authorizer: Arc<dyn clevod::policy::Authorizer>,
+) -> zbus::Connection {
     zbus::connection::Builder::session()
         .expect("session bus builder")
         .name(name)
         .expect("valid name")
-        .serve_at(DBUS_PATH, CcDaemon::with_authorizer(service(), authorizer))
+        .serve_at(DBUS_PATH, CcDaemon::with_authorizer(service, authorizer))
         .expect("serve object")
         .build()
         .await

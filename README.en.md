@@ -78,6 +78,9 @@ UI added.
   full-status command that causes `gpe6E` bursts. The control center updates
   automatically. Without direct period reads, the 60-second rate limit
   remains in place. See [`docs/desktop-ui.md`](docs/desktop-ui.md).
+- **Graphics MUX** lets the overview page request discrete or hybrid graphics
+  on the COLORFUL P15 23 with BIOS `1.07.04COLO2`. PolicyKit authorizes the
+  request and the firmware applies it on reboot. [Hardware verification](docs/hardware-notes.md#18-graphics-mux)
 - **Login autostart**: a switch in Settings > Application starts the current
   user's UI in the tray at login, with no main window. Both shells support it;
   see [`docs/autostart.md`](docs/autostart.md).

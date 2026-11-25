@@ -28,7 +28,10 @@ fn declared() -> Vec<String> {
             // The signature follows, e.g. `pub fn set_fan_curve(`, possibly
             // after an attribute on the middle line.
             w.iter().find_map(|line| {
-                let rest = line.trim().strip_prefix("pub fn ")?;
+                let line = line.trim();
+                let rest = line
+                    .strip_prefix("pub fn ")
+                    .or_else(|| line.strip_prefix("pub async fn "))?;
                 Some(rest.split('(').next()?.to_string())
             })
         })

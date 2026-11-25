@@ -10,12 +10,46 @@
 use std::sync::Arc;
 
 use clevo_cc_ui::dbus::DaemonClient;
-use clevo_transport::MockTransport;
+use clevo_transport::{DriverTransport, MockTransport};
 use clevod::dbus::CcDaemon;
 use clevod::policy::AllowAll;
 use clevod::Service;
 
 const FIXTURE: &str = include_str!("../../../crates/clevod/tests/fixtures/test.fixture");
+
+#[test]
+fn mux_client_reads_boot_mode_and_submits_a_target() {
+    if no_session_bus() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("clevo-ui-mux-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let transport = DriverTransport::with_platform_path(&dir);
+    let service = Arc::new(Service::new(Box::new(transport)));
+    let name = "org.clevo.CC.uiMux";
+    start_daemon_with_service(name, service, Arc::new(AllowAll));
+    let client = DaemonClient::session_with_name(name).unwrap();
+    assert!(client.mux_status().unwrap().is_none());
+
+    let status_path = dir.join("mux_status");
+    let mode_path = dir.join("mux_mode");
+    std::fs::write(&status_path, "2 6 0\n").unwrap();
+    std::fs::write(&mode_path, "2\n").unwrap();
+    client.set_mux_mode("hybrid").unwrap();
+    assert_eq!(std::fs::read_to_string(mode_path).unwrap(), "3\n");
+
+    std::fs::write(&status_path, "2 6 3\n").unwrap();
+    let status = client.mux_status().unwrap().unwrap();
+    assert_eq!(
+        (
+            status.current_mode,
+            status.supported_mask,
+            status.requested_mode
+        ),
+        (2, 6, 3)
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
 
 #[test]
 fn power_and_charge_thresholds_round_trip_through_daemon() {

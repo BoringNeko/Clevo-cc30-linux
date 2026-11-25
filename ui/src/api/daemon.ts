@@ -262,6 +262,24 @@ export async function setPerfMode(mode: string): Promise<number> {
   return invoke<number>("set_perf_mode", { mode });
 }
 
+export type MuxMode = "discrete" | "hybrid";
+
+export interface MuxStatus {
+  current_mode: number;
+  /** Bit 0 corresponds to firmware mode 1. */
+  supported_mask: number;
+  /** Last submitted mode since driver bind, or 0 if unknown. */
+  requested_mode: number;
+}
+
+export async function getMuxStatus(): Promise<MuxStatus | null> {
+  return invoke<MuxStatus | null>("get_mux_status");
+}
+
+export async function setMuxMode(mode: MuxMode): Promise<void> {
+  return invoke<void>("set_mux_mode", { mode });
+}
+
 // --- App lifecycle ----------------------------------------------------------
 
 /**

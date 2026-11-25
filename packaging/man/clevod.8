@@ -1,4 +1,4 @@
-.TH CLEVOD 8 "2026-11-25" "clevo-cc-linux 0.2.3" "System Administration"
+.TH CLEVOD 8 "2026-11-26" "clevo-cc-linux 0.2.4" "System Administration"
 .SH NAME
 clevod \- privileged Clevo fan, keyboard and battery control daemon
 .SH SYNOPSIS
@@ -103,6 +103,21 @@ matching ACPI battery path and validates firmware-advertised discrete percentage
 Disabling retains the window. Standard threshold interfaces reject the native
 enabled option. Successful readback confirms the saved firmware variables;
 actual charging stop/restart behavior requires a complete charge-cycle test.
+.PP
+Graphics MUX methods are available with the clevo-cc driver on COLORFUL P15 23
+with BIOS 1.07.04COLO2.
+.B GetMuxStatus
+returns the current boot mode, the supported-mode bitmask and the last target
+submitted since the driver bound to the device (0 if unknown) as three bytes.
+Modes 1, 2 and 3 correspond to integrated, discrete and hybrid, respectively.
+Bit 0 corresponds to mode 1. This firmware reports mask 0x06, which enables
+discrete and hybrid mode.
+.B SetMuxMode
+takes a mode name and requires
+.B org.clevo.CC.set\-mux\-mode
+authorization. The firmware applies the requested mode on reboot. Read
+.B GetMuxStatus
+after reboot to confirm the active mode.
 .PP
 Desktop profile transitions are observed and persisted even when recurring fan
 sampling is disabled;

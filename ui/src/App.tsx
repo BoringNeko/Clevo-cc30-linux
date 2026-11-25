@@ -23,6 +23,7 @@ import { PowerPage } from "./components/PowerPage";
 import { DiskUsageCard, ResourceUsageCard } from "./components/ResourceUsageCard";
 import { FanModeCard } from "./components/FanModeCard";
 import { PerformanceCard } from "./components/PerformanceCard";
+import { MuxCard } from "./components/MuxCard";
 import { CurveCard } from "./components/CurveCard";
 import { CurveHintCard } from "./components/CurveHintCard";
 import { TelemetryCard } from "./components/TelemetryCard";
@@ -31,6 +32,7 @@ import { useLogo } from "./hooks/useLogo";
 import { useWindowSize } from "./hooks/useWindowSize";
 import { useDesignScale } from "./hooks/useDesignScale";
 import { useFanRefresh } from "./hooks/useFanRefresh";
+import { useMux } from "./hooks/useMux";
 import {
   loadCompatibilityPrefs,
   readCompatibilityPrefs,
@@ -65,8 +67,7 @@ function isPageId(id: string): id is PageId {
  * Glass dashboard over the daemon.
  *
  * Reads cached fan status from `clevod` and reads the curve once; the accent colour is
- * derived from the wallpaper. Writes are handled by the Performance card and go
- * through the daemon's PolicyKit gate.
+ * derived from the wallpaper. Hardware writes go through the daemon's PolicyKit gate.
  */
 export default function App() {
   const { wallpaper, palette, isCustom, setWallpaperFromFile, resetWallpaper } = useWallpaper();
@@ -137,6 +138,7 @@ export default function App() {
   const [factoryCurve, setFactoryCurve] = useState<FanCurve | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [active, setActive] = useState<PageId>("overview");
+  const mux = useMux();
   const [cpuHistory, setCpuHistory] = useState<number[]>([]);
   const [gpuHistory, setGpuHistory] = useState<number[]>([]);
   const timer = useRef<number | null>(null);
@@ -390,13 +392,14 @@ export default function App() {
                           disks={hardwareUsage?.disks ?? null}
                         />
                       </Box>
-                      <Box sx={{ minHeight: 0, minWidth: 0, width: "100%" }}>
+                      <Box sx={{ display: "grid", gap: 2, minHeight: 0, minWidth: 0, width: "100%" }}>
                         <PerformanceCard
                           palette={accentPalette}
                           snapshot={snapshot}
                           onRefresh={refresh}
                           onError={setError}
                         />
+                        <MuxCard palette={accentPalette} mux={mux} motion={appearance} />
                       </Box>
                     </>
                   ) : (

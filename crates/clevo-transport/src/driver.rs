@@ -12,6 +12,7 @@
 //! |---|---|
 //! | `12` fan status | sysfs `raw_status` (legacy fallback: hwmon fan inputs) |
 //! | RPM-only polling | sysfs `fan_periods` (optional, verified firmware only) |
+//! | Graphics MUX | sysfs `mux_status` and `mux_mode` (verified firmware only) |
 //! | `13` fan curve  | sysfs `fan_curve` |
 //! | `14` fan curve write | sysfs `fan_curve` |
 //! | `121/1` fan mode | sysfs `fan_mode` |
@@ -21,8 +22,11 @@
 //! The raw status preserves the EC's periods and temperatures in one read.
 //! With a legacy driver only the reported speeds are filled in.
 
+use std::io::{ErrorKind, Write};
+use std::path::Path;
+
 use crate::error::{TransportError, TransportResult};
-use crate::{Transport, TransportKind, PAYLOAD_BYTES};
+use crate::{MuxMode, MuxStatus, Transport, TransportKind, PAYLOAD_BYTES};
 use clevo_proto::fan_status::MIN_FAN_STATUS_LEN;
 
 /// Default platform device path for the `CLV0001` ACPI device.
@@ -336,7 +340,56 @@ fn wrap_record(data: &[u8]) -> Vec<u8> {
     buf
 }
 
+fn mux_io_error(path: &Path, error: std::io::Error) -> TransportError {
+    match error.kind() {
+        ErrorKind::NotFound | ErrorKind::Unsupported => {
+            TransportError::Unsupported(format!("graphics MUX at {}", path.display()))
+        }
+        ErrorKind::PermissionDenied => TransportError::PermissionDenied,
+        _ => TransportError::Io(format!("{}: {error}", path.display())),
+    }
+}
+
 impl Transport for DriverTransport {
+    fn read_mux_status(&self) -> TransportResult<MuxStatus> {
+        let path = self.attr("mux_status");
+        let text = std::fs::read_to_string(&path).map_err(|error| mux_io_error(&path, error))?;
+        let invalid =
+            || TransportError::MalformedResponse(format!("invalid {} reading", path.display()));
+        let mut fields = text.split_whitespace();
+        let mut read_byte = || {
+            fields
+                .next()
+                .and_then(|field| field.parse::<u8>().ok())
+                .ok_or_else(invalid)
+        };
+        let current_mode = read_byte()?;
+        let supported_mask = read_byte()?;
+        let requested_mode = read_byte()?;
+        if !(1..=3).contains(&current_mode)
+            || !(1..=0x07).contains(&supported_mask)
+            || requested_mode > 3
+            || fields.next().is_some()
+        {
+            return Err(invalid());
+        }
+        Ok(MuxStatus {
+            current_mode,
+            supported_mask,
+            requested_mode,
+        })
+    }
+
+    fn set_mux_mode(&self, mode: MuxMode) -> TransportResult<()> {
+        let path = self.attr("mux_mode");
+        let value = format!("{}\n", mode as u8);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .and_then(|mut file| file.write_all(value.as_bytes()))
+            .map_err(|error| mux_io_error(&path, error))
+    }
+
     fn supports_fan_periods(&self) -> bool {
         self.attr("fan_periods").is_file()
     }

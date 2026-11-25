@@ -23,8 +23,8 @@ use clevo_proto::message::{build_subcommand_payload, empty_payload, payload_from
 use clevo_proto::response::response_first_record;
 use clevo_proto::Capabilities;
 use clevo_transport::{
-    Color, Keyboard, KeyboardError, KeyboardMode, KeyboardSnapshot, KeyboardZone, Transport,
-    TransportError,
+    Color, Keyboard, KeyboardError, KeyboardMode, KeyboardSnapshot, KeyboardZone, MuxMode,
+    MuxStatus, Transport, TransportError,
 };
 
 use crate::config;
@@ -242,6 +242,27 @@ impl Service {
             .as_ref()
             .map(|power| power.snapshot())
             .unwrap_or_default()
+    }
+
+    /// Read the graphics MUX state independently of fan polling.
+    pub fn mux_status(&self) -> Result<MuxStatus, ServiceError> {
+        Ok(self.transport.read_mux_status()?)
+    }
+
+    /// Submit a graphics MUX target for the next boot.
+    pub fn set_mux_mode(&self, mode: &str) -> Result<(), ServiceError> {
+        let target = match mode {
+            "integrated" => MuxMode::Integrated,
+            "discrete" => MuxMode::Discrete,
+            "hybrid" => MuxMode::Hybrid,
+            _ => return Err(ServiceError::UnknownMode(mode.into())),
+        };
+        if !self.transport.writable() {
+            return Err(ServiceError::Unsupported(
+                "graphics MUX requires the driver backend".into(),
+            ));
+        }
+        Ok(self.transport.set_mux_mode(target)?)
     }
 
     /// Apply standard charge thresholds and persist only verified readback.

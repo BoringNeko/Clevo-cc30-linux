@@ -1,3 +1,9 @@
+clevo-cc-linux (0.2.4-1) unstable; urgency=medium
+
+  * Add GPU mode switching between discrete and hybrid modes on the overview page.
+
+ -- BoringNeko <noreply@github.com>  Thu, 26 Nov 2026 00:00:00 +0800
+
 clevo-cc-linux (0.2.3-1) unstable; urgency=medium
 
   * Fix the gpe6E ACPI interrupt storm caused by fan RPM polling.

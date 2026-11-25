@@ -24,6 +24,8 @@ exposes fan monitoring and fan-mode control through `hwmon` and sysfs.
 | `sysfs fan_curve` | rw | read (command 13) and write (command 14) |
 | `sysfs raw_status` / `raw_curve` | read | diagnostic hex dumps (for re-verifying offsets) |
 | `sysfs perf_mode` | rw | `quiet` / `pwrsaving` / `performance` / `entertainment` |
+| `sysfs mux_status` | read | Boot mode, supported mask and last submitted target as decimal bytes |
+| `sysfs mux_mode` | root write | Submit a supported numeric mode for the next boot |
 | `sysfs capabilities` | read | GCMD 122/96/16/60/82 integer data; no EC AppSettings page access |
 | `sysfs keyboard_rgb` | rw | RGB15 single-zone color, mode (off/static), and brightness (percent) |
 | LED class `clevo::kbd_backlight` | rw | standard raw keyboard brightness (`0..191`) |
@@ -37,6 +39,11 @@ inputs read the same named ACPI memory fields as command 12, but skip its
 extra EC transactions. A zero period means zero RPM. If the direct read
 fails, these interfaces return an error rather than running command 12.
 `raw_status` and the hwmon GPU temperature still use command 12.
+
+The two MUX attributes are available on COLORFUL P15 23 with BIOS
+`1.07.04COLO2`. The firmware supports mode `2` (discrete) and `3` (hybrid).
+For desktop use, submit the target through `clevod` with PolicyKit and check
+the boot mode after reboot. [MUX protocol and hardware verification](../../docs/hardware-notes.md#18-graphics-mux)
 
 `fan_mode`/`perf_mode` report the last value written this session (fan_mode
 defaults to `auto`, perf_mode to `unknown`); the firmware does not report the

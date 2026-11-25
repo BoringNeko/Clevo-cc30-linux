@@ -13,6 +13,8 @@
 //!               KeyboardAvailable, KeyboardFirmwareType, KeyboardState
 //!   methods:    SetFanMode(s) -> u8     (PolicyKit)
 //!               SetPerfMode(s) -> u8    (PolicyKit)
+//!               GetMuxStatus() -> yyy
+//!               SetMuxMode(s)           (PolicyKit)
 //!               SetKeyboardMode(s), SetKeyboardBrightness(y),
 //!               SetKeyboardZone(s,yyy), SetKeyboardKey(yyyyy) (PolicyKit)
 //!               GetCurve() -> s
@@ -32,7 +34,7 @@ use zbus::message::Header;
 use zbus::object_server::SignalEmitter;
 
 use crate::policy::{self, Authorizer, PolicyKitAuthorizer};
-use crate::service::Service;
+use crate::service::{Service, ServiceError};
 use clevo_transport::Color;
 
 /// D-Bus object implementation.
@@ -151,8 +153,50 @@ pub async fn serve(connection: &zbus::Connection, daemon: CcDaemon) -> zbus::Res
         .map(|_| ())
 }
 
+fn mux_error(error: ServiceError) -> zbus::fdo::Error {
+    match error {
+        ServiceError::Unsupported(message) => zbus::fdo::Error::NotSupported(message),
+        ServiceError::UnknownMode(mode) => {
+            zbus::fdo::Error::InvalidArgs(format!("unknown MUX mode {mode:?}"))
+        }
+        other => zbus::fdo::Error::Failed(other.to_string()),
+    }
+}
+
 #[interface(name = "org.clevo.CC")]
 impl CcDaemon {
+    /// Read the boot mode, supported-mode bitmask and last submitted target (0 if unknown).
+    #[zbus(out_args("current_mode", "supported_mask", "requested_mode"))]
+    async fn get_mux_status(&self) -> zbus::fdo::Result<(u8, u8, u8)> {
+        let service = Arc::clone(&self.service);
+        let status = tokio::task::spawn_blocking(move || service.mux_status())
+            .await
+            .map_err(|error| zbus::fdo::Error::Failed(error.to_string()))?
+            .map_err(mux_error)?;
+        Ok((
+            status.current_mode,
+            status.supported_mask,
+            status.requested_mode,
+        ))
+    }
+
+    /// Submit a graphics MUX target. The firmware applies it at reboot.
+    async fn set_mux_mode(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(signal_context)] emitter: SignalEmitter<'_>,
+        mode: &str,
+    ) -> zbus::fdo::Result<()> {
+        self.require(header.sender(), &emitter, policy::ACTION_MUX_MODE)
+            .await?;
+        let service = Arc::clone(&self.service);
+        let mode = mode.to_owned();
+        tokio::task::spawn_blocking(move || service.set_mux_mode(&mode))
+            .await
+            .map_err(|error| zbus::fdo::Error::Failed(error.to_string()))?
+            .map_err(mux_error)
+    }
+
     /// Return battery and desktop power-profile information independently of EC polling.
     async fn get_power(&self) -> zbus::fdo::Result<String> {
         serde_json::to_string(&self.service.power_snapshot())

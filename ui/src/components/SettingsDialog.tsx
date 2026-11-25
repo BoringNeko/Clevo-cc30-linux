@@ -1,12 +1,9 @@
-import { forwardRef, isValidElement, useState } from "react";
+import { useState } from "react";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
-import Dialog from "@mui/material/Dialog";
 import Divider from "@mui/material/Divider";
-import Slide from "@mui/material/Slide";
 import IconButton from "@mui/material/IconButton";
 import Typography from "@mui/material/Typography";
-import type { TransitionProps } from "@mui/material/transitions";
 import CloseIcon from "@mui/icons-material/Close";
 import PaletteIcon from "@mui/icons-material/Palette";
 import TuneIcon from "@mui/icons-material/Tune";
@@ -18,9 +15,10 @@ import { KeyboardSection } from "./KeyboardSection";
 import { ApplicationSection } from "./ApplicationSection";
 import { DisplaySection } from "./DisplaySection";
 import { PersonalizationSection } from "./PersonalizationSection";
+import { SlideDialog } from "./SlideDialog";
 import { useTheme } from "@mui/material/styles";
 import { rgbString, type ExtractedPalette } from "../lib/color";
-import { enterAnimation, motionDuration, UI_MOTION_EASING } from "../motion";
+import { enterAnimation } from "../motion";
 import type { BlurSetting } from "../hooks/useAppSettings";
 import type { CompatibilityPrefs } from "../hooks/useAppSettings";
 import type { Appearance } from "../theme";
@@ -34,18 +32,6 @@ const SECTIONS = [
 ] as const;
 
 type SectionId = (typeof SECTIONS)[number]["id"];
-
-const DialogTransition = forwardRef<HTMLElement, TransitionProps>(function DialogTransition(
-  { children, ...props },
-  ref,
-) {
-  if (!isValidElement(children)) return null;
-  return (
-    <Slide direction="up" ref={ref} {...props}>
-      {children}
-    </Slide>
-  );
-});
 
 interface SettingsDialogProps {
   open: boolean;
@@ -102,15 +88,13 @@ export function SettingsDialog({
   const dark = theme.palette.mode === "dark";
   
   return (
-    <Dialog
+    <SlideDialog
       open={open}
       onClose={onClose}
       maxWidth="md"
       fullWidth
-      slots={{ transition: DialogTransition }}
-      transitionDuration={motionDuration(appearance.animationSpeed, appearance.animationsEnabled)}
+      motion={appearance}
       slotProps={{
-        transition: { easing: UI_MOTION_EASING },
         backdrop: { sx: { backgroundColor: "rgba(0,0,0,0.55)", backdropFilter: "blur(4px)" } },
         paper: {
           sx: {
@@ -252,6 +236,6 @@ export function SettingsDialog({
           </Box>
         </Box>
       </Box>
-    </Dialog>
+    </SlideDialog>
   );
 }

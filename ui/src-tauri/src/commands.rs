@@ -10,7 +10,7 @@
 //! the localhost bridge (see [`crate::serve`]). Only the window/tray lifecycle
 //! at the bottom is Tauri-specific and lives behind the `tauri-shell` feature.
 
-use crate::dbus::{DaemonClient, FanCurve, FanSnapshot, KeyboardState};
+use crate::dbus::{DaemonClient, FanCurve, FanSnapshot, KeyboardState, MuxStatus};
 
 fn client() -> Result<DaemonClient, String> {
     DaemonClient::system().map_err(|e| e.message)
@@ -68,6 +68,14 @@ pub fn set_fan_mode(mode: String) -> Result<u8, String> {
 /// Set the performance mode (`quiet`/`pwrsaving`/`performance`/`entertainment`).
 pub fn set_perf_mode(mode: String) -> Result<u8, String> {
     client()?.set_perf_mode(&mode).map_err(|e| e.message)
+}
+
+pub fn get_mux_status() -> Result<Option<MuxStatus>, String> {
+    client()?.mux_status().map_err(|e| e.message)
+}
+
+pub fn set_mux_mode(mode: String) -> Result<(), String> {
+    client()?.set_mux_mode(&mode).map_err(|e| e.message)
 }
 
 /// Write a custom fan curve and select the `custom` fan mode.
@@ -287,6 +295,20 @@ pub mod tauri_commands {
     #[tauri::command]
     pub fn set_perf_mode(mode: String) -> Result<u8, String> {
         super::set_perf_mode(mode)
+    }
+
+    #[tauri::command]
+    pub async fn get_mux_status() -> Result<Option<MuxStatus>, String> {
+        tauri::async_runtime::spawn_blocking(super::get_mux_status)
+            .await
+            .map_err(|e| e.to_string())?
+    }
+
+    #[tauri::command]
+    pub async fn set_mux_mode(mode: String) -> Result<(), String> {
+        tauri::async_runtime::spawn_blocking(move || super::set_mux_mode(mode))
+            .await
+            .map_err(|e| e.to_string())?
     }
 
     #[tauri::command]
